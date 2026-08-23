@@ -39,16 +39,21 @@ AI는 업로드된 영상에서 해당 발화를 탐지하고 타임스탬프와
 
 ## 🛠 Tech Stack
 
-현재 개발 계획이며 프로젝트 진행에 따라 변경될 수 있습니다.
+기술은 개발 단계에서 실제 필요성이 확인될 때 점진적으로 도입합니다.
+
+### MVP v1
 
 - Python
 - FastAPI
 - FFmpeg
 - STT
+
+### Planned
+
 - LLM
-- Supabase / PostgreSQL
-- Redis
 - Embedding / Semantic Search
+- PostgreSQL / Supabase
+- Redis
 - Tool Calling
 - Agent Workflow
 
@@ -65,15 +70,20 @@ AI는 업로드된 영상에서 해당 발화를 탐지하고 타임스탬프와
 
 ## 📌 Project Status
 
-**Current: Planning & MVP Design**
+**Current: MVP v1 Development**
 
 - [x] 프로젝트 주제 및 문제 정의
 - [x] 핵심 사용자 경험 정의
 - [x] Figma Wireframe v0.1
 - [x] MVP 범위 정의
-- [ ] 개발 환경 구성
+- [x] MVP 평가 전략 및 Baseline 정의
+- [x] FastAPI 개발 환경 구성
+- [x] Health Check API
+- [ ] 테스트 영상 및 Ground Truth 구성
+- [ ] Video Upload API
 - [ ] Video → STT 파이프라인
 - [ ] 편집 메모 탐지
-- [ ] 장면 탐색
+- [ ] Baseline 장면 탐색
+- [ ] 장면 탐색 성능 평가
 - [ ] FFmpeg 기반 장면 추출
 
