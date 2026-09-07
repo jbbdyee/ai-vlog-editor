@@ -221,5 +221,7 @@ __marimo__/
 *.DS_Store
 **/.DS_Store
 
-# 테스트 영상 데이터
-evaluation/data/*.mp4
+# 테스트 영상 데이터와 파생 미디어
+evaluation/data/*
+!evaluation/data/.gitkeep
+outputs/
