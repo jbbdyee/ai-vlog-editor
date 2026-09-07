@@ -1,6 +1,6 @@
 # AI Vlog Editor - Project Plan
 
-# AI Vlog Editor - Project Plan
+> 제품의 최신 장기 범위는 [`product-spec.md`](product-spec.md), 현재 구현 범위는 [`mvp-v1-spec.md`](mvp-v1-spec.md)를 기준으로 한다.
 
 ## 1. 프로젝트 한 줄 정의
 
@@ -375,15 +375,7 @@ STT 엔진은 MVP 착수 전 후보를 비교한 뒤
 - 장면 시작/종료 지점 개선
 - Baseline 대비 장면 탐색 성능 비교
 
-### v3 - AI Editing
-
-- 여러 장면 자동 연결
-- 불필요한 구간 축소
-- 기본 자막 생성
-- 편집 계획 생성
-- 브이로그 초안 MP4 생성
-
-### v4 - Conversational Editing
+### v3 - Conversational Editing
 
 - 자연어 수정 요청
 - 수정 의도 구조화
@@ -391,14 +383,28 @@ STT 엔진은 MVP 착수 전 후보를 비교한 뒤
 - FFmpeg 재실행
 - 수정 영상 재생성
 
-### v5 - Personalization
+### v4 - Personalization
 
 - 사용자 수정 이력 저장
 - 반복되는 편집 선호 분석
 - Editing Profile 생성
 - 다음 영상 편집에 사용자 취향 반영
 
-### v6 - Agent Workflow
+### v5 - Narrative Editing
+
+- 여러 장면의 역할과 관계 분석
+- 장면 선택·순서·길이 계획
+- 도입·사건·반응·마무리 구조 생성
+- 일반 Baseline 대비 사용자 선호 평가
+
+### v6 - Multi-platform Short-form
+
+- 완성된 브이로그와 원본 장면에서 숏폼 후보 생성
+- 플랫폼과 목적에 맞는 짧은 Narrative 구성
+- 세로 화면 Auto Reframe과 자막 적용
+- 플랫폼 출력 프로필에 따른 실제 영상 생성
+
+### v7 - Agent Workflow Review
 
 - 영상 분석
 - 장면 탐색
@@ -406,8 +412,8 @@ STT 엔진은 MVP 착수 전 후보를 비교한 뒤
 - 편집 실행
 - 결과 검증
 
-각 역할을 분리하고 여러 도구와 에이전트가 협력하는
-영상 편집 워크플로우로 확장한다.
+일반 워크플로우로 해결하기 어려운 동적 재계획 사례가 확인된 경우에만
+Agent 또는 Multi-Agent 구조를 검토한다.
 
 ---
 

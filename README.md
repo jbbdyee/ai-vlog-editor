@@ -1,89 +1,90 @@
 # 🎬 AI Vlog Editor
 
+> Working product name: **Cutory** (WIP)
+>
 > 사용자의 편집 의도는 남기고, 반복적인 영상 편집 노동은 AI에게 맡깁니다.
 
-AI Vlog Editor는 몇 시간 분량의 브이로그 원본에서 필요한 장면을 직접 찾아 편집해야 하는 문제를 줄이기 위한 AI 영상 편집 프로젝트입니다.
+AI Vlog Editor는 촬영 중 남긴 음성 편집 메모를 이용해 긴 브이로그 원본에서 필요한 장면을 찾고, 실제 영상 결과물로 만드는 프로젝트입니다.
 
-사용자가 촬영 중 남긴 자연어 편집 메모와 촬영 후 수정 요청을 이해하여 장면을 탐색하고, 실제 영상 편집까지 수행하는 것을 목표로 합니다.
+사용자의 창작 판단을 AI가 대신하는 것보다, 사용자가 이미 내린 판단을 탐색·구조화·실행하는 데 집중합니다.
 
-## 💡 Core Idea
+## Core Idea
 
-촬영하면서 간단하게 편집 의도를 남깁니다.
+촬영하면서 다음과 같이 편집 의도를 남깁니다.
 
-> "AI야 방금 장면 꼭 살려줘."
+> “AI야 방금 장면 꼭 살려줘.”
 
-AI는 업로드된 영상에서 해당 발화를 탐지하고 타임스탬프와 영상 정보를 이용해 사용자가 의미한 장면을 찾습니다.
+시스템은 업로드된 영상에서 해당 발화와 타임스탬프를 찾고, “방금”이 가리키는 장면 후보를 선택해 실제 MP4 클립으로 추출합니다.
 
-이후 장면 탐색, 컷 편집, 자막 생성 등 반복적인 작업을 AI가 수행하고 사용자는 결과에 대해 자연어로 수정 요청을 할 수 있습니다.
+## MVP v1
 
-## 🎯 MVP
+```text
+Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → Evaluation → FFmpeg → MP4
+```
 
-첫 번째 MVP의 목표는 하나의 핵심 파이프라인을 실제로 동작시키는 것입니다.
+초기에는 복잡한 LLM/VLM 판단 대신 메모 이전 5·10·15·30초를 선택하는 규칙 기반 Baseline을 비교합니다. Ground Truth와의 IoU를 측정하고 실패 사례가 다음 기술의 필요성을 결정합니다.
 
-**Video → Audio → STT → Timestamp → Edit Intent → Scene → FFmpeg → MP4**
+## Roadmap
 
-테스트 영상에서
+1. **MVP Baseline** — 음성 메모 탐지와 실제 장면 추출
+2. **Scene Retrieval Improvement** — 장면 경계와 의미 검색 개선
+3. **Conversational Editing** — 자연어 수정 요청을 편집 작업으로 변환
+4. **Personalization** — 사용자 편집 선호 반영
+5. **Narrative Editing** — 여러 장면을 하나의 이야기로 구성
+6. **Multi-platform Short-form** — Shorts/Reels용 편집안과 실제 영상 생성
+7. **Agent Workflow Review** — 동적 재계획 필요성이 확인된 뒤 검토
 
-> "AI야 방금 장면 꼭 살려줘."
-
-라는 편집 메모를 탐지하고, 해당 메모가 가리키는 장면을 찾아 실제 MP4 클립으로 추출합니다.
-
-## 🚀 Roadmap
-
-- **v1** — 촬영 중 편집 메모 탐지 및 장면 추출
-- **v2** — 자연어 기반 장면 검색
-- **v3** — AI 브이로그 초안 생성
-- **v4** — 자연어 기반 영상 수정
-- **v5** — 사용자 편집 취향 학습 및 개인화
-- **v6** — Multi-Agent 영상 편집 워크플로우
-
-## 🛠 Tech Stack
-
-기술은 개발 단계에서 실제 필요성이 확인될 때 점진적으로 도입합니다.
+## Technology Strategy
 
 ### MVP v1
 
 - Python
 - FastAPI
 - FFmpeg
-- STT
+- STT — 엔진 미정
 
-### Planned
+### 필요성이 검증된 이후
 
-- LLM
 - Embedding / Semantic Search
-- PostgreSQL / Supabase
-- Redis
-- Tool Calling
-- Agent Workflow
+- LLM / VLM
+- 데이터베이스와 Object Storage
+- Tool Calling / Agent Workflow
 
-## 🎨 UI / UX
+기술을 먼저 선택하지 않고 `Baseline → Evaluation → Failure Analysis → Improvement` 순서로 도입합니다.
 
-초기 사용자 흐름과 UX 설계는 Figma Wireframe을 통해 검증하고 있습니다.
+## Documentation
 
-자세한 설계 과정과 변경 이유는 [`docs/ui-design.md`](docs/ui-design.md)에서 관리합니다.
+- [Product Specification](docs/product-spec.md)
+- [MVP v1 Specification](docs/mvp-v1-spec.md)
+- [Architecture](docs/architecture.md)
+- [Project Plan](docs/project-plan.md)
+- [UI / UX Design](docs/ui-design.md)
+- [Evaluation Dataset v0.1](evaluation/README.md)
+- [Codex Project Instructions](AGENTS.md)
 
-## 📚 Documentation
+## Current Repository Status
 
-- [`Project Plan`](docs/project-plan.md)
-- [`UI / UX Design`](docs/ui-design.md)
+2026-09-07 현재 저장소에서 확인된 상태입니다.
 
-## 📌 Project Status
+- [x] 프로젝트 문제와 제품 원칙 정의
+- [x] MVP v1 범위 및 평가 전략 정의
+- [x] Evaluation Dataset v0.1 시나리오 설계
+- [x] Test 01 촬영 및 Ground Truth 기록
+- [x] FastAPI 기본 환경과 `GET /health`
+- [x] `POST /videos/upload` — 업로드 파일명과 Content-Type 확인
+- [ ] 업로드 파일 검증 및 안전한 로컬 저장
+- [ ] FFmpeg 오디오 추출
+- [ ] STT 후보 비교 및 Baseline 구현
+- [ ] 편집 메모와 타임스탬프 탐지
+- [ ] 5·10·15·30초 후보 및 IoU 평가
+- [ ] FFmpeg 기반 실제 클립 생성
 
-**Current: MVP v1 Development**
+원본 테스트 영상은 개인정보와 용량 문제로 Git에 포함하지 않습니다.
 
-- [x] 프로젝트 주제 및 문제 정의
-- [x] 핵심 사용자 경험 정의
-- [x] Figma Wireframe v0.1
-- [x] MVP 범위 정의
-- [x] MVP 평가 전략 및 Baseline 정의
-- [x] FastAPI 개발 환경 구성
-- [x] Health Check API
-- [ ] 테스트 영상 및 Ground Truth 구성
-- [ ] Video Upload API
-- [ ] Video → STT 파이프라인
-- [ ] 편집 메모 탐지
-- [ ] Baseline 장면 탐색
-- [ ] 장면 탐색 성능 평가
-- [ ] FFmpeg 기반 장면 추출
+## Run the Current API
 
+```powershell
+python -m uvicorn app.main:app --reload
+```
+
+실행 후 `/health`에서 현재 API 상태를 확인할 수 있습니다.
