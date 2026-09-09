@@ -64,7 +64,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 
 ## Current Repository Status
 
-2026-09-07 현재 저장소에서 확인된 상태입니다.
+2026-09-08 현재 저장소에서 확인된 상태입니다.
 
 - [x] 프로젝트 문제와 제품 원칙 정의
 - [x] MVP v1 범위 및 평가 전략 정의
@@ -72,7 +72,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] Test 01 촬영 및 Ground Truth 기록
 - [x] FastAPI 기본 환경과 `GET /health`
 - [x] `POST /videos/upload` — 업로드 파일명과 Content-Type 확인
-- [ ] 업로드 파일 검증 및 안전한 로컬 저장
+- [x] MOV/MP4 업로드 검증 및 UUID 파일명 기반 로컬 저장
 - [ ] FFmpeg 오디오 추출
 - [ ] STT 후보 비교 및 Baseline 구현
 - [ ] 편집 메모와 타임스탬프 탐지

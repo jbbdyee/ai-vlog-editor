@@ -224,4 +224,5 @@ __marimo__/
 # 테스트 영상 데이터와 파생 미디어
 evaluation/data/*
 !evaluation/data/.gitkeep
+uploads/
 outputs/

@@ -38,6 +38,8 @@ Video Asset
 
 입력을 받아 처리 작업을 시작한다. HTTP 업로드는 인터페이스일 뿐 핵심 영상 처리 로직을 포함하지 않는다. 같은 파이프라인을 로컬 파일에서도 호출할 수 있게 분리한다.
 
+현재 업로드 API는 MOV/MP4의 확장자, Content-Type, 공통 컨테이너 헤더를 검증하고 UUID 기반 파일명으로 로컬 `uploads/`에 저장한다. 검증·저장 책임은 `app/services/video_storage.py`에 두며 API 계층은 HTTP 오류 변환만 담당한다.
+
 ### Media Probe / Audio Extractor
 
 FFmpeg/ffprobe를 사용해 미디어 정보를 읽고 STT용 오디오를 만든다. 파일명, 코덱, 길이, 스트림 오류를 명시적으로 반환한다.
