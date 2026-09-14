@@ -8,12 +8,13 @@ MVP v1은 전체 편집 서비스를 만드는 단계가 아니라 이 질문을
 
 ## 2. 저장소에서 확인된 현재 상태
 
-2026-09-09 현재 저장소에서 직접 확인된 상태는 다음과 같다.
+2026-09-14 현재 저장소에서 직접 확인된 상태는 다음과 같다.
 
 - FastAPI 애플리케이션 구성
 - `GET /health` 구현
 - `POST /videos/upload` MOV/MP4 검증 및 안전한 로컬 저장 구현
 - 로컬 파일을 대상으로 한 ffprobe 기본 미디어 정보 조회 구현
+- FFmpeg 기반 16 kHz mono PCM WAV 오디오 추출 서비스 구현
 - Evaluation Dataset v0.1 시나리오 문서
 - `evaluation/data/.gitkeep`
 
@@ -115,7 +116,7 @@ IoU = prediction과 ground truth의 교집합 길이
 1. 현재 로컬의 `eval_01.MOV` 위치와 FFmpeg 실행 가능 여부 확인
 2. 업로드 파일 검증과 안전한 로컬 저장 정책 구현 — 완료
 3. 업로드와 분리된 로컬 파일 ffprobe 조회 서비스 구현 — 완료
-4. FFmpeg 오디오 추출과 오류 처리
+4. FFmpeg 오디오 추출과 오류 처리 — 완료
 5. STT 후보를 같은 Test 01로 비교하고 선택 근거 기록
 6. 편집 메모와 타임스탬프 탐지
 7. 네 개 고정 Window 생성과 IoU 비교

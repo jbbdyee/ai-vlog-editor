@@ -64,7 +64,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 
 ## Current Repository Status
 
-2026-09-09 현재 저장소에서 확인된 상태입니다.
+2026-09-14 현재 저장소에서 확인된 상태입니다.
 
 - [x] 프로젝트 문제와 제품 원칙 정의
 - [x] MVP v1 범위 및 평가 전략 정의
@@ -74,7 +74,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] `POST /videos/upload` — 업로드 파일명과 Content-Type 확인
 - [x] MOV/MP4 업로드 검증 및 UUID 파일명 기반 로컬 저장
 - [x] ffprobe 기반 기본 미디어 정보 조회
-- [ ] FFmpeg 오디오 추출
+- [x] FFmpeg 오디오 추출 — 로컬 영상의 첫 오디오 스트림을 16 kHz mono PCM WAV로 안전하게 생성
 - [ ] STT 후보 비교 및 Baseline 구현
 - [ ] 편집 메모와 타임스탬프 탐지
 - [ ] 5·10·15·30초 후보 및 IoU 평가
