@@ -44,6 +44,8 @@ Video Asset
 
 FFmpeg/ffprobe를 사용해 미디어 정보를 읽고 STT용 오디오를 만든다. 파일명, 코덱, 길이, 스트림 오류를 명시적으로 반환한다.
 
+현재 `app/services/media_probe.py`는 로컬 파일을 ffprobe의 JSON 출력으로 검사하고 길이, 컨테이너, 영상·음성 스트림 및 코덱 정보를 `MediaInfo`로 반환한다. subprocess는 shell 없이 인자 리스트로 실행하며, 파일 부재·실행 실패·파싱 실패는 `MediaProbeError`로 통일한다. 오디오 추출은 아직 구현하지 않았다.
+
 ### STT Adapter
 
 특정 STT 엔진을 나머지 코드에서 격리한다. 최소 출력은 시작·종료 시각과 텍스트를 가진 Segment 목록이다. 엔진은 비교 실험 후 결정한다.
