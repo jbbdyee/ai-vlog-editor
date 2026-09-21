@@ -41,7 +41,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - Python
 - FastAPI
 - FFmpeg
-- STT — 엔진 미정
+- STT — faster-whisper `small` Baseline
 
 ### 필요성이 검증된 이후
 
@@ -64,7 +64,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 
 ## Current Repository Status
 
-2026-09-14 현재 저장소에서 확인된 상태입니다.
+2026-09-17 현재 저장소에서 확인된 상태입니다.
 
 - [x] 프로젝트 문제와 제품 원칙 정의
 - [x] MVP v1 범위 및 평가 전략 정의
@@ -75,7 +75,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] MOV/MP4 업로드 검증 및 UUID 파일명 기반 로컬 저장
 - [x] ffprobe 기반 기본 미디어 정보 조회
 - [x] FFmpeg 오디오 추출 — 로컬 영상의 첫 오디오 스트림을 16 kHz mono PCM WAV로 안전하게 생성
-- [ ] STT 후보 비교 및 Baseline 구현
+- [x] faster-whisper `small` 기반 한국어 STT Baseline — segment 및 선택적 word timestamp 반환 (실제 `eval_01.wav` 검증 대기)
 - [ ] 편집 메모와 타임스탬프 탐지
 - [ ] 5·10·15·30초 후보 및 IoU 평가
 - [ ] FFmpeg 기반 실제 클립 생성

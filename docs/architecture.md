@@ -50,7 +50,9 @@ FFmpeg/ffprobe를 사용해 미디어 정보를 읽고 STT용 오디오를 만�
 
 ### STT Adapter
 
-특정 STT 엔진을 나머지 코드에서 격리한다. 최소 출력은 시작·종료 시각과 텍스트를 가진 Segment 목록이다. 엔진은 비교 실험 후 결정한다.
+특정 STT 엔진을 나머지 코드에서 격리한다. 최소 출력은 시작·종료 시각과 텍스트를 가진 Segment 목록이다.
+
+현재 `app/services/stt_service.py`는 faster-whisper `small` 모델을 CPU `int8`로 로드하고 한국어 WAV를 처리한다. 결과는 전체 텍스트, 언어 정보, segment 타임스탬프와 선택적인 word 타임스탬프를 가진 `STTResult`로 반환하며, 파일·모델 로딩·추론 오류는 `STTError`로 통일한다.
 
 ### Memo Detector
 
