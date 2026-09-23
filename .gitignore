@@ -226,3 +226,7 @@ evaluation/data/*
 !evaluation/data/.gitkeep
 uploads/
 outputs/
+
+# 테스트 오디오 데이터
+evaluation/audio/*
+!evaluation/audio/.gitkeep
