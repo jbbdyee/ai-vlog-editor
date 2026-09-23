@@ -19,6 +19,7 @@ MVP v1은 전체 편집 서비스를 만드는 단계가 아니라 이 질문을
 - trigger/reference/action 표현군을 이용한 규칙 기반 편집 메모 탐지 구현
 - EditMemo 시작 시점 기반 5·10·15·30초 고정 구간 Scene Candidate 생성 구현
 - Scene Candidate와 Ground Truth의 IoU·Coverage·구간 경계 오차 Evaluator 구현
+- FFmpeg H.264/AAC 재인코딩 기반 Scene Candidate MP4 Clip Renderer 구현 및 실제 Test 01의 5초 Candidate 검증
 - Evaluation Dataset v0.1 시나리오 문서
 - `evaluation/data/.gitkeep`
 
@@ -126,7 +127,7 @@ Evaluator는 Ground Truth 길이 중 후보가 포함한 비율인 Coverage와 �
 5. faster-whisper `small` 기반 첫 STT Baseline 구현 — 완료
 6. 편집 메모와 타임스탬프 탐지 — 완료
 7. 네 개 고정 Window 생성과 Ground Truth 대비 지표 계산 — 완료
-8. 후보 클립 렌더링
+8. 후보 클립 렌더링 — 완료
 9. Test 02~05 촬영 및 동일 평가 반복
 10. Failure Analysis 후 Phase 2 기술 결정
 

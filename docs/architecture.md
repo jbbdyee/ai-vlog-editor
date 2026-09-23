@@ -68,7 +68,7 @@ MVP에서는 고정 표현군과 단순 정규화 규칙을 사용한다. `app/s
 
 ### Clip Renderer
 
-검증된 시작·종료 시각을 FFmpeg 작업으로 변환한다. 모델이 직접 명령 문자열을 생성하지 않는다.
+`app/services/clip_renderer.py`는 검증된 `SceneCandidate` 하나의 시작·종료 시각을 FFmpeg 인자 목록으로 변환한다. 키프레임에 제한되는 stream copy 대신 시간 경계 정확성과 일반적인 MP4 재생 호환성을 위해 H.264 `yuv420p` video와 AAC audio로 재인코딩한다. UUID 기반 출력 경로를 선점하고 실패·빈 출력·ffprobe 검증 실패 시 파일을 제거한다. 모델이 직접 명령 문자열을 생성하지 않는다.
 
 ## 4. 개념 데이터 모델
 
@@ -108,6 +108,15 @@ CandidateEvaluation
 - start_boundary_error
 - end_boundary_error
 - total_boundary_error
+
+RenderedClip
+- source_path
+- clip_path
+- start_seconds
+- end_seconds
+- duration_seconds
+- video_codec
+- audio_codec
 ```
 
 이는 구현 방향을 위한 최소 개념 모델이며, 영구 저장소 도입을 의미하지 않는다.
