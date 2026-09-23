@@ -24,10 +24,10 @@ Video Asset
       Memo Detector
           ↓
       Edit Memo
-          ↓
-      Fixed-window Generator
-          ↓
-      Candidate Intervals
+          ├─ Fixed-window Generator ────┐
+          └─ Transcript-block Retriever ┤
+                                       ↓
+                              Candidate Intervals
           ├─ Evaluator ──────────→ IoU / diagnostics
           └─ Clip Renderer ──────→ MP4
 ```
@@ -61,6 +61,10 @@ MVP에서는 결정적인 정규화와 제한적 문자열 유사도를 사용�
 ### Candidate Generator
 
 `app/services/candidate_generator.py`는 `EditMemo.start_seconds`를 끝 시각으로 사용해 5·10·15·30초 이전의 `SceneCandidate`를 입력 순서대로 생성한다. 시작 시각은 `max(0.0, memo_start - window)`로 계산해 영상 시작보다 이전으로 내려가지 않게 한다. 이 단계는 후보를 생성할 뿐 평가하거나 선택하지 않는다.
+
+### Transcript-block Retriever
+
+`app/services/transcript_scene_retriever.py`는 EditMemo 이전에 완전히 끝난 TranscriptSegment만 사용하고, 인접 segment 사이 침묵이 2.0초를 초과하면 새 utterance block을 만든다. 의미 분석 없이 가장 최근 block 하나를 선택하며 block의 시작·종료 timestamp를 그대로 `SceneCandidate`로 변환한다. 입력 순서, 유효한 시간 범위와 영상 duration을 결정적으로 검증하고 검색할 이전 발화가 없으면 자동 fallback 없이 실패한다. Fixed-window Generator는 비교 Baseline으로 그대로 유지한다.
 
 ### Evaluator
 
@@ -98,6 +102,18 @@ SceneCandidate
 - window_seconds
 - start_seconds
 - end_seconds
+
+TranscriptBlock
+- block_id
+- start_seconds
+- end_seconds
+- segment_ids
+- transcript_text
+
+TranscriptRetrievalResult
+- blocks
+- selected_block
+- candidate
 
 GroundTruthSegment
 - start_seconds

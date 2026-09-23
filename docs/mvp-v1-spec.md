@@ -8,7 +8,7 @@ MVP v1은 전체 편집 서비스를 만드는 단계가 아니라 이 질문을
 
 ## 2. 저장소에서 확인된 현재 상태
 
-2026-09-23 현재 저장소에서 직접 확인된 상태는 다음과 같다.
+2026-09-24 현재 저장소에서 직접 확인된 상태는 다음과 같다.
 
 - FastAPI 애플리케이션 구성
 - `GET /health` 구현
@@ -18,6 +18,7 @@ MVP v1은 전체 편집 서비스를 만드는 단계가 아니라 이 질문을
 - faster-whisper `small` 기반 한국어 STT Baseline 구현 — 실제 `eval_01.wav`에서 word timestamp 통합 검증 완료
 - trigger 음가 정규화·제한적 유사도와 reference/action 표현군을 이용한 규칙 기반 편집 메모 탐지 구현 — Test 02 `AIA`, Test 05 `에이야 에야` 재검증 성공
 - EditMemo 시작 시점 기반 5·10·15·30초 고정 구간 Scene Candidate 생성 구현
+- 2.0초 초과 침묵으로 발화 block을 분리하고 가장 최근 block을 선택하는 deterministic Transcript Scene Retrieval Baseline 구현
 - Scene Candidate와 Ground Truth의 IoU·Coverage·구간 경계 오차 Evaluator 구현
 - FFmpeg H.264/AAC 재인코딩 기반 Scene Candidate MP4 Clip Renderer 구현 및 실제 Test 01의 5초 Candidate 검증
 - Evaluation Dataset v0.1 시나리오 문서
