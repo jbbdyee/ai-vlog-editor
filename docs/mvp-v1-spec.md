@@ -17,6 +17,8 @@ MVP v1은 전체 편집 서비스를 만드는 단계가 아니라 이 질문을
 - FFmpeg 기반 16 kHz mono PCM WAV 오디오 추출 서비스 구현
 - faster-whisper `small` 기반 한국어 STT Baseline 구현 — 실제 `eval_01.wav`에서 word timestamp 통합 검증 완료
 - trigger/reference/action 표현군을 이용한 규칙 기반 편집 메모 탐지 구현
+- EditMemo 시작 시점 기반 5·10·15·30초 고정 구간 Scene Candidate 생성 구현
+- Scene Candidate와 Ground Truth의 IoU·Coverage·구간 경계 오차 Evaluator 구현
 - Evaluation Dataset v0.1 시나리오 문서
 - `evaluation/data/.gitkeep`
 
@@ -105,6 +107,8 @@ IoU = prediction과 ground truth의 교집합 길이
       / prediction과 ground truth의 합집합 길이
 ```
 
+Evaluator는 Ground Truth 길이 중 후보가 포함한 비율인 Coverage와 후보·정답의 시작 및 종료 시각 절대 오차도 함께 계산한다. 이 단계에서는 지표를 이용해 후보를 선택하거나 순위화하지 않는다.
+
 ### 임시 성공 기준
 
 - 편집 메모 탐지 성공률 90% 이상
@@ -121,7 +125,7 @@ IoU = prediction과 ground truth의 교집합 길이
 4. FFmpeg 오디오 추출과 오류 처리 — 완료
 5. faster-whisper `small` 기반 첫 STT Baseline 구현 — 완료
 6. 편집 메모와 타임스탬프 탐지 — 완료
-7. 네 개 고정 Window 생성과 IoU 비교
+7. 네 개 고정 Window 생성과 Ground Truth 대비 지표 계산 — 완료
 8. 후보 클립 렌더링
 9. Test 02~05 촬영 및 동일 평가 반복
 10. Failure Analysis 후 Phase 2 기술 결정

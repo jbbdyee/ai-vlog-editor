@@ -60,11 +60,11 @@ MVP에서는 고정 표현군과 단순 정규화 규칙을 사용한다. `app/s
 
 ### Candidate Generator
 
-메모 타임스탬프를 기준으로 5·10·15·30초 이전 구간을 생성한다. 영상 경계를 벗어나지 않게 제한한다.
+`app/services/candidate_generator.py`는 `EditMemo.start_seconds`를 끝 시각으로 사용해 5·10·15·30초 이전의 `SceneCandidate`를 입력 순서대로 생성한다. 시작 시각은 `max(0.0, memo_start - window)`로 계산해 영상 시작보다 이전으로 내려가지 않게 한다. 이 단계는 후보를 생성할 뿐 평가하거나 선택하지 않는다.
 
 ### Evaluator
 
-예측 구간과 Ground Truth의 IoU, 탐지 여부, 렌더링 성공 여부를 계산한다. 모델 선택과 분리되어 재현 가능해야 한다.
+`app/services/candidate_evaluator.py`는 `SceneCandidate`와 `GroundTruthSegment`의 IoU, Ground Truth Coverage, 시작·종료·전체 경계 오차를 계산한다. 유효한 양의 길이 구간만 평가하며 후보를 선택하거나 순위화하지 않는다.
 
 ### Clip Renderer
 
@@ -92,18 +92,22 @@ EditMemo
 - matched_reference
 - matched_action
 
-CandidateInterval
-- memo_id
-- strategy
+SceneCandidate
+- window_seconds
 - start_seconds
 - end_seconds
 
-EvaluationResult
-- candidate_id
-- ground_truth_start
-- ground_truth_end
+GroundTruthSegment
+- start_seconds
+- end_seconds
+
+CandidateEvaluation
+- window_seconds
 - iou
-- render_succeeded
+- coverage
+- start_boundary_error
+- end_boundary_error
+- total_boundary_error
 ```
 
 이는 구현 방향을 위한 최소 개념 모델이며, 영구 저장소 도입을 의미하지 않는다.
@@ -112,7 +116,7 @@ EvaluationResult
 
 ### Scene Retrieval
 
-침묵, 장면 전환, Transcript 문맥, Embedding 또는 VLM을 이용해 후보를 만들더라도 최종 출력은 동일한 `CandidateInterval` 경계를 사용한다.
+침묵, 장면 전환, Transcript 문맥, Embedding 또는 VLM을 이용해 후보를 만들더라도 최종 출력은 동일한 `SceneCandidate` 경계를 사용한다.
 
 ### Conversational Editing
 

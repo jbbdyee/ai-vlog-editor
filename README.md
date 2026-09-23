@@ -77,7 +77,8 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] FFmpeg 오디오 추출 — 로컬 영상의 첫 오디오 스트림을 16 kHz mono PCM WAV로 안전하게 생성
 - [x] faster-whisper `small` 기반 한국어 STT Baseline — 실제 `eval_01.wav`에서 segment 및 word timestamp 검증
 - [x] 규칙 기반 편집 메모 탐지 — trigger/reference/action 표현군과 word timestamp 우선 사용
-- [ ] 5·10·15·30초 후보 및 IoU 평가
+- [x] EditMemo 시점 기반 5·10·15·30초 고정 구간 Scene Candidate 생성
+- [x] Ground Truth 대비 IoU·Coverage·구간 경계 오차 계산
 - [ ] FFmpeg 기반 실제 클립 생성
 
 원본 테스트 영상은 개인정보와 용량 문제로 Git에 포함하지 않습니다.
