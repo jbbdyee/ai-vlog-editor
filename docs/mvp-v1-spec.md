@@ -16,7 +16,7 @@ MVP v1은 전체 편집 서비스를 만드는 단계가 아니라 이 질문을
 - 로컬 파일을 대상으로 한 ffprobe 기본 미디어 정보 조회 구현
 - FFmpeg 기반 16 kHz mono PCM WAV 오디오 추출 서비스 구현
 - faster-whisper `small` 기반 한국어 STT Baseline 구현 — 실제 `eval_01.wav`에서 word timestamp 통합 검증 완료
-- trigger/reference/action 표현군을 이용한 규칙 기반 편집 메모 탐지 구현
+- trigger 음가 정규화·제한적 유사도와 reference/action 표현군을 이용한 규칙 기반 편집 메모 탐지 구현 — Test 02 `AIA`, Test 05 `에이야 에야` 재검증 성공
 - EditMemo 시작 시점 기반 5·10·15·30초 고정 구간 Scene Candidate 생성 구현
 - Scene Candidate와 Ground Truth의 IoU·Coverage·구간 경계 오차 Evaluator 구현
 - FFmpeg H.264/AAC 재인코딩 기반 Scene Candidate MP4 Clip Renderer 구현 및 실제 Test 01의 5초 Candidate 검증

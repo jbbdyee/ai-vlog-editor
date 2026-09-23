@@ -56,7 +56,7 @@ FFmpeg/ffprobe를 사용해 미디어 정보를 읽고 STT용 오디오를 만�
 
 ### Memo Detector
 
-MVP에서는 고정 표현군과 단순 정규화 규칙을 사용한다. `app/services/memo_detector.py`는 segment마다 호출(`AI야`, `에이아이야`, 실제 Test 01에서 관측된 `에이아이아`), 시간 참조(`방금`, `지금`), 행동(`살려줘`)이 순서대로 모두 있는 경우에만 `EditMemo`를 하나 생성한다. word timestamp에서 호출 표현을 찾으면 해당 첫 word의 시작 시각을 사용하고, 찾지 못하면 segment 시작 시각을 사용한다. 자유로운 의도 분류는 후속 단계다.
+MVP에서는 결정적인 정규화와 제한적 문자열 유사도를 사용한다. `app/services/memo_detector.py`는 reference 바로 앞의 최대 2개 토큰만 trigger 후보로 보고 영문 `A/I`를 한글 음가로 정규화한 뒤 표준 호출어와 비교한다. 후보 길이 5~7자와 유사도 0.60 이상을 요구해 실제 STT 변형인 `AIA`, `에이야 에야`를 처리하면서 짧거나 무관한 표현을 제한한다. 기존과 동일하게 호출, 시간 참조(`방금`, `지금`), 행동(`살려줘`)이 순서대로 모두 있는 경우에만 `EditMemo`를 하나 생성한다. 결과에는 실제 일치 표현, match 방식과 유사도를 남기고, word timestamp에서 호출 표현을 찾으면 해당 첫 word의 시작 시각을 사용한다.
 
 ### Candidate Generator
 
@@ -91,6 +91,8 @@ EditMemo
 - matched_trigger
 - matched_reference
 - matched_action
+- trigger_match_type
+- trigger_similarity
 
 SceneCandidate
 - window_seconds

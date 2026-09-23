@@ -1,6 +1,6 @@
 from unittest import TestCase
 
-from app.services.memo_detector import detect_edit_memos
+from app.services.memo_detector import DEFAULT_MEMO_RULES, detect_edit_memos
 from app.services.stt_service import STTResult, TranscriptSegment, TranscriptWord
 
 
@@ -51,6 +51,54 @@ class MemoDetectorTests(TestCase):
         self.assertEqual(memo.matched_trigger, "에이아이아")
         self.assertEqual(memo.matched_reference, "지금")
         self.assertEqual(memo.matched_action, "살려줘")
+        self.assertEqual(memo.trigger_match_type, "similarity")
+        self.assertEqual(memo.trigger_similarity, 0.8)
+
+    def test_eval_02_latin_trigger_variant_is_detected_by_similarity(self) -> None:
+        segment = self._segment(
+            "아 AIA 방금 장면 꼭 살려줘",
+            start_seconds=31.44,
+            end_seconds=36.32,
+            words=(
+                self._word(31.44, 32.84, "아"),
+                self._word(32.84, 33.54, "AIA"),
+                self._word(33.54, 34.42, "방금"),
+                self._word(34.42, 35.28, "장면"),
+                self._word(35.28, 35.68, "꼭"),
+                self._word(35.68, 36.32, "살려줘"),
+            ),
+        )
+
+        memo = detect_edit_memos((segment,))[0]
+
+        self.assertNotIn("AIA", DEFAULT_MEMO_RULES.triggers)
+        self.assertEqual(memo.start_seconds, 32.84)
+        self.assertEqual(memo.matched_trigger, "AIA")
+        self.assertEqual(memo.trigger_match_type, "similarity")
+        self.assertAlmostEqual(memo.trigger_similarity, 8.0 / 11.0)
+
+    def test_eval_05_split_trigger_variant_is_detected_by_similarity(self) -> None:
+        segment = self._segment(
+            "에이야 에야 방금 장면 꼭 살려줘",
+            start_seconds=26.84,
+            end_seconds=30.24,
+            words=(
+                self._word(26.84, 27.86, "에이야"),
+                self._word(27.86, 28.2, "에야"),
+                self._word(28.2, 28.82, "방금"),
+                self._word(28.82, 29.22, "장면"),
+                self._word(29.22, 29.48, "꼭"),
+                self._word(29.48, 30.24, "살려줘"),
+            ),
+        )
+
+        memo = detect_edit_memos((segment,))[0]
+
+        self.assertNotIn("에이야 에야", DEFAULT_MEMO_RULES.triggers)
+        self.assertEqual(memo.start_seconds, 26.84)
+        self.assertEqual(memo.matched_trigger, "에이야 에야")
+        self.assertEqual(memo.trigger_match_type, "similarity")
+        self.assertEqual(memo.trigger_similarity, 0.6)
 
     def test_word_timestamp_uses_first_trigger_word_start(self) -> None:
         segment = self._segment(
@@ -86,6 +134,20 @@ class MemoDetectorTests(TestCase):
         segment = self._segment("오늘 카페에서 지금 장면을 다시 이야기했어")
 
         self.assertEqual(detect_edit_memos((segment,)), ())
+
+    def test_unrelated_word_before_reference_and_action_is_not_detected(self) -> None:
+        segment = self._segment("친구야 방금 장면 꼭 살려줘")
+
+        self.assertEqual(detect_edit_memos((segment,)), ())
+
+    def test_short_similar_strings_do_not_match_trigger(self) -> None:
+        for text in (
+            "에이야 방금 장면 꼭 살려줘",
+            "아이야 방금 장면 꼭 살려줘",
+            "아이디어 방금 장면 꼭 살려줘",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(detect_edit_memos((self._segment(text),)), ())
 
     def test_trigger_without_action_is_not_detected(self) -> None:
         segment = self._segment("AI야 방금 장면이 재미있었어")
