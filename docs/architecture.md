@@ -56,7 +56,7 @@ FFmpeg/ffprobe를 사용해 미디어 정보를 읽고 STT용 오디오를 만�
 
 ### Memo Detector
 
-MVP에서는 고정 트리거 또는 단순 정규화 규칙을 사용한다. 자유로운 의도 분류는 후속 단계다.
+MVP에서는 고정 표현군과 단순 정규화 규칙을 사용한다. `app/services/memo_detector.py`는 segment마다 호출(`AI야`, `에이아이야`, 실제 Test 01에서 관측된 `에이아이아`), 시간 참조(`방금`, `지금`), 행동(`살려줘`)이 순서대로 모두 있는 경우에만 `EditMemo`를 하나 생성한다. word timestamp에서 호출 표현을 찾으면 해당 첫 word의 시작 시각을 사용하고, 찾지 못하면 segment 시작 시각을 사용한다. 자유로운 의도 분류는 후속 단계다.
 
 ### Candidate Generator
 
@@ -85,11 +85,12 @@ TranscriptSegment
 - text
 
 EditMemo
-- id
 - start_seconds
 - end_seconds
 - transcript_text
-- intent_type
+- matched_trigger
+- matched_reference
+- matched_action
 
 CandidateInterval
 - memo_id
