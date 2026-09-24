@@ -23,6 +23,7 @@ MVP v1은 전체 편집 서비스를 만드는 단계가 아니라 이 질문을
 - OpenAI `gpt-6-luna` Responses API와 Structured Outputs 기반 Semantic Block Selector Spike Adapter 구현 — API key 미설정으로 실제 eval_01~05 평가는 미실행
 - Gemini `gemini-3.5-flash`와 `google-genai` Structured Outputs 기반 Semantic Block Selector Spike Adapter 구현 — API key 미설정으로 실제 eval_01~05 평가는 미실행
 - 선택된 TranscriptBlock 주변의 로컬 WAV RMS activity로 구간을 보정하는 deterministic Audio Boundary Refiner v0.1 구현 및 eval_01~05 평가 완료 — 일부 짧은 reaction 구간은 소폭 개선했으나 긴 발화를 여러 episode로 분절해 전체 성공 기준은 미달
+- 선택된 TranscriptBlock 주변의 로컬 grayscale frame 차이로 구간을 보정하는 deterministic Visual Motion Refiner v0.1 구현 및 eval_01~05 평가 완료 — refinement yield 2/5이며 생성된 두 Candidate 모두 Raw보다 악화되어 전체 성공 기준 미달
 - Scene Candidate와 Ground Truth의 IoU·Coverage·구간 경계 오차 Evaluator 구현
 - FFmpeg H.264/AAC 재인코딩 기반 Scene Candidate MP4 Clip Renderer 구현 및 실제 Test 01의 5초 Candidate 검증
 - Evaluation Dataset v0.1 시나리오 문서

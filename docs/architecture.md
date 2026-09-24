@@ -80,6 +80,10 @@ MVP에서는 결정적인 정규화와 제한적 문자열 유사도를 사용�
 
 `app/services/audio_boundary_refiner.py`는 선택이 끝난 `TranscriptBlock` 주변의 16 kHz mono PCM16 WAV를 20 ms frame으로 분석하는 deterministic Spike다. 인접 block과 memo 시점으로 제한한 로컬 범위에서 RMS/dBFS, 낮은 에너지 절반의 median noise floor, 공통 energy margin으로 activity episode를 만들고 선택 block과 가장 많이 겹치는 episode의 경계를 `SceneCandidate`로 변환한다. Ground Truth는 입력에 포함하지 않으며 activity 근거가 없을 때 Fixed Window로 fallback하지 않는다. v0.1 평가는 `evaluation/results/audio-boundary-v0.1.md`에 기록한다.
 
+### Visual Motion Boundary Refiner
+
+`app/services/visual_motion_refiner.py`는 선택된 `TranscriptBlock` 주변의 로컬 MOV/MP4를 FFmpeg로 5 FPS, 폭 160, 종횡비 유지 grayscale PGM frame stream으로 변환하고 인접 frame의 정규화된 평균 절대 pixel 차이를 계산한다. 3-frame median smoothing 후 `median + 3 × median_absolute_deviation` threshold를 사용하며 0.4초 미만 spike를 제거하고 0.6초 이하 quiet gap을 병합한다. 선택 block과 연결되는 episode가 정확히 하나일 때만 `SceneCandidate`를 만들고, 없거나 여러 개면 `NO_SIGNAL` 또는 `AMBIGUOUS_SIGNAL`로 보존한다. Ground Truth, 자동 fallback, 외부 API는 사용하지 않는다. v0.1 평가는 `evaluation/results/visual-motion-v0.1.md`에 기록한다.
+
 ### Clip Renderer
 
 `app/services/clip_renderer.py`는 검증된 `SceneCandidate` 하나의 시작·종료 시각을 FFmpeg 인자 목록으로 변환한다. 키프레임에 제한되는 stream copy 대신 시간 경계 정확성과 일반적인 MP4 재생 호환성을 위해 H.264 `yuv420p` video와 AAC audio로 재인코딩한다. UUID 기반 출력 경로를 선점하고 실패·빈 출력·ffprobe 검증 실패 시 파일을 제거한다. 모델이 직접 명령 문자열을 생성하지 않는다.
@@ -152,6 +156,23 @@ RefinedSceneCandidate
 - start_seconds / end_seconds / duration_seconds
 - start_adjustment_seconds / end_adjustment_seconds
 - start_evidence / end_evidence
+- refinement_method / config_version
+
+VisualBoundarySignal
+- timestamp_seconds / score / signal_type
+
+VisualActivityInterval
+- start_seconds / end_seconds
+- peak_score / mean_score
+- overlaps_selected_block
+
+VisualBoundaryRefinementResult
+- status / source_block_id
+- search_start_seconds / search_end_seconds
+- original_start_seconds / original_end_seconds
+- refined_start_seconds / refined_end_seconds
+- motion score statistics / visual signals / activity intervals
+- selected_interval / failure_reason
 - refinement_method / config_version
 
 GroundTruthSegment
