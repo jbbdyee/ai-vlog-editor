@@ -66,6 +66,12 @@ MVP에서는 결정적인 정규화와 제한적 문자열 유사도를 사용�
 
 `app/services/transcript_scene_retriever.py`는 EditMemo 이전에 완전히 끝난 TranscriptSegment만 사용하고, 인접 segment 사이 침묵이 2.0초를 초과하면 새 utterance block을 만든다. 의미 분석 없이 가장 최근 block 하나를 선택하며 block의 시작·종료 timestamp를 그대로 `SceneCandidate`로 변환한다. 입력 순서, 유효한 시간 범위와 영상 duration을 결정적으로 검증하고 검색할 이전 발화가 없으면 자동 fallback 없이 실패한다. Fixed-window Generator는 비교 Baseline으로 그대로 유지한다.
 
+`app/services/semantic_block_selector.py`는 deterministic selector와 LLM selector가 공유할 최소 계약을 제공한다. selector 입력은 EditMemo와 선택 가능한 TranscriptBlock뿐이며 Ground Truth를 포함하지 않는다. selector 출력은 선택한 block ID, 제한된 reasoning code와 240자 이하의 짧은 summary만 가진다. Provider 출력은 신뢰하지 않고 일반 Python validator가 block 존재 여부, 메모 이전 여부, timestamp와 영상 범위를 검증한 뒤 입력 block의 기존 start/end로 `SceneCandidate`를 만든다. selector가 timestamp를 생성하거나 FFmpeg를 호출할 수 있는 필드는 제공하지 않는다.
+
+`app/services/openai_semantic_block_selector.py`는 위 계약을 구현하는 OpenAI Spike Adapter다. `gpt-6-luna`와 Responses API Structured Outputs를 사용하고, 외부 전송 데이터는 편집 메모 transcript와 block별 ID·시작·종료·transcript로 제한한다. 응답 저장은 끄고 reasoning effort는 `low`로 고정하며 temperature는 보내지 않는다. Provider는 ID와 제한된 근거만 반환하고 timestamp와 Candidate는 기존 deterministic validator가 만든다. Provider 호출·timeout·refusal·구조화 응답 오류는 Provider 전용 오류로, block 검증 오류는 기존 validation 오류로 구분한다. 실제 eval_01~05 API 평가는 `OPENAI_API_KEY`가 제공된 뒤 별도로 기록한다.
+
+`app/services/gemini_semantic_block_selector.py`는 같은 계약을 구현하는 Gemini Spike Adapter다. stable GA `gemini-3.5-flash`와 `google-genai` Structured Outputs를 사용하며 외부 전송 필드와 결정적 검증 경계는 OpenAI Adapter와 동일하다. 응답 무작위성을 낮추기 위해 temperature `0.0`, 단순 선택 작업에 맞춰 thinking level `minimal`을 사용한다. 실제 eval_01~05 API 평가는 `GEMINI_API_KEY`가 제공된 뒤 동일 prompt/settings로 별도 기록한다.
+
 ### Evaluator
 
 `app/services/candidate_evaluator.py`는 `SceneCandidate`와 `GroundTruthSegment`의 IoU, Ground Truth Coverage, 시작·종료·전체 경계 오차를 계산한다. 유효한 양의 길이 구간만 평가하며 후보를 선택하거나 순위화하지 않는다.
@@ -112,6 +118,20 @@ TranscriptBlock
 
 TranscriptRetrievalResult
 - blocks
+- selected_block
+- candidate
+
+SemanticBlockSelectionInput
+- memo
+- blocks
+
+SemanticBlockSelection
+- selected_block_id
+- reasoning_code
+- reasoning_summary
+
+ValidatedSemanticBlockSelection
+- selection
 - selected_block
 - candidate
 

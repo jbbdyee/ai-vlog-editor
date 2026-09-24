@@ -19,6 +19,9 @@ MVP v1은 전체 편집 서비스를 만드는 단계가 아니라 이 질문을
 - trigger 음가 정규화·제한적 유사도와 reference/action 표현군을 이용한 규칙 기반 편집 메모 탐지 구현 — Test 02 `AIA`, Test 05 `에이야 에야` 재검증 성공
 - EditMemo 시작 시점 기반 5·10·15·30초 고정 구간 Scene Candidate 생성 구현
 - 2.0초 초과 침묵으로 발화 block을 분리하고 가장 최근 block을 선택하는 deterministic Transcript Scene Retrieval Baseline 구현
+- 의미 기반 Transcript Block 선택을 위한 Provider 독립적 입력·출력 Schema와 deterministic Candidate 검증 계층 구현
+- OpenAI `gpt-6-luna` Responses API와 Structured Outputs 기반 Semantic Block Selector Spike Adapter 구현 — API key 미설정으로 실제 eval_01~05 평가는 미실행
+- Gemini `gemini-3.5-flash`와 `google-genai` Structured Outputs 기반 Semantic Block Selector Spike Adapter 구현 — API key 미설정으로 실제 eval_01~05 평가는 미실행
 - Scene Candidate와 Ground Truth의 IoU·Coverage·구간 경계 오차 Evaluator 구현
 - FFmpeg H.264/AAC 재인코딩 기반 Scene Candidate MP4 Clip Renderer 구현 및 실제 Test 01의 5초 Candidate 검증
 - Evaluation Dataset v0.1 시나리오 문서

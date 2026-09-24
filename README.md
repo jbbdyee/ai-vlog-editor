@@ -79,6 +79,9 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] 규칙 기반 편집 메모 탐지 — trigger 음가 정규화·제한적 유사도와 reference/action 순서 조건 사용
 - [x] EditMemo 시점 기반 5·10·15·30초 고정 구간 Scene Candidate 생성
 - [x] 2.0초 초과 침묵 기반 Transcript Block 생성 및 최신 block Scene Candidate 선택
+- [x] Provider 독립적 의미 기반 Block Selector Schema와 deterministic 검증 계층
+- [x] OpenAI `gpt-6-luna` Responses API용 Semantic Block Selector 구현 — 실제 eval_01~05 API 평가는 미실행
+- [x] Gemini `gemini-3.5-flash` Structured Outputs용 Semantic Block Selector 구현 — 실제 eval_01~05 API 평가는 미실행
 - [x] Ground Truth 대비 IoU·Coverage·구간 경계 오차 계산
 - [x] FFmpeg 기반 MP4 클립 생성 — H.264/AAC 재인코딩 및 실제 `eval_01.MOV` 5초 Candidate 검증
 
