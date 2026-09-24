@@ -76,6 +76,10 @@ MVP에서는 결정적인 정규화와 제한적 문자열 유사도를 사용�
 
 `app/services/candidate_evaluator.py`는 `SceneCandidate`와 `GroundTruthSegment`의 IoU, Ground Truth Coverage, 시작·종료·전체 경계 오차를 계산한다. 유효한 양의 길이 구간만 평가하며 후보를 선택하거나 순위화하지 않는다.
 
+### Audio Boundary Refiner
+
+`app/services/audio_boundary_refiner.py`는 선택이 끝난 `TranscriptBlock` 주변의 16 kHz mono PCM16 WAV를 20 ms frame으로 분석하는 deterministic Spike다. 인접 block과 memo 시점으로 제한한 로컬 범위에서 RMS/dBFS, 낮은 에너지 절반의 median noise floor, 공통 energy margin으로 activity episode를 만들고 선택 block과 가장 많이 겹치는 episode의 경계를 `SceneCandidate`로 변환한다. Ground Truth는 입력에 포함하지 않으며 activity 근거가 없을 때 Fixed Window로 fallback하지 않는다. v0.1 평가는 `evaluation/results/audio-boundary-v0.1.md`에 기록한다.
+
 ### Clip Renderer
 
 `app/services/clip_renderer.py`는 검증된 `SceneCandidate` 하나의 시작·종료 시각을 FFmpeg 인자 목록으로 변환한다. 키프레임에 제한되는 stream copy 대신 시간 경계 정확성과 일반적인 MP4 재생 호환성을 위해 H.264 `yuv420p` video와 AAC audio로 재인코딩한다. UUID 기반 출력 경로를 선점하고 실패·빈 출력·ffprobe 검증 실패 시 파일을 제거한다. 모델이 직접 명령 문자열을 생성하지 않는다.
@@ -134,6 +138,21 @@ ValidatedSemanticBlockSelection
 - selection
 - selected_block
 - candidate
+
+AudioActivityInterval
+- start_seconds
+- end_seconds
+- peak_dbfs
+- mean_dbfs
+- overlaps_selected_block
+
+RefinedSceneCandidate
+- source_block_id
+- original_start_seconds / original_end_seconds
+- start_seconds / end_seconds / duration_seconds
+- start_adjustment_seconds / end_adjustment_seconds
+- start_evidence / end_evidence
+- refinement_method / config_version
 
 GroundTruthSegment
 - start_seconds
