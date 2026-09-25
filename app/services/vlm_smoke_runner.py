@@ -1,4 +1,5 @@
 import time
+from typing import Any
 
 from app.services.evaluation_result_store import (
     DuplicateEvaluationResultError,
@@ -14,6 +15,7 @@ from app.services.ollama_vlm_proposal_selector import (
     VLMProposalSelectionInput,
     validate_vlm_proposal_selection,
 )
+from app.services.gemini_vlm_proposal_selector import GeminiVLMProviderError
 
 
 DEFAULT_SMOKE_RUNTIME = "mac_native_ollama"
@@ -23,12 +25,14 @@ DEFAULT_TEMPERATURE = 0.0
 def run_persisted_vlm_smoke_test(
     *,
     run_id: str,
-    selector: OllamaVLMProposalSelector,
+    selector: Any,
     selection_input: VLMProposalSelectionInput,
     video_duration_seconds: float,
     memo_start_seconds: float,
     store: JsonlVLMSmokeResultStore,
     runtime: str = DEFAULT_SMOKE_RUNTIME,
+    provider: str = "ollama",
+    num_ctx: int | None = DEFAULT_OLLAMA_CONTEXT_SIZE,
 ) -> VLMSmokeTestResult:
     """Run at most once per run ID and durably persist every terminal outcome."""
     if store.has_run(run_id):
@@ -45,6 +49,8 @@ def run_persisted_vlm_smoke_test(
             run_id=run_id,
             selector=selector,
             runtime=runtime,
+            provider=provider,
+            num_ctx=num_ctx,
             image_count=_actual_image_count(selection_input),
             proposal_count=len(selection_input.proposals),
             logical_source_frame_count=_logical_frame_count(selection_input),
@@ -70,6 +76,8 @@ def run_persisted_vlm_smoke_test(
             run_id=run_id,
             selector=selector,
             runtime=runtime,
+            provider=provider,
+            num_ctx=num_ctx,
             image_count=call_result.image_count,
             proposal_count=len(selection_input.proposals),
             logical_source_frame_count=_logical_frame_count(selection_input),
@@ -91,6 +99,8 @@ def run_persisted_vlm_smoke_test(
         run_id=run_id,
         selector=selector,
         runtime=runtime,
+        provider=provider,
+        num_ctx=num_ctx,
         image_count=call_result.image_count,
         proposal_count=len(selection_input.proposals),
         logical_source_frame_count=_logical_frame_count(selection_input),
@@ -112,7 +122,7 @@ def run_persisted_vlm_smoke_test(
 def _result(
     *,
     run_id: str,
-    selector: OllamaVLMProposalSelector,
+    selector: Any,
     runtime: str,
     image_count: int,
     input_tokens: int | None = None,
@@ -136,13 +146,15 @@ def _result(
     proposal_count: int | None = None,
     logical_source_frame_count: int | None = None,
     actual_vlm_image_count: int | None = None,
+    provider: str = "ollama",
+    num_ctx: int | None = DEFAULT_OLLAMA_CONTEXT_SIZE,
 ) -> VLMSmokeTestResult:
     return VLMSmokeTestResult.completed_now(
         run_id=run_id,
         test_type="vlm_smoke",
         model=selector.model or DEFAULT_OLLAMA_MODEL,
         runtime=runtime,
-        num_ctx=DEFAULT_OLLAMA_CONTEXT_SIZE,
+        num_ctx=num_ctx,
         temperature=DEFAULT_TEMPERATURE,
         image_count=image_count,
         input_tokens=input_tokens,
@@ -166,6 +178,7 @@ def _result(
         proposal_count=proposal_count,
         logical_source_frame_count=logical_source_frame_count,
         actual_vlm_image_count=actual_vlm_image_count,
+        provider=provider,
     )
 
 
@@ -180,6 +193,21 @@ def _actual_image_count(selection_input: VLMProposalSelectionInput) -> int:
 
 
 def _provider_diagnostics(exc: Exception) -> dict[str, object]:
+    if isinstance(exc, GeminiVLMProviderError):
+        diagnostics = exc.diagnostics
+        return {
+            "provider_error_code": diagnostics.provider_error_code
+            or type(exc).__name__,
+            "metadata": {
+                "provider_http_status": diagnostics.http_status,
+                "provider_error_message": diagnostics.safe_message,
+                "provider_failure_stage": diagnostics.failure_stage,
+                "provider_timeout": diagnostics.timeout,
+                "provider_model": diagnostics.model,
+                "provider_image_count": diagnostics.image_count,
+                "provider_num_ctx": None,
+            },
+        }
     if not isinstance(exc, OllamaVLMProviderError):
         return {"provider_error_code": type(exc).__name__, "metadata": {}}
     return {

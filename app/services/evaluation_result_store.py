@@ -63,7 +63,7 @@ class VLMSmokeTestResult:
     test_type: str
     model: str
     runtime: str
-    num_ctx: int
+    num_ctx: int | None
     temperature: float
     image_count: int
     input_tokens: int | None
@@ -88,6 +88,7 @@ class VLMSmokeTestResult:
     proposal_count: int | None = None
     logical_source_frame_count: int | None = None
     actual_vlm_image_count: int | None = None
+    provider: str | None = None
 
     @classmethod
     def completed_now(cls, **values: Any) -> "VLMSmokeTestResult":
@@ -394,10 +395,12 @@ def _validate_smoke_result(result: VLMSmokeTestResult) -> None:
                 f"{label} must be a non-negative integer or null."
             )
     _validate_provider_diagnostics(result)
-    if result.num_ctx <= 0 or result.image_count <= 0:
+    if (result.num_ctx is not None and result.num_ctx <= 0) or result.image_count <= 0:
         raise EvaluationResultStoreError(
-            "Context size and image count must be greater than zero."
+            "Context size must be null or positive, and image count must be positive."
         )
+    if result.provider is not None:
+        _validate_text(result.provider, "Provider")
     for value, label in (
         (result.temperature, "Temperature"),
         (result.latency_seconds, "Latency"),

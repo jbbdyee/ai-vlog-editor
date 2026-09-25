@@ -98,6 +98,8 @@ v0.1.1에서는 마지막 selected block에 `next_block_start_seconds`가 없을
 
 v0.2 image representation은 proposal별 기존 10%·50%·90% JPEG와 frame ID/timestamp manifest를 바꾸지 않고, FFmpeg `hstack`으로 왼쪽부터 early·middle·late 순서의 수평 contact sheet 한 장을 만든다. `ProposalContactSheet` validator가 proposal ID, 정확히 세 frame의 순서와 timestamp, non-empty JPEG를 검사한다. VLM은 proposal당 세 이미지 대신 contact sheet 한 장을 받지만 선택 Schema와 저장된 proposal timestamp 기반 `SceneCandidate` 변환은 동일하다. Synthetic Smoke Test에서는 3 proposals의 논리 frame 9개를 실제 이미지 3장으로 전달해 input 3,660 tokens, latency 39.3534초로 Structured Output과 validator에 성공했다. eval_01~05에서는 context 초과 없이 proposal preparation 5/5에 성공했지만 실제 이미지 4~6장 요청이 모두 120초 timeout으로 종료됐다.
 
+`app/services/gemini_vlm_proposal_selector.py`는 동일한 contact sheet input, selection prompt 의미, `VLMProposalSelection` Schema와 deterministic validator를 Gemini `gemini-3.5-flash`에 연결하는 feasibility adapter다. `response_mime_type="application/json"`과 `response_json_schema`를 사용하고 synthetic 이미지와 텍스트만 외부 전송한다. 독립된 synthetic Smoke 2회가 모두 HTTP 503 `UNAVAILABLE`로 Structured Output 전에 종료됐으며 각 run을 재호출하지 않아 latency·token·선택 품질 feasibility는 아직 확인되지 않았다.
+
 ### Clip Renderer
 
 `app/services/clip_renderer.py`는 검증된 `SceneCandidate` 하나의 시작·종료 시각을 FFmpeg 인자 목록으로 변환한다. 키프레임에 제한되는 stream copy 대신 시간 경계 정확성과 일반적인 MP4 재생 호환성을 위해 H.264 `yuv420p` video와 AAC audio로 재인코딩한다. UUID 기반 출력 경로를 선점하고 실패·빈 출력·ffprobe 검증 실패 시 파일을 제거한다. 모델이 직접 명령 문자열을 생성하지 않는다.

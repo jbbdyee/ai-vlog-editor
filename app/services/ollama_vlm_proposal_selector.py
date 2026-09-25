@@ -315,22 +315,12 @@ def validate_vlm_proposal_selection(
 def _build_request_payload(
     selection_input: VLMProposalSelectionInput, model: str
 ) -> tuple[dict[str, object], int]:
-    proposal_lines: list[str] = []
     images: list[str] = []
     contact_sheets = selection_input.contact_sheets
     for proposal_index, proposal in enumerate(selection_input.proposals):
-        frame_descriptions: list[str] = []
         for frame in proposal.frame_samples:
-            frame_descriptions.append(
-                f"{frame.frame_id}@{frame.timestamp_seconds:.3f}s"
-            )
             if contact_sheets is None:
                 images.append(base64.b64encode(frame.jpeg_bytes).decode("ascii"))
-        proposal_lines.append(
-            f"- {proposal.proposal_id}: {proposal.start_seconds:.3f}s~"
-            f"{proposal.end_seconds:.3f}s; frames in image order: "
-            + ", ".join(frame_descriptions)
-        )
         if contact_sheets is not None:
             images.append(
                 base64.b64encode(contact_sheets[proposal_index].jpeg_bytes).decode(
@@ -338,27 +328,7 @@ def _build_request_payload(
                 )
             )
     schema = VLMProposalSelection.model_json_schema()
-    prompt = (
-        "Choose exactly one proposal that best contains the event referenced by the "
-        "user's edit memo, using the selected transcript context and each proposal's "
-        "ordered frames. Do not prefer a proposal merely because it is shortest, "
-        "longest, or most recent. If none is supportable, abstain with an allowed "
-        "abstain code and null selected_proposal_id. Select only an ID listed below. "
-        "Do not create timestamps. Keep reasoning_summary under 240 characters."
-        + (
-            " Each proposal image is one horizontal contact sheet ordered left to "
-            "right as early, middle, and late frames.\n\n"
-            if contact_sheets is not None
-            else "\n\n"
-        )
-        + f"Edit memo: {selection_input.edit_memo_transcript}\n"
-        f"Selected transcript block ({selection_input.selected_block_id}): "
-        f"{selection_input.selected_block_text}\n"
-        "Proposals and image order:\n"
-        + "\n".join(proposal_lines)
-        + "\n\nReturn JSON matching this schema:\n"
-        + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
-    )
+    prompt = build_vlm_selection_prompt(selection_input, schema=schema)
     return (
         {
             "model": model,
@@ -371,6 +341,45 @@ def _build_request_payload(
             },
         },
         len(images),
+    )
+
+
+def build_vlm_selection_prompt(
+    selection_input: VLMProposalSelectionInput,
+    *,
+    schema: dict[str, object],
+) -> str:
+    proposal_lines = []
+    for proposal in selection_input.proposals:
+        frame_descriptions = [
+            f"{frame.frame_id}@{frame.timestamp_seconds:.3f}s"
+            for frame in proposal.frame_samples
+        ]
+        proposal_lines.append(
+            f"- {proposal.proposal_id}: {proposal.start_seconds:.3f}s~"
+            f"{proposal.end_seconds:.3f}s; frames in image order: "
+            + ", ".join(frame_descriptions)
+        )
+    return (
+        "Choose exactly one proposal that best contains the event referenced by the "
+        "user's edit memo, using the selected transcript context and each proposal's "
+        "ordered frames. Do not prefer a proposal merely because it is shortest, "
+        "longest, or most recent. If none is supportable, abstain with an allowed "
+        "abstain code and null selected_proposal_id. Select only an ID listed below. "
+        "Do not create timestamps. Keep reasoning_summary under 240 characters."
+        + (
+            " Each proposal image is one horizontal contact sheet ordered left to "
+            "right as early, middle, and late frames.\n\n"
+            if selection_input.contact_sheets is not None
+            else "\n\n"
+        )
+        + f"Edit memo: {selection_input.edit_memo_transcript}\n"
+        f"Selected transcript block ({selection_input.selected_block_id}): "
+        f"{selection_input.selected_block_text}\n"
+        "Proposals and image order:\n"
+        + "\n".join(proposal_lines)
+        + "\n\nReturn JSON matching this schema:\n"
+        + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
     )
 
 

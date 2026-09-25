@@ -29,6 +29,7 @@ MVP v1은 전체 편집 서비스를 만드는 단계가 아니라 이 질문을
 - Local VLM Proposal Selector v0.1 eval_01~05 terminal result 기록 완료 — 4건 proposal 준비 실패, 1건 Provider 실패로 실제 선택 성능은 측정하지 못했으며 실패 원인과 Proposal Oracle을 별도 평가 문서에 기록
 - Local VLM Proposal Pipeline v0.1.1 완료 — 마지막 selected block의 search end를 memo start로 처리하고 안전한 Provider 오류 메타데이터를 보존; eval_01~05 proposal preparation 5/5 성공 후 3건 timeout·2건 context 초과 기록
 - Local VLM Proposal image representation v0.2 구현·평가 — 기존 10/50/90% frame을 proposal별 수평 contact sheet 한 장으로 결합하며 synthetic Smoke는 3,660 input tokens·39.3534초로 성공; eval_01~05 context 초과는 해소됐지만 5/5가 120초 timeout으로 종료
+- Gemini Vision Contact Sheet feasibility adapter 구현 — 동일 synthetic contact sheet 3장으로 독립 Smoke 2회를 실행했으나 모두 Provider HTTP 503 `UNAVAILABLE`로 Structured Output 전에 종료, run별 재호출과 eval_01~05는 미실행
 - Scene Candidate와 Ground Truth의 IoU·Coverage·구간 경계 오차 Evaluator 구현
 - FFmpeg H.264/AAC 재인코딩 기반 Scene Candidate MP4 Clip Renderer 구현 및 실제 Test 01의 5초 Candidate 검증
 - Evaluation Dataset v0.1 시나리오 문서

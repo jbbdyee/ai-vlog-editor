@@ -11,6 +11,10 @@ from app.services.evaluation_result_store import (
     JsonlVLMSmokeResultStore,
     VLMSmokeTestResult,
 )
+from app.services.gemini_vlm_proposal_selector import (
+    GeminiVLMErrorDiagnostics,
+    GeminiVLMProviderError,
+)
 from app.services.ollama_vlm_proposal_selector import (
     OllamaVLMCallResult,
     OllamaVLMProviderError,
@@ -186,6 +190,43 @@ class VLMSmokeRunnerTests(unittest.TestCase):
         self.assertEqual(recovered.provider_image_count, 9)
         self.assertEqual(recovered.provider_num_ctx, 16_384)
         self.assertFalse(recovered.structured_output_success)
+
+    def test_gemini_provider_failure_is_saved_without_context_or_secret(self) -> None:
+        selector = FakeSelector(
+            error=GeminiVLMProviderError(
+                GeminiVLMErrorDiagnostics(
+                    http_status=429,
+                    provider_error_code="RESOURCE_EXHAUSTED",
+                    safe_message="Quota exceeded.",
+                    failure_stage="generate_content",
+                    model="gemini-3.5-flash",
+                    image_count=3,
+                    timeout=False,
+                )
+            )
+        )
+        selector.model = "gemini-3.5-flash"
+
+        with self.assertRaises(GeminiVLMProviderError):
+            run_persisted_vlm_smoke_test(
+                run_id="gemini-provider-failure",
+                selector=selector,
+                selection_input=self.selection_input,
+                video_duration_seconds=10.0,
+                memo_start_seconds=9.0,
+                store=self.store,
+                runtime="gemini_api",
+                provider="gemini",
+                num_ctx=None,
+            )
+
+        recovered = self.store.get("gemini-provider-failure")
+        self.assertEqual(recovered.provider, "gemini")
+        self.assertIsNone(recovered.num_ctx)
+        self.assertEqual(recovered.provider_http_status, 429)
+        self.assertEqual(recovered.provider_error_code, "RESOURCE_EXHAUSTED")
+        self.assertEqual(recovered.provider_failure_stage, "generate_content")
+        self.assertNotIn("api_key", self.path.read_text(encoding="utf-8"))
 
     def test_existing_run_blocks_provider_call(self) -> None:
         first_selector = self._selector("proposal-001")
