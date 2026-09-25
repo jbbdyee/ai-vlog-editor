@@ -126,6 +126,9 @@ class LocalVLMEvaluationResult:
     provider_error: bool
     provider_error_code: str | None
     completed_at: str
+    provider: str | None = None
+    oracle_best_start: float | None = None
+    oracle_best_end: float | None = None
     preparation_error: bool = False
     preparation_error_code: str | None = None
     provider_http_status: int | None = None

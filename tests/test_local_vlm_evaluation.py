@@ -9,6 +9,10 @@ from app.services.evaluation_result_store import (
     JsonlLocalVLMEvaluationResultStore,
 )
 from app.services.local_vlm_evaluation import run_persisted_local_vlm_evaluation
+from app.services.gemini_vlm_proposal_selector import (
+    GeminiVLMErrorDiagnostics,
+    GeminiVLMProviderError,
+)
 from app.services.ollama_vlm_proposal_selector import (
     OllamaVLMCallResult,
     OllamaVLMProviderError,
@@ -86,6 +90,8 @@ class LocalVLMEvaluationTests(unittest.TestCase):
 
         self.assertEqual(result.selected_proposal_id, "proposal-002")
         self.assertEqual(result.oracle_best_proposal_id, "proposal-002")
+        self.assertEqual(result.oracle_best_start, 2.0)
+        self.assertEqual(result.oracle_best_end, 7.0)
         self.assertEqual(result.iou, 0.8)
         self.assertEqual(self.store.completed_count("run-1"), 1)
 
@@ -148,6 +154,42 @@ class LocalVLMEvaluationTests(unittest.TestCase):
         with self.assertRaises(DuplicateEvaluationResultError):
             self._run("eval_03", second)
         self.assertEqual(second.calls, 0)
+
+    def test_gemini_provider_failure_diagnostics_are_persisted(self):
+        selector = FakeSelector(
+            error=GeminiVLMProviderError(
+                GeminiVLMErrorDiagnostics(
+                    http_status=503,
+                    provider_error_code="UNAVAILABLE",
+                    safe_message="Provider unavailable.",
+                    failure_stage="generate_content",
+                    model="gemini-3.1-flash-lite",
+                    image_count=3,
+                    timeout=False,
+                )
+            )
+        )
+        selector.model = "gemini-3.1-flash-lite"
+
+        with self.assertRaises(GeminiVLMProviderError):
+            run_persisted_local_vlm_evaluation(
+                run_id="run-gemini",
+                test_id="eval_01",
+                selector=selector,
+                selection_input=self.selection_input,
+                video_duration_seconds=10.0,
+                memo_start_seconds=9.5,
+                ground_truth=GroundTruthSegment(2.0, 6.0),
+                store=self.store,
+                runtime="gemini_api",
+                provider="gemini",
+            )
+
+        recovered = self.store.read_all()[0]
+        self.assertEqual(recovered.provider, "gemini")
+        self.assertEqual(recovered.provider_http_status, 503)
+        self.assertEqual(recovered.provider_error_code, "UNAVAILABLE")
+        self.assertEqual(recovered.provider_failure_stage, "generate_content")
 
     def _run(self, test_id, selector):
         return run_persisted_local_vlm_evaluation(

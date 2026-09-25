@@ -6,6 +6,7 @@ from app.services.evaluation_result_store import (
     JsonlLocalVLMEvaluationResultStore,
     LocalVLMEvaluationResult,
 )
+from app.services.gemini_vlm_proposal_selector import GeminiVLMProviderError
 from app.services.ollama_vlm_proposal_selector import (
     OllamaVLMProviderError,
     OllamaVLMProposalSelector,
@@ -26,6 +27,7 @@ def run_persisted_local_vlm_evaluation(
     ground_truth: GroundTruthSegment,
     store: JsonlLocalVLMEvaluationResultStore,
     runtime: str = "mac_native_ollama",
+    provider: str = "ollama",
 ) -> LocalVLMEvaluationResult:
     """Evaluate one test once and durably persist every terminal outcome."""
     if test_id in store.completed_test_ids(run_id):
@@ -50,6 +52,7 @@ def run_persisted_local_vlm_evaluation(
         test_id=test_id,
         model=selector.model,
         runtime=runtime,
+        provider=provider,
         proposal_count=len(selection_input.proposals),
         image_count=(
             len(selection_input.contact_sheets)
@@ -71,6 +74,8 @@ def run_persisted_local_vlm_evaluation(
             )
         ),
         oracle_best_proposal_id=oracle_proposal.proposal_id,
+        oracle_best_start=oracle_proposal.start_seconds,
+        oracle_best_end=oracle_proposal.end_seconds,
         oracle_best_iou=oracle_evaluation.iou,
         oracle_best_coverage=oracle_evaluation.coverage,
         oracle_best_total_boundary_error=oracle_evaluation.total_boundary_error,
@@ -181,6 +186,22 @@ def _proposal_candidate(proposal):
 
 
 def _provider_diagnostics(exc: Exception) -> dict[str, object]:
+    if isinstance(exc, GeminiVLMProviderError):
+        diagnostics = exc.diagnostics
+        return {
+            "provider_error_code": (
+                diagnostics.provider_error_code or type(exc).__name__
+            ),
+            "metadata": {
+                "provider_http_status": diagnostics.http_status,
+                "provider_error_message": diagnostics.safe_message,
+                "provider_failure_stage": diagnostics.failure_stage,
+                "provider_timeout": diagnostics.timeout,
+                "provider_model": diagnostics.model,
+                "provider_image_count": diagnostics.image_count,
+                "provider_num_ctx": None,
+            },
+        }
     if not isinstance(exc, OllamaVLMProviderError):
         return {"provider_error_code": type(exc).__name__, "metadata": {}}
     return {
