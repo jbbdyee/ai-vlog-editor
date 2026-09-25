@@ -1,4 +1,5 @@
 from dataclasses import fields
+from dataclasses import replace
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -18,6 +19,7 @@ from app.services.ollama_vlm_proposal_selector import (
     VLMProposalSelectionError,
     VLMProposalSelectionInput,
 )
+from app.services.proposal_contact_sheets import ProposalContactSheet
 from app.services.scene_boundary_proposals import (
     ProposalFrameSample,
     ProposalKind,
@@ -91,6 +93,9 @@ class VLMSmokeRunnerTests(unittest.TestCase):
         self.assertTrue(result.structured_output_success)
         self.assertTrue(result.validator_success)
         self.assertEqual(result.image_count, 9)
+        self.assertEqual(result.proposal_count, 3)
+        self.assertEqual(result.logical_source_frame_count, 9)
+        self.assertEqual(result.actual_vlm_image_count, 9)
         self.assertEqual(self.store.get("smoke-success"), result)
         fsync.assert_called_once()
 
@@ -105,6 +110,41 @@ class VLMSmokeRunnerTests(unittest.TestCase):
         self.assertIsNone(result.selected_proposal_id)
         self.assertTrue(result.structured_output_success)
         self.assertTrue(result.validator_success)
+
+    def test_contact_sheet_counts_logical_frames_and_actual_images(self) -> None:
+        sheets = tuple(
+            ProposalContactSheet(
+                proposal_id=item.proposal_id,
+                jpeg_bytes=b"sheet",
+                source_frame_ids=tuple(
+                    frame.frame_id for frame in item.frame_samples
+                ),
+                source_frame_timestamps=tuple(
+                    frame.timestamp_seconds for frame in item.frame_samples
+                ),
+            )
+            for item in self.selection_input.proposals
+        )
+        contact_input = replace(self.selection_input, contact_sheets=sheets)
+        selector = self._selector(
+            None, code=ProposalReasoningCode.INSUFFICIENT_VISUAL_EVIDENCE
+        )
+        selector.result = replace(selector.result, image_count=3)
+
+        result = run_persisted_vlm_smoke_test(
+            run_id="contact-sheet-counts",
+            selector=selector,
+            selection_input=contact_input,
+            video_duration_seconds=10.0,
+            memo_start_seconds=9.0,
+            store=self.store,
+            runtime="test_runtime",
+        )
+
+        self.assertEqual(result.proposal_count, 3)
+        self.assertEqual(result.logical_source_frame_count, 9)
+        self.assertEqual(result.actual_vlm_image_count, 3)
+        self.assertEqual(result.image_count, 3)
 
     def test_validator_failure_is_saved_before_error_is_raised(self) -> None:
         selector = self._selector("proposal-999")

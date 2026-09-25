@@ -1,4 +1,4 @@
-"""Run the fixed Local VLM Proposal Selector v0.1.1 evaluation one test at a time."""
+"""Run the fixed Local VLM Proposal Selector v0.2 evaluation one test at a time."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +17,7 @@ from app.services.ollama_vlm_proposal_selector import (
     OllamaVLMProposalSelector,
     VLMProposalSelectionInput,
 )
+from app.services.proposal_contact_sheets import build_proposal_contact_sheets
 from app.services.scene_boundary_proposals import (
     BoundarySignalInterval,
     attach_representative_frames,
@@ -27,7 +28,7 @@ from app.services.transcript_scene_retriever import build_transcript_blocks
 from app.services.visual_motion_refiner import refine_visual_boundary
 
 
-RUN_ID = "local-vlm-eval-v0.1.1-run2"
+RUN_ID = "local-vlm-eval-v0.2-run1"
 
 
 @dataclass(frozen=True)
@@ -149,6 +150,7 @@ def _prepare_case(case, model):
         selected_block_id=selected.block_id,
         selected_block_text=selected.transcript_text,
         proposals=framed,
+        contact_sheets=build_proposal_contact_sheets(framed),
     )
     return selection_input, media.duration_seconds, memo.start_seconds
 

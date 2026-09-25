@@ -12,6 +12,11 @@ from urllib import error, request
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from app.services.candidate_generator import SceneCandidate
+from app.services.proposal_contact_sheets import (
+    ProposalContactSheet,
+    ProposalContactSheetError,
+    validate_proposal_contact_sheets,
+)
 from app.services.scene_boundary_proposals import SceneBoundaryProposal
 
 
@@ -120,6 +125,7 @@ class VLMProposalSelectionInput:
     selected_block_id: str
     selected_block_text: str
     proposals: tuple[SceneBoundaryProposal, ...]
+    contact_sheets: tuple[ProposalContactSheet, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -311,18 +317,26 @@ def _build_request_payload(
 ) -> tuple[dict[str, object], int]:
     proposal_lines: list[str] = []
     images: list[str] = []
-    for proposal in selection_input.proposals:
+    contact_sheets = selection_input.contact_sheets
+    for proposal_index, proposal in enumerate(selection_input.proposals):
         frame_descriptions: list[str] = []
         for frame in proposal.frame_samples:
             frame_descriptions.append(
                 f"{frame.frame_id}@{frame.timestamp_seconds:.3f}s"
             )
-            images.append(base64.b64encode(frame.jpeg_bytes).decode("ascii"))
+            if contact_sheets is None:
+                images.append(base64.b64encode(frame.jpeg_bytes).decode("ascii"))
         proposal_lines.append(
             f"- {proposal.proposal_id}: {proposal.start_seconds:.3f}s~"
             f"{proposal.end_seconds:.3f}s; frames in image order: "
             + ", ".join(frame_descriptions)
         )
+        if contact_sheets is not None:
+            images.append(
+                base64.b64encode(contact_sheets[proposal_index].jpeg_bytes).decode(
+                    "ascii"
+                )
+            )
     schema = VLMProposalSelection.model_json_schema()
     prompt = (
         "Choose exactly one proposal that best contains the event referenced by the "
@@ -330,8 +344,14 @@ def _build_request_payload(
         "ordered frames. Do not prefer a proposal merely because it is shortest, "
         "longest, or most recent. If none is supportable, abstain with an allowed "
         "abstain code and null selected_proposal_id. Select only an ID listed below. "
-        "Do not create timestamps. Keep reasoning_summary under 240 characters.\n\n"
-        f"Edit memo: {selection_input.edit_memo_transcript}\n"
+        "Do not create timestamps. Keep reasoning_summary under 240 characters."
+        + (
+            " Each proposal image is one horizontal contact sheet ordered left to "
+            "right as early, middle, and late frames.\n\n"
+            if contact_sheets is not None
+            else "\n\n"
+        )
+        + f"Edit memo: {selection_input.edit_memo_transcript}\n"
         f"Selected transcript block ({selection_input.selected_block_id}): "
         f"{selection_input.selected_block_text}\n"
         "Proposals and image order:\n"
@@ -375,6 +395,11 @@ def _validate_selection_input(value: VLMProposalSelectionInput) -> None:
             raise VLMProposalSelectionError("Proposal source block does not match input.")
         if len(proposal.frame_samples) != 3:
             raise VLMProposalSelectionError("Each proposal requires exactly three frames.")
+    if value.contact_sheets is not None:
+        try:
+            validate_proposal_contact_sheets(value.proposals, value.contact_sheets)
+        except ProposalContactSheetError as exc:
+            raise VLMProposalSelectionError(str(exc)) from exc
 
 
 def _validate_proposal_manifest(

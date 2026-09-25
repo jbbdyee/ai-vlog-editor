@@ -45,7 +45,10 @@ def run_persisted_vlm_smoke_test(
             run_id=run_id,
             selector=selector,
             runtime=runtime,
-            image_count=_image_count(selection_input),
+            image_count=_actual_image_count(selection_input),
+            proposal_count=len(selection_input.proposals),
+            logical_source_frame_count=_logical_frame_count(selection_input),
+            actual_vlm_image_count=_actual_image_count(selection_input),
             latency_seconds=time.perf_counter() - started,
             provider_error=True,
             provider_error_code=diagnostics["provider_error_code"],
@@ -68,6 +71,9 @@ def run_persisted_vlm_smoke_test(
             selector=selector,
             runtime=runtime,
             image_count=call_result.image_count,
+            proposal_count=len(selection_input.proposals),
+            logical_source_frame_count=_logical_frame_count(selection_input),
+            actual_vlm_image_count=call_result.image_count,
             input_tokens=call_result.input_tokens,
             selected_proposal_id=selection.selected_proposal_id,
             reasoning_code=selection.reasoning_code.value,
@@ -86,6 +92,9 @@ def run_persisted_vlm_smoke_test(
         selector=selector,
         runtime=runtime,
         image_count=call_result.image_count,
+        proposal_count=len(selection_input.proposals),
+        logical_source_frame_count=_logical_frame_count(selection_input),
+        actual_vlm_image_count=call_result.image_count,
         input_tokens=call_result.input_tokens,
         selected_proposal_id=selection.selected_proposal_id,
         reasoning_code=selection.reasoning_code.value,
@@ -124,6 +133,9 @@ def _result(
     provider_model: str | None = None,
     provider_image_count: int | None = None,
     provider_num_ctx: int | None = None,
+    proposal_count: int | None = None,
+    logical_source_frame_count: int | None = None,
+    actual_vlm_image_count: int | None = None,
 ) -> VLMSmokeTestResult:
     return VLMSmokeTestResult.completed_now(
         run_id=run_id,
@@ -151,11 +163,20 @@ def _result(
         provider_model=provider_model,
         provider_image_count=provider_image_count,
         provider_num_ctx=provider_num_ctx,
+        proposal_count=proposal_count,
+        logical_source_frame_count=logical_source_frame_count,
+        actual_vlm_image_count=actual_vlm_image_count,
     )
 
 
-def _image_count(selection_input: VLMProposalSelectionInput) -> int:
+def _logical_frame_count(selection_input: VLMProposalSelectionInput) -> int:
     return sum(len(proposal.frame_samples) for proposal in selection_input.proposals)
+
+
+def _actual_image_count(selection_input: VLMProposalSelectionInput) -> int:
+    if selection_input.contact_sheets is not None:
+        return len(selection_input.contact_sheets)
+    return _logical_frame_count(selection_input)
 
 
 def _provider_diagnostics(exc: Exception) -> dict[str, object]:

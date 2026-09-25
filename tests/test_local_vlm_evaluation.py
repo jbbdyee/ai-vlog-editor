@@ -1,4 +1,5 @@
 from pathlib import Path
+from dataclasses import replace
 from tempfile import TemporaryDirectory
 import unittest
 
@@ -15,6 +16,7 @@ from app.services.ollama_vlm_proposal_selector import (
     VLMProposalSelection,
     VLMProposalSelectionInput,
 )
+from app.services.proposal_contact_sheets import ProposalContactSheet
 from app.services.scene_boundary_proposals import (
     ProposalFrameSample,
     ProposalKind,
@@ -96,6 +98,31 @@ class LocalVLMEvaluationTests(unittest.TestCase):
         self.assertIsNone(result.iou)
         self.assertEqual(result.oracle_best_proposal_id, "proposal-002")
         self.assertTrue(result.validator_success)
+
+    def test_contact_sheet_counts_logical_frames_and_actual_images(self):
+        sheets = tuple(
+            ProposalContactSheet(
+                proposal_id=item.proposal_id,
+                jpeg_bytes=b"sheet",
+                source_frame_ids=tuple(
+                    frame.frame_id for frame in item.frame_samples
+                ),
+                source_frame_timestamps=tuple(
+                    frame.timestamp_seconds for frame in item.frame_samples
+                ),
+            )
+            for item in self.selection_input.proposals
+        )
+        self.selection_input = replace(self.selection_input, contact_sheets=sheets)
+        selector = self._selector("proposal-002")
+        selector.result = replace(selector.result, image_count=3)
+
+        result = self._run("eval-contact", selector)
+
+        self.assertEqual(result.proposal_count, 3)
+        self.assertEqual(result.logical_source_frame_count, 9)
+        self.assertEqual(result.actual_vlm_image_count, 3)
+        self.assertEqual(result.image_count, 3)
 
     def test_provider_failure_is_persisted_and_duplicate_is_blocked(self):
         first = FakeSelector(error=OllamaVLMProviderError(

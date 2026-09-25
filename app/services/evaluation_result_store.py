@@ -85,6 +85,9 @@ class VLMSmokeTestResult:
     provider_model: str | None = None
     provider_image_count: int | None = None
     provider_num_ctx: int | None = None
+    proposal_count: int | None = None
+    logical_source_frame_count: int | None = None
+    actual_vlm_image_count: int | None = None
 
     @classmethod
     def completed_now(cls, **values: Any) -> "VLMSmokeTestResult":
@@ -131,6 +134,8 @@ class LocalVLMEvaluationResult:
     provider_model: str | None = None
     provider_image_count: int | None = None
     provider_num_ctx: int | None = None
+    logical_source_frame_count: int | None = None
+    actual_vlm_image_count: int | None = None
 
     @classmethod
     def completed_now(cls, **values: Any) -> "LocalVLMEvaluationResult":
@@ -378,6 +383,9 @@ def _validate_smoke_result(result: VLMSmokeTestResult) -> None:
         (result.total_tokens, "Total tokens"),
         (result.provider_image_count, "Provider image count"),
         (result.provider_num_ctx, "Provider context size"),
+        (result.proposal_count, "Proposal count"),
+        (result.logical_source_frame_count, "Logical source frame count"),
+        (result.actual_vlm_image_count, "Actual VLM image count"),
     ):
         if value is not None and (
             isinstance(value, bool) or not isinstance(value, int) or value < 0
@@ -430,6 +438,8 @@ def _validate_local_vlm_evaluation_result(
         (result.total_tokens, "Total tokens"),
         (result.provider_image_count, "Provider image count"),
         (result.provider_num_ctx, "Provider context size"),
+        (result.logical_source_frame_count, "Logical source frame count"),
+        (result.actual_vlm_image_count, "Actual VLM image count"),
     ):
         if value is not None and (
             isinstance(value, bool) or not isinstance(value, int) or value < 0

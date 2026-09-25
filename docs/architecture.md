@@ -94,7 +94,9 @@ MVP에서는 결정적인 정규화와 제한적 문자열 유사도를 사용�
 
 Local VLM eval_01~05는 같은 방식으로 `evaluation/tmp/local-vlm-proposal-run.jsonl`에 Test별 terminal result와 사후 Proposal Oracle을 저장한다. v0.1 Run에서는 네 Test가 마지막 selected block의 local search 검증에서 proposal 생성에 실패했고, proposal이 생성된 Test 02도 Provider 단계에서 실패해 실제 VLM 선택 성능은 측정하지 못했다. 상세 결과는 `evaluation/results/local-vlm-proposal-v0.1.md`에 기록한다.
 
-v0.1.1 진단에서는 마지막 selected block에 `next_block_start_seconds`가 없을 때 local search 종료값이 block end로 축소되던 boundary bug를 수정해 memo start를 종료 경계로 사용한다. block과 search 경계가 같은 유효 구간도 허용한다. Ollama 실패는 원문 응답이나 이미지·prompt를 저장하지 않고 HTTP status, 안전한 provider code/message, failure stage, model, image count, `num_ctx`, timeout 여부만 JSONL terminal result에 보존한다. 이 변경은 fixture/mock으로만 검증했으며 eval_01~05 재평가는 수행하지 않았다.
+v0.1.1에서는 마지막 selected block에 `next_block_start_seconds`가 없을 때 local search 종료값이 block end로 축소되던 boundary bug를 수정해 memo start를 종료 경계로 사용한다. block과 search 경계가 같은 유효 구간도 허용한다. Ollama 실패는 원문 응답이나 이미지·prompt를 저장하지 않고 HTTP status, 안전한 provider code/message, failure stage, model, image count, `num_ctx`, timeout 여부만 JSONL terminal result에 보존한다. eval_01~05 재평가에서 proposal preparation은 5/5 성공했지만 12장 입력 3건은 timeout, 18장 입력 2건은 context 초과로 Structured Output 전에 실패했다.
+
+v0.2 image representation은 proposal별 기존 10%·50%·90% JPEG와 frame ID/timestamp manifest를 바꾸지 않고, FFmpeg `hstack`으로 왼쪽부터 early·middle·late 순서의 수평 contact sheet 한 장을 만든다. `ProposalContactSheet` validator가 proposal ID, 정확히 세 frame의 순서와 timestamp, non-empty JPEG를 검사한다. VLM은 proposal당 세 이미지 대신 contact sheet 한 장을 받지만 선택 Schema와 저장된 proposal timestamp 기반 `SceneCandidate` 변환은 동일하다. Synthetic Smoke Test에서는 3 proposals의 논리 frame 9개를 실제 이미지 3장으로 전달해 input 3,660 tokens, latency 39.3534초로 Structured Output과 validator에 성공했다. eval_01~05에서는 context 초과 없이 proposal preparation 5/5에 성공했지만 실제 이미지 4~6장 요청이 모두 120초 timeout으로 종료됐다.
 
 ### Clip Renderer
 

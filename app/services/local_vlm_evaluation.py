@@ -51,8 +51,24 @@ def run_persisted_local_vlm_evaluation(
         model=selector.model,
         runtime=runtime,
         proposal_count=len(selection_input.proposals),
-        image_count=sum(
+        image_count=(
+            len(selection_input.contact_sheets)
+            if selection_input.contact_sheets is not None
+            else sum(
+                len(proposal.frame_samples)
+                for proposal in selection_input.proposals
+            )
+        ),
+        logical_source_frame_count=sum(
             len(proposal.frame_samples) for proposal in selection_input.proposals
+        ),
+        actual_vlm_image_count=(
+            len(selection_input.contact_sheets)
+            if selection_input.contact_sheets is not None
+            else sum(
+                len(proposal.frame_samples)
+                for proposal in selection_input.proposals
+            )
         ),
         oracle_best_proposal_id=oracle_proposal.proposal_id,
         oracle_best_iou=oracle_evaluation.iou,

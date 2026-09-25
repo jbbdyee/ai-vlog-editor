@@ -18,6 +18,7 @@ from app.services.ollama_vlm_proposal_selector import (
     UrllibHTTPTransport,
     validate_vlm_proposal_selection,
 )
+from app.services.proposal_contact_sheets import ProposalContactSheet
 from app.services.scene_boundary_proposals import (
     ProposalFrameSample,
     ProposalKind,
@@ -111,6 +112,54 @@ class OllamaVLMProposalSelectorTests(unittest.TestCase):
         self.assertEqual(len(transport.payload["messages"]), 1)
         self.assertEqual(len(transport.payload["messages"][0]["images"]), 9)
         self.assertNotIn("proposal_kind", json.dumps(transport.payload))
+
+    def test_contact_sheet_payload_keeps_manifest_but_sends_one_image_per_proposal(self) -> None:
+        sheets = tuple(
+            ProposalContactSheet(
+                proposal_id=proposal.proposal_id,
+                jpeg_bytes=f"sheet-{index}".encode(),
+                source_frame_ids=tuple(
+                    frame.frame_id for frame in proposal.frame_samples
+                ),
+                source_frame_timestamps=tuple(
+                    frame.timestamp_seconds for frame in proposal.frame_samples
+                ),
+            )
+            for index, proposal in enumerate(self.selection_input.proposals, start=1)
+        )
+        contact_input = replace(self.selection_input, contact_sheets=sheets)
+        content = VLMProposalSelection(
+            selected_proposal_id=None,
+            reasoning_code=ProposalReasoningCode.INSUFFICIENT_VISUAL_EVIDENCE,
+            reasoning_summary="판단 근거가 부족합니다.",
+        ).model_dump_json()
+        transport = FakeTransport({"message": {"content": content}})
+
+        result = OllamaVLMProposalSelector(transport=transport).select(contact_input)
+
+        self.assertEqual(result.image_count, 3)
+        self.assertEqual(len(transport.payload["messages"][0]["images"]), 3)
+        prompt = transport.payload["messages"][0]["content"]
+        self.assertIn("early, middle, and late", prompt)
+        self.assertIn("proposal-001-frame-01@3.200s", prompt)
+        self.assertNotIn("proposal_kind", json.dumps(transport.payload))
+
+    def test_contact_sheet_manifest_mismatch_is_rejected(self) -> None:
+        proposal = self.selection_input.proposals[0]
+        bad_sheet = ProposalContactSheet(
+            proposal_id="proposal-wrong",
+            jpeg_bytes=b"sheet",
+            source_frame_ids=tuple(frame.frame_id for frame in proposal.frame_samples),
+            source_frame_timestamps=tuple(
+                frame.timestamp_seconds for frame in proposal.frame_samples
+            ),
+        )
+        invalid = replace(
+            self.selection_input,
+            contact_sheets=(bad_sheet, bad_sheet, bad_sheet),
+        )
+        with self.assertRaises(VLMProposalSelectionError):
+            OllamaVLMProposalSelector(transport=FakeTransport({})).select(invalid)
 
     def test_rejects_unknown_proposal_id(self) -> None:
         selection = VLMProposalSelection(
