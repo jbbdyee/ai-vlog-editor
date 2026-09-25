@@ -24,6 +24,10 @@ MVP v1은 전체 편집 서비스를 만드는 단계가 아니라 이 질문을
 - Gemini `gemini-3.5-flash`와 `google-genai` Structured Outputs 기반 Semantic Block Selector Spike Adapter 구현 — API key 미설정으로 실제 eval_01~05 평가는 미실행
 - 선택된 TranscriptBlock 주변의 로컬 WAV RMS activity로 구간을 보정하는 deterministic Audio Boundary Refiner v0.1 구현 및 eval_01~05 평가 완료 — 일부 짧은 reaction 구간은 소폭 개선했으나 긴 발화를 여러 episode로 분절해 전체 성공 기준은 미달
 - 선택된 TranscriptBlock 주변의 로컬 grayscale frame 차이로 구간을 보정하는 deterministic Visual Motion Refiner v0.1 구현 및 eval_01~05 평가 완료 — refinement yield 2/5이며 생성된 두 Candidate 모두 Raw보다 악화되어 전체 성공 기준 미달
+- deterministic boundary proposal 3~6개와 대표 프레임을 로컬 Ollama `qwen3-vl:4b`에 전달해 proposal ID만 선택받는 Local VLM Proposal Selector v0.1 구현 — mock 테스트 완료, 16,384 context로 context 오류는 해소했으나 synthetic Smoke Test는 9장 이미지 처리 중 120초 timeout으로 실패했으며 eval_01~05는 미실행
+- Local VLM Smoke Test 결과를 API 응답 직후 JSONL에 flush/fsync하고 같은 run ID의 중복 호출을 사전에 차단하는 영속 저장 계층 구현 — 실제 Ollama 재호출 없이 mock 검증 완료
+- Local VLM Proposal Selector v0.1 eval_01~05 terminal result 기록 완료 — 4건 proposal 준비 실패, 1건 Provider 실패로 실제 선택 성능은 측정하지 못했으며 실패 원인과 Proposal Oracle을 별도 평가 문서에 기록
+- Local VLM Proposal Pipeline v0.1.1 진단 완료 — 마지막 selected block의 search end를 memo start로 처리하는 boundary bug와 안전한 Provider 오류 메타데이터 보존을 fixture/mock으로 검증했으며 eval_01~05는 재실행하지 않음
 - Scene Candidate와 Ground Truth의 IoU·Coverage·구간 경계 오차 Evaluator 구현
 - FFmpeg H.264/AAC 재인코딩 기반 Scene Candidate MP4 Clip Renderer 구현 및 실제 Test 01의 5초 Candidate 검증
 - Evaluation Dataset v0.1 시나리오 문서

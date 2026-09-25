@@ -84,6 +84,18 @@ MVP에서는 결정적인 정규화와 제한적 문자열 유사도를 사용�
 
 `app/services/visual_motion_refiner.py`는 선택된 `TranscriptBlock` 주변의 로컬 MOV/MP4를 FFmpeg로 5 FPS, 폭 160, 종횡비 유지 grayscale PGM frame stream으로 변환하고 인접 frame의 정규화된 평균 절대 pixel 차이를 계산한다. 3-frame median smoothing 후 `median + 3 × median_absolute_deviation` threshold를 사용하며 0.4초 미만 spike를 제거하고 0.6초 이하 quiet gap을 병합한다. 선택 block과 연결되는 episode가 정확히 하나일 때만 `SceneCandidate`를 만들고, 없거나 여러 개면 `NO_SIGNAL` 또는 `AMBIGUOUS_SIGNAL`로 보존한다. Ground Truth, 자동 fallback, 외부 API는 사용하지 않는다. v0.1 평가는 `evaluation/results/visual-motion-v0.1.md`에 기록한다.
 
+### Local VLM Proposal Selector Spike
+
+`app/services/scene_boundary_proposals.py`는 선택된 block, transcript 경계, 고정 2초 padding과 기존 audio/visual signal을 이용해 최대 6개의 설명 가능한 구간을 결정적으로 만든다. 같은 구간은 제거하고 각 proposal의 10%·50%·90% 지점에서 긴 변 512px JPEG를 FFmpeg로 로컬 추출한다.
+
+`app/services/ollama_vlm_proposal_selector.py`는 호스트의 `localhost:11434` Ollama `qwen3-vl:4b`에 편집 메모, 선택 block 텍스트, 중립 proposal ID·시간과 대표 프레임만 전달한다. JSON Schema structured output은 proposal ID 또는 명시적인 abstain만 허용한다. 일반 Python validator가 ID, 기존 timestamp, 영상·memo 범위, source block과 frame manifest를 다시 검증하고 저장된 proposal 구간만 `SceneCandidate`로 변환한다. Ground Truth, 평가 지표, proposal 종류, 원본 MOV/WAV는 모델에 전달하지 않는다. synthetic Smoke Test에는 16,384 context를 사용해 기존 context 오류를 해소했지만 9장 이미지 처리가 120초 timeout을 초과해 structured output 전 단계에서 실패했으며 eval_01~05는 아직 실행하지 않았다.
+
+`app/services/vlm_smoke_runner.py`는 Smoke Test의 `run_id`가 이미 저장됐는지 Provider 호출 전에 확인하고, 성공·abstain·validator 실패·Provider 실패를 즉시 `evaluation/tmp/local-vlm-smoke.jsonl`에 기록한다. 저장은 기존 `evaluation_result_store.py`의 JSONL 복구, 중복 보호, `flush`와 `fsync` 경로를 재사용하며 이미지 bytes/base64와 전체 prompt는 저장하지 않는다.
+
+Local VLM eval_01~05는 같은 방식으로 `evaluation/tmp/local-vlm-proposal-run.jsonl`에 Test별 terminal result와 사후 Proposal Oracle을 저장한다. v0.1 Run에서는 네 Test가 마지막 selected block의 local search 검증에서 proposal 생성에 실패했고, proposal이 생성된 Test 02도 Provider 단계에서 실패해 실제 VLM 선택 성능은 측정하지 못했다. 상세 결과는 `evaluation/results/local-vlm-proposal-v0.1.md`에 기록한다.
+
+v0.1.1 진단에서는 마지막 selected block에 `next_block_start_seconds`가 없을 때 local search 종료값이 block end로 축소되던 boundary bug를 수정해 memo start를 종료 경계로 사용한다. block과 search 경계가 같은 유효 구간도 허용한다. Ollama 실패는 원문 응답이나 이미지·prompt를 저장하지 않고 HTTP status, 안전한 provider code/message, failure stage, model, image count, `num_ctx`, timeout 여부만 JSONL terminal result에 보존한다. 이 변경은 fixture/mock으로만 검증했으며 eval_01~05 재평가는 수행하지 않았다.
+
 ### Clip Renderer
 
 `app/services/clip_renderer.py`는 검증된 `SceneCandidate` 하나의 시작·종료 시각을 FFmpeg 인자 목록으로 변환한다. 키프레임에 제한되는 stream copy 대신 시간 경계 정확성과 일반적인 MP4 재생 호환성을 위해 H.264 `yuv420p` video와 AAC audio로 재인코딩한다. UUID 기반 출력 경로를 선점하고 실패·빈 출력·ffprobe 검증 실패 시 파일을 제거한다. 모델이 직접 명령 문자열을 생성하지 않는다.
