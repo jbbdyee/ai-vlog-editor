@@ -1,5 +1,7 @@
 # Architecture
 
+> Status: Current Baseline/MVP implementation architecture. Cutory의 최종 Multi-Agent 제품 구조는 [Full Product Architecture](architecture/full-architecture.md)를 따른다. 이 문서의 Baseline/Spike 기록은 현재 코드와 실험 이력으로 보존한다.
+
 ## 1. 설계 원칙
 
 - 결정적인 실행과 확률적인 모델 판단을 분리한다.

@@ -54,10 +54,14 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 
 ## Documentation
 
+- [Cutory Full Product Design Source of Truth](docs/product/full-development-plan.md)
+- [Full Product Architecture](docs/architecture/full-architecture.md)
+- [Full Product User Journey](docs/product/user-journey.md)
 - [Product Specification](docs/product-spec.md)
 - [MVP v1 Specification](docs/mvp-v1-spec.md)
 - [Architecture](docs/architecture.md)
 - [eval_01 End-to-End Integration Verification](docs/integration-eval01-v0.1.md)
+- [Browser End-to-End Integration Verification](docs/browser-e2e-v0.1.md)
 - [Project Plan](docs/project-plan.md)
 - [UI / UX Design](docs/ui-design.md)
 - [Evaluation Dataset v0.1](evaluation/README.md)
@@ -66,6 +70,8 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 ## Current Repository Status
 
 2026-09-24 현재 저장소에서 확인된 상태입니다.
+
+> 아래는 현재 Baseline/MVP 구현 상태다. Multi-Agent, MCP, RAG, Memory, 100+ 영상 처리를 포함한 [Full Product Design](docs/product/full-development-plan.md)은 최종 제품 방향이며 현재 구현 완료를 의미하지 않는다.
 
 - [x] 프로젝트 문제와 제품 원칙 정의
 - [x] MVP v1 범위 및 평가 전략 정의
@@ -99,6 +105,8 @@ End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자
 FastAPI는 lifespan에서 faster-whisper 모델을 한 번 로드해 재사용하고, `/videos/process`의 blocking Pipeline을 단일 동시 실행 semaphore와 threadpool에서 처리한다. 처리 응답은 로컬 절대 경로 대신 안전한 clip ID·파일명·상대 `download_url`을 제공하며, 다운로드 endpoint는 `outputs/api/<run-id>/clips/` 아래 MP4만 반환한다.
 
 Streamlit MVP는 backend service를 직접 import하지 않는 HTTP client다. 사용자가 5·10·15·30초 Window를 직접 선택하며 AI가 최적 길이를 자동 선택하지 않는다. 실시간 progress/SSE는 아직 구현하지 않았다.
+
+실제 브라우저에서 Streamlit → FastAPI → VideoProcessingPipeline → MP4 재생 흐름을 검증했다. 실행 결과와 검증 범위는 [Browser End-to-End Integration Verification](docs/browser-e2e-v0.1.md)에 기록한다.
 
 원본 테스트 영상은 개인정보와 용량 문제로 Git에 포함하지 않습니다.
 

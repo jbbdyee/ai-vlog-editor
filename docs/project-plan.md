@@ -1,5 +1,7 @@
 # AI Vlog Editor - Project Plan
 
+> Historical plan: Baseline/MVP 착수 시점의 개발·평가 계획을 보존한다. 최종 Cutory 제품 방향은 [Full Product Development Plan](product/full-development-plan.md)을 따르며, Version Roadmap은 별도 작업으로 아직 작성하지 않았다.
+
 > 제품의 최신 장기 범위는 [`product-spec.md`](product-spec.md), 현재 구현 범위는 [`mvp-v1-spec.md`](mvp-v1-spec.md)를 기준으로 한다.
 
 ## 1. 프로젝트 한 줄 정의

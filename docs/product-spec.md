@@ -5,6 +5,8 @@
 > Status: MVP v1 초기 개발
 >
 > 이 문서는 제품의 장기 방향과 이미 합의된 경계를 설명한다. 현재 구현 범위는 `mvp-v1-spec.md`를 따른다.
+>
+> Historical note: 이 문서는 Full Product Design 확정 전의 제품 명세와 단계별 가설을 보존한다. 최종 Cutory 제품 방향의 Source of Truth는 [Full Product Development Plan](product/full-development-plan.md)이다.
 
 ## 1. 제품 정의
 

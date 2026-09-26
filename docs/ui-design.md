@@ -1,5 +1,7 @@
 # UI / UX Design
 
+> Historical prototype UX: 기존 wireframe와 단계별 UI 판단을 보존한다. 100+ 영상, Episode, Preview/Review, Memory, Short-form을 포함한 최종 경험은 [Full Product Frontend / UX](frontend/frontend-ux.md)를 따른다. 현재 Streamlit은 Prototype/E2E 검증용이며 최종 Frontend 기술스택으로 확정되지 않았다.
+
 ## Figma
 - Wireframe v0.1: [Figma Wireframe](https://www.figma.com/design/EQTMOypjxYNE5yUR40PH1e/AI-Vlog-Editor---Wireframe-v0.1?node-id=0-1&t=4u5Ijhyl1gkvN5nf-1)
 
