@@ -85,7 +85,7 @@ def _render_result(
     segments = transcript.get("segments", [])
     if segments:
         with st.expander("Segment 보기"):
-            st.dataframe(segments, use_container_width=True)
+            st.dataframe(segments, width="stretch")
 
     if status == "NO_EDIT_MEMO":
         st.info("영상에서 편집 메모를 찾지 못했습니다.")
@@ -106,7 +106,7 @@ def _render_result(
     timings = result.get("timings", [])
     if timings:
         with st.expander("처리 시간 보기"):
-            st.dataframe(timings, use_container_width=True)
+            st.dataframe(timings, width="stretch")
 
 
 def _render_memo(client: VideoEditorApiClient, memo_result: dict, index: int) -> None:
@@ -126,13 +126,13 @@ def _render_memo(client: VideoEditorApiClient, memo_result: dict, index: int) ->
         st.dataframe(
             [
                 {
-                    "Window": f"{candidate.get('window_seconds')}초",
-                    "Start": candidate.get("start_seconds"),
-                    "End": candidate.get("end_seconds"),
+                    "Window": _seconds(candidate.get("window_seconds")),
+                    "Start": _seconds(candidate.get("start_seconds")),
+                    "End": _seconds(candidate.get("end_seconds")),
                 }
                 for candidate in candidates
             ],
-            use_container_width=True,
+            width="stretch",
         )
 
     selection = memo_result.get("selection", {})
