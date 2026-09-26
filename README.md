@@ -57,6 +57,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [Product Specification](docs/product-spec.md)
 - [MVP v1 Specification](docs/mvp-v1-spec.md)
 - [Architecture](docs/architecture.md)
+- [eval_01 End-to-End Integration Verification](docs/integration-eval01-v0.1.md)
 - [Project Plan](docs/project-plan.md)
 - [UI / UX Design](docs/ui-design.md)
 - [Evaluation Dataset v0.1](evaluation/README.md)
@@ -87,6 +88,10 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] MVP End-to-End application service — probe, 오디오 추출, STT, 메모 탐지, 명시적으로 주입된 Scene Selector와 클립 렌더링을 순차 실행
 
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
+
+### MVP Backend Integration
+
+실제 `eval_01.MOV`를 `VideoProcessingPipeline.process()` 한 번으로 처리해 STT, EditMemo 탐지, 명시적 5초 Candidate 선택과 H.264/AAC MP4 생성을 완료했다. 상세 결과는 [End-to-End Integration Verification](docs/integration-eval01-v0.1.md)에 기록한다.
 
 원본 테스트 영상은 개인정보와 용량 문제로 Git에 포함하지 않습니다.
 
