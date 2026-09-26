@@ -281,12 +281,14 @@ def validate_vlm_proposal_selection(
     duration = _positive_number(video_duration_seconds, "Video duration")
     memo_start = _bounded_time(memo_start_seconds, duration, "Memo start")
     proposals_by_id: dict[str, SceneBoundaryProposal] = {}
+    sampling_fractions = _sampling_fractions(selection_input)
     for proposal in selection_input.proposals:
         _validate_proposal_manifest(
             proposal,
             selected_block_id=selection_input.selected_block_id,
             video_duration=duration,
             memo_start=memo_start,
+            sampling_fractions=sampling_fractions,
         )
         if proposal.proposal_id in proposals_by_id:
             raise VLMProposalSelectionError(
@@ -367,12 +369,7 @@ def build_vlm_selection_prompt(
         "longest, or most recent. If none is supportable, abstain with an allowed "
         "abstain code and null selected_proposal_id. Select only an ID listed below. "
         "Do not create timestamps. Keep reasoning_summary under 240 characters."
-        + (
-            " Each proposal image is one horizontal contact sheet ordered left to "
-            "right as early, middle, and late frames.\n\n"
-            if selection_input.contact_sheets is not None
-            else "\n\n"
-        )
+        + _contact_sheet_prompt_description(selection_input)
         + f"Edit memo: {selection_input.edit_memo_transcript}\n"
         f"Selected transcript block ({selection_input.selected_block_id}): "
         f"{selection_input.selected_block_text}\n"
@@ -380,6 +377,22 @@ def build_vlm_selection_prompt(
         + "\n".join(proposal_lines)
         + "\n\nReturn JSON matching this schema:\n"
         + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
+def _contact_sheet_prompt_description(
+    selection_input: VLMProposalSelectionInput,
+) -> str:
+    if selection_input.contact_sheets is None:
+        return "\n\n"
+    if selection_input.contact_sheets[0].layout == "horizontal_5":
+        return (
+            " Each proposal image is one horizontal contact sheet ordered left to "
+            "right as early, early-middle, middle, late-middle, and late frames.\n\n"
+        )
+    return (
+        " Each proposal image is one horizontal contact sheet ordered left to "
+        "right as early, middle, and late frames.\n\n"
     )
 
 
@@ -397,18 +410,21 @@ def _validate_selection_input(value: VLMProposalSelectionInput) -> None:
             raise VLMProposalSelectionError(f"{label} must be non-empty text.")
     if not isinstance(value.proposals, tuple) or not 3 <= len(value.proposals) <= 6:
         raise VLMProposalSelectionError("Selection input requires 3 to 6 proposals.")
-    for proposal in value.proposals:
-        if not isinstance(proposal, SceneBoundaryProposal):
-            raise VLMProposalSelectionError("Selection input contains an invalid proposal.")
-        if proposal.source_block_id != value.selected_block_id:
-            raise VLMProposalSelectionError("Proposal source block does not match input.")
-        if len(proposal.frame_samples) != 3:
-            raise VLMProposalSelectionError("Each proposal requires exactly three frames.")
     if value.contact_sheets is not None:
         try:
             validate_proposal_contact_sheets(value.proposals, value.contact_sheets)
         except ProposalContactSheetError as exc:
             raise VLMProposalSelectionError(str(exc)) from exc
+    sampling_fractions = _sampling_fractions(value)
+    for proposal in value.proposals:
+        if not isinstance(proposal, SceneBoundaryProposal):
+            raise VLMProposalSelectionError("Selection input contains an invalid proposal.")
+        if proposal.source_block_id != value.selected_block_id:
+            raise VLMProposalSelectionError("Proposal source block does not match input.")
+        if len(proposal.frame_samples) != len(sampling_fractions):
+            raise VLMProposalSelectionError(
+                "Each proposal must match the configured frame sampling count."
+            )
 
 
 def _validate_proposal_manifest(
@@ -417,6 +433,7 @@ def _validate_proposal_manifest(
     selected_block_id: str,
     video_duration: float,
     memo_start: float,
+    sampling_fractions: tuple[float, ...],
 ) -> None:
     if proposal.source_block_id != selected_block_id:
         raise VLMProposalSelectionError("Proposal source block mismatch.")
@@ -424,12 +441,14 @@ def _validate_proposal_manifest(
     end = _non_negative_number(proposal.end_seconds, "Proposal end")
     if start >= end or end > video_duration or end > memo_start:
         raise VLMProposalSelectionError("Proposal timestamp is outside its valid range.")
-    if len(proposal.frame_samples) != 3:
-        raise VLMProposalSelectionError("Proposal frame manifest must contain three frames.")
+    if len(proposal.frame_samples) != len(sampling_fractions):
+        raise VLMProposalSelectionError(
+            "Proposal frame manifest does not match configured sampling."
+        )
     seen: set[str] = set()
     previous_time = -1.0
     duration = end - start
-    expected_times = tuple(start + duration * part for part in (0.10, 0.50, 0.90))
+    expected_times = tuple(start + duration * part for part in sampling_fractions)
     for index, (frame, expected_time) in enumerate(
         zip(proposal.frame_samples, expected_times), start=1
     ):
@@ -448,6 +467,14 @@ def _validate_proposal_manifest(
             raise VLMProposalSelectionError("Frame manifest contains an empty image.")
         seen.add(frame.frame_id)
         previous_time = timestamp
+
+
+def _sampling_fractions(
+    selection_input: VLMProposalSelectionInput,
+) -> tuple[float, ...]:
+    if selection_input.contact_sheets is None:
+        return (0.10, 0.50, 0.90)
+    return selection_input.contact_sheets[0].sampling_fractions
 
 
 def _safe_provider_error(detail: str, http_status: int) -> tuple[str, str]:

@@ -161,6 +161,60 @@ class OllamaVLMProposalSelectorTests(unittest.TestCase):
         with self.assertRaises(VLMProposalSelectionError):
             OllamaVLMProposalSelector(transport=FakeTransport({})).select(invalid)
 
+    def test_five_frame_contact_sheet_only_changes_layout_description(self) -> None:
+        proposals = tuple(
+            replace(
+                proposal,
+                frame_samples=tuple(
+                    ProposalFrameSample(
+                        frame_id=f"{proposal.proposal_id}-frame-{index:02d}",
+                        timestamp_seconds=proposal.start_seconds
+                        + (proposal.end_seconds - proposal.start_seconds) * fraction,
+                        jpeg_bytes=b"jpeg",
+                    )
+                    for index, fraction in enumerate(
+                        (0.1, 0.3, 0.5, 0.7, 0.9), start=1
+                    )
+                ),
+            )
+            for proposal in self.selection_input.proposals
+        )
+        sheets = tuple(
+            ProposalContactSheet(
+                proposal_id=proposal.proposal_id,
+                jpeg_bytes=b"sheet",
+                source_frame_ids=tuple(
+                    frame.frame_id for frame in proposal.frame_samples
+                ),
+                source_frame_timestamps=tuple(
+                    frame.timestamp_seconds for frame in proposal.frame_samples
+                ),
+                sampling_fractions=(0.1, 0.3, 0.5, 0.7, 0.9),
+                layout="horizontal_5",
+                config_version="contact-sheet-v0.2-5frame",
+            )
+            for proposal in proposals
+        )
+        selection_input = replace(
+            self.selection_input, proposals=proposals, contact_sheets=sheets
+        )
+        content = VLMProposalSelection(
+            selected_proposal_id=None,
+            reasoning_code=ProposalReasoningCode.INSUFFICIENT_VISUAL_EVIDENCE,
+            reasoning_summary="판단 근거가 부족합니다.",
+        ).model_dump_json()
+        transport = FakeTransport({"message": {"content": content}})
+
+        result = OllamaVLMProposalSelector(transport=transport).select(
+            selection_input
+        )
+
+        self.assertEqual(result.image_count, 3)
+        prompt = transport.payload["messages"][0]["content"]
+        self.assertIn(
+            "early, early-middle, middle, late-middle, and late", prompt
+        )
+
     def test_rejects_unknown_proposal_id(self) -> None:
         selection = VLMProposalSelection(
             selected_proposal_id="proposal-999",

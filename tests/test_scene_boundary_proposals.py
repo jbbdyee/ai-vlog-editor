@@ -7,6 +7,7 @@ from app.services.scene_boundary_proposals import (
     ProposalConfig,
     ProposalGenerationError,
     ProposalKind,
+    FIVE_FRAME_SAMPLING_FRACTIONS,
     attach_representative_frames,
     generate_scene_boundary_proposals,
 )
@@ -107,8 +108,44 @@ class SceneBoundaryProposalTests(unittest.TestCase):
                 ],
             )
             self.assertTrue(
-                all(frame.frame_id.startswith(proposal.proposal_id) for frame in proposal.frame_samples)
+                all(
+                    frame.frame_id.startswith(proposal.proposal_id)
+                    for frame in proposal.frame_samples
+                )
             )
+
+    @patch("app.services.scene_boundary_proposals.subprocess.run")
+    def test_extracts_five_frames_with_fixed_sampling_formula(self, run_mock) -> None:
+        run_mock.return_value = subprocess.CompletedProcess([], 0, b"jpeg", b"")
+        proposal = self.generate()[0]
+        config = ProposalConfig(
+            frames_per_proposal=5,
+            frame_sampling_fractions=FIVE_FRAME_SAMPLING_FRACTIONS,
+        )
+
+        with patch("pathlib.Path.is_file", return_value=True):
+            framed = attach_representative_frames(
+                "source.mov", (proposal,), config=config
+            )[0]
+
+        self.assertEqual(len(framed.frame_samples), 5)
+        self.assertEqual(
+            tuple(round(frame.timestamp_seconds, 6) for frame in framed.frame_samples),
+            tuple(
+                round(
+                    proposal.start_seconds
+                    + (proposal.end_seconds - proposal.start_seconds) * fraction,
+                    6,
+                )
+                for fraction in FIVE_FRAME_SAMPLING_FRACTIONS
+            ),
+        )
+        self.assertTrue(
+            all(
+                frame.frame_id.startswith(proposal.proposal_id)
+                for frame in framed.frame_samples
+            )
+        )
 
     def test_rejects_invalid_config_numbers(self) -> None:
         with self.assertRaises(ProposalGenerationError):

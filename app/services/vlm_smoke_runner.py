@@ -33,6 +33,7 @@ def run_persisted_vlm_smoke_test(
     runtime: str = DEFAULT_SMOKE_RUNTIME,
     provider: str = "ollama",
     num_ctx: int | None = DEFAULT_OLLAMA_CONTEXT_SIZE,
+    config_version: str | None = None,
 ) -> VLMSmokeTestResult:
     """Run at most once per run ID and durably persist every terminal outcome."""
     if store.has_run(run_id):
@@ -51,6 +52,7 @@ def run_persisted_vlm_smoke_test(
             runtime=runtime,
             provider=provider,
             num_ctx=num_ctx,
+            config_version=config_version,
             image_count=_actual_image_count(selection_input),
             proposal_count=len(selection_input.proposals),
             logical_source_frame_count=_logical_frame_count(selection_input),
@@ -78,6 +80,7 @@ def run_persisted_vlm_smoke_test(
             runtime=runtime,
             provider=provider,
             num_ctx=num_ctx,
+            config_version=config_version,
             image_count=call_result.image_count,
             proposal_count=len(selection_input.proposals),
             logical_source_frame_count=_logical_frame_count(selection_input),
@@ -101,6 +104,7 @@ def run_persisted_vlm_smoke_test(
         runtime=runtime,
         provider=provider,
         num_ctx=num_ctx,
+        config_version=config_version,
         image_count=call_result.image_count,
         proposal_count=len(selection_input.proposals),
         logical_source_frame_count=_logical_frame_count(selection_input),
@@ -148,6 +152,7 @@ def _result(
     actual_vlm_image_count: int | None = None,
     provider: str = "ollama",
     num_ctx: int | None = DEFAULT_OLLAMA_CONTEXT_SIZE,
+    config_version: str | None = None,
 ) -> VLMSmokeTestResult:
     return VLMSmokeTestResult.completed_now(
         run_id=run_id,
@@ -179,6 +184,7 @@ def _result(
         logical_source_frame_count=logical_source_frame_count,
         actual_vlm_image_count=actual_vlm_image_count,
         provider=provider,
+        config_version=config_version,
     )
 
 

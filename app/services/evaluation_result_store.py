@@ -89,6 +89,7 @@ class VLMSmokeTestResult:
     logical_source_frame_count: int | None = None
     actual_vlm_image_count: int | None = None
     provider: str | None = None
+    config_version: str | None = None
 
     @classmethod
     def completed_now(cls, **values: Any) -> "VLMSmokeTestResult":
@@ -404,6 +405,8 @@ def _validate_smoke_result(result: VLMSmokeTestResult) -> None:
         )
     if result.provider is not None:
         _validate_text(result.provider, "Provider")
+    if result.config_version is not None:
+        _validate_text(result.config_version, "Config version")
     for value, label in (
         (result.temperature, "Temperature"),
         (result.latency_seconds, "Latency"),

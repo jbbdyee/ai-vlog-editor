@@ -150,6 +150,23 @@ class VLMSmokeRunnerTests(unittest.TestCase):
         self.assertEqual(result.actual_vlm_image_count, 3)
         self.assertEqual(result.image_count, 3)
 
+    def test_smoke_config_version_is_persisted(self) -> None:
+        result = run_persisted_vlm_smoke_test(
+            run_id="config-version",
+            selector=self._selector("proposal-001"),
+            selection_input=self.selection_input,
+            video_duration_seconds=10.0,
+            memo_start_seconds=9.0,
+            store=self.store,
+            config_version="contact-sheet-v0.2-5frame",
+        )
+
+        self.assertEqual(result.config_version, "contact-sheet-v0.2-5frame")
+        self.assertEqual(
+            self.store.get("config-version").config_version,
+            "contact-sheet-v0.2-5frame",
+        )
+
     def test_validator_failure_is_saved_before_error_is_raised(self) -> None:
         selector = self._selector("proposal-999")
 

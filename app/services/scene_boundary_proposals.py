@@ -11,6 +11,8 @@ from app.services.transcript_scene_retriever import TranscriptBlock
 
 
 CONFIG_VERSION = "scene-boundary-proposals-v0.1"
+THREE_FRAME_SAMPLING_FRACTIONS = (0.10, 0.50, 0.90)
+FIVE_FRAME_SAMPLING_FRACTIONS = (0.10, 0.30, 0.50, 0.70, 0.90)
 
 
 class ProposalGenerationError(ValueError):
@@ -31,6 +33,7 @@ class ProposalConfig:
     padding_seconds: float = 2.0
     signal_connection_gap_seconds: float = 2.0
     frames_per_proposal: int = 3
+    frame_sampling_fractions: tuple[float, ...] = THREE_FRAME_SAMPLING_FRACTIONS
     frame_long_edge_pixels: int = 512
     jpeg_quality: int = 3
     maximum_proposals: int = 6
@@ -178,7 +181,7 @@ def attach_representative_frames(
     config: ProposalConfig = DEFAULT_PROPOSAL_CONFIG,
     ffmpeg_executable: str = "ffmpeg",
 ) -> tuple[SceneBoundaryProposal, ...]:
-    """Extract three local JPEG samples per proposal with timestamp reuse."""
+    """Extract configured local JPEG samples per proposal with timestamp reuse."""
     _validate_config(config)
     source = Path(source_video_path)
     if not source.is_file():
@@ -193,7 +196,7 @@ def attach_representative_frames(
         duration = proposal.end_seconds - proposal.start_seconds
         timestamps = tuple(
             proposal.start_seconds + duration * fraction
-            for fraction in (0.10, 0.50, 0.90)
+            for fraction in config.frame_sampling_fractions
         )
         samples: list[ProposalFrameSample] = []
         for index, timestamp in enumerate(timestamps, start=1):
@@ -376,8 +379,16 @@ def _validate_config(config: ProposalConfig) -> None:
         raise ProposalGenerationError("Config must be a ProposalConfig.")
     _positive_number(config.padding_seconds, "Padding")
     _non_negative_number(config.signal_connection_gap_seconds, "Signal connection gap")
-    if config.frames_per_proposal != 3:
-        raise ProposalGenerationError("v0.1 requires exactly three frames per proposal.")
+    if not isinstance(config.frame_sampling_fractions, tuple):
+        raise ProposalGenerationError("Frame sampling fractions must be a tuple.")
+    supported_sampling = {
+        (3, THREE_FRAME_SAMPLING_FRACTIONS),
+        (5, FIVE_FRAME_SAMPLING_FRACTIONS),
+    }
+    if (config.frames_per_proposal, config.frame_sampling_fractions) not in supported_sampling:
+        raise ProposalGenerationError(
+            "Frame sampling must use the supported three-frame or five-frame policy."
+        )
     if isinstance(config.frame_long_edge_pixels, bool) or config.frame_long_edge_pixels <= 0:
         raise ProposalGenerationError("Frame long edge must be a positive integer.")
     if not 2 <= config.jpeg_quality <= 31:
