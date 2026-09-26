@@ -38,7 +38,11 @@ Video Asset
 
 입력을 받아 처리 작업을 시작한다. HTTP 업로드는 인터페이스일 뿐 핵심 영상 처리 로직을 포함하지 않는다. 같은 파이프라인을 로컬 파일에서도 호출할 수 있게 분리한다.
 
-현재 업로드 API는 MOV/MP4의 확장자, Content-Type, 공통 컨테이너 헤더를 검증하고 UUID 기반 파일명으로 로컬 `uploads/`에 저장한다. 검증·저장 책임은 `app/services/video_storage.py`에 두며 API 계층은 HTTP 오류 변환만 담당한다.
+현재 업로드 API는 MOV/MP4의 확장자, Content-Type, 공통 컨테이너 헤더를 검증하고 UUID 기반 파일명으로 로컬 `uploads/`에 저장한다. 검증·저장 책임은 `app/services/video_storage.py`에 두며 API 계층은 HTTP 오류 변환만 담당한다. 기존 `POST /videos/upload`는 저장 전용으로 유지한다.
+
+`POST /videos/process`는 multipart `file`과 필수 `window_seconds`를 받아 업로드 저장 후 `VideoProcessingPipeline`을 호출한다. API boundary에서는 현재 생성 가능한 5·10·15·30초만 허용하며 selector 자체의 일반 계약은 변경하지 않는다. FastAPI lifespan에서 faster-whisper 모델을 한 번 로드해 `app.state`로 재사용하고 Pipeline 동시 실행을 `asyncio.Semaphore(1)`로 제한한다. 파일 저장과 전체 blocking Pipeline은 event loop가 아닌 threadpool에서 실행한다.
+
+응답 DTO는 Pipeline dataclass를 명시적으로 변환하며 로컬 절대 경로 대신 기존 video ID, clip UUID stem과 basename만 반환한다. `NO_EDIT_MEMO`와 `NO_SCENE_SELECTED`는 HTTP 200 domain status이고 `PipelineExecutionError`는 안전한 stage/code/message로 변환한다. MP4 download endpoint, background job과 Streamlit 연결은 아직 없다.
 
 ### Media Probe / Audio Extractor
 

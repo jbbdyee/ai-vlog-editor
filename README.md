@@ -73,6 +73,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] Test 01 촬영 및 Ground Truth 기록
 - [x] FastAPI 기본 환경과 `GET /health`
 - [x] `POST /videos/upload` — 업로드 파일명과 Content-Type 확인
+- [x] `POST /videos/process` — 필수 fixed Window와 multipart 영상을 받아 공유 STT 모델로 End-to-End Pipeline 실행
 - [x] MOV/MP4 업로드 검증 및 UUID 파일명 기반 로컬 저장
 - [x] ffprobe 기반 기본 미디어 정보 조회
 - [x] FFmpeg 오디오 추출 — 로컬 영상의 첫 오디오 스트림을 16 kHz mono PCM WAV로 안전하게 생성
@@ -92,6 +93,8 @@ End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자
 ### MVP Backend Integration
 
 실제 `eval_01.MOV`를 `VideoProcessingPipeline.process()` 한 번으로 처리해 STT, EditMemo 탐지, 명시적 5초 Candidate 선택과 H.264/AAC MP4 생성을 완료했다. 상세 결과는 [End-to-End Integration Verification](docs/integration-eval01-v0.1.md)에 기록한다.
+
+FastAPI는 lifespan에서 faster-whisper 모델을 한 번 로드해 재사용하고, `/videos/process`의 blocking Pipeline을 단일 동시 실행 semaphore와 threadpool에서 처리한다. 현재 응답은 안전한 clip ID와 파일명만 제공하며 MP4 download endpoint와 Streamlit 연결은 아직 구현하지 않았다.
 
 원본 테스트 영상은 개인정보와 용량 문제로 Git에 포함하지 않습니다.
 
