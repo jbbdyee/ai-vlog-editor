@@ -42,7 +42,9 @@ Video Asset
 
 `POST /videos/process`는 multipart `file`과 필수 `window_seconds`를 받아 업로드 저장 후 `VideoProcessingPipeline`을 호출한다. API boundary에서는 현재 생성 가능한 5·10·15·30초만 허용하며 selector 자체의 일반 계약은 변경하지 않는다. FastAPI lifespan에서 faster-whisper 모델을 한 번 로드해 `app.state`로 재사용하고 Pipeline 동시 실행을 `asyncio.Semaphore(1)`로 제한한다. 파일 저장과 전체 blocking Pipeline은 event loop가 아닌 threadpool에서 실행한다.
 
-응답 DTO는 Pipeline dataclass를 명시적으로 변환하며 로컬 절대 경로 대신 기존 video ID, clip UUID stem, basename과 상대 `download_url`만 반환한다. `GET /videos/clips/{run_id}/{clip_id}`는 32자리 소문자 hex ID만 허용하고 `outputs/api/<run-id>/clips/<clip-id>.mp4`를 resolve한 뒤 출력 루트 포함 여부를 재검증한다. 따라서 traversal, symlink escape와 MP4 이외 파일 접근을 차단하고 유효하지만 없는 리소스는 안전한 404로 응답한다. `NO_EDIT_MEMO`와 `NO_SCENE_SELECTED`는 HTTP 200 domain status이고 `PipelineExecutionError`는 안전한 stage/code/message로 변환한다. Background job과 Streamlit 연결은 아직 없다.
+응답 DTO는 Pipeline dataclass를 명시적으로 변환하며 로컬 절대 경로 대신 기존 video ID, clip UUID stem, basename과 상대 `download_url`만 반환한다. `GET /videos/clips/{run_id}/{clip_id}`는 32자리 소문자 hex ID만 허용하고 `outputs/api/<run-id>/clips/<clip-id>.mp4`를 resolve한 뒤 출력 루트 포함 여부를 재검증한다. 따라서 traversal, symlink escape와 MP4 이외 파일 접근을 차단하고 유효하지만 없는 리소스는 안전한 404로 응답한다. `NO_EDIT_MEMO`와 `NO_SCENE_SELECTED`는 HTTP 200 domain status이고 `PipelineExecutionError`는 안전한 stage/code/message로 변환한다. Background job은 아직 없다.
+
+`frontend/app.py`의 Streamlit MVP는 `frontend/api_client.py`를 통해서만 FastAPI의 health, process, clip endpoint를 호출한다. Backend 서비스·Pipeline·로컬 output 경로를 import하거나 직접 읽지 않는다. `BACKEND_URL`은 client 한 곳에서 관리하고, process 응답은 allowlist 형태로 정리해 UI가 로컬 path나 알 수 없는 내부 필드를 표시하지 않는다. 현재 UI는 수동 fixed Window 선택과 요청 완료 후 결과 표시만 제공하며 실시간 progress, 자동 Window 선택과 background job은 제공하지 않는다.
 
 ### Media Probe / Audio Extractor
 

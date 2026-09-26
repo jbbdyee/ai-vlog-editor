@@ -75,6 +75,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] `POST /videos/upload` — 업로드 파일명과 Content-Type 확인
 - [x] `POST /videos/process` — 필수 fixed Window와 multipart 영상을 받아 공유 STT 모델로 End-to-End Pipeline 실행
 - [x] `GET /videos/clips/{run_id}/{clip_id}` — 생성된 MP4를 검증된 UUID 경로와 `video/mp4` 응답으로 제공
+- [x] Streamlit MVP — FastAPI만 호출해 영상 업로드, 수동 Window 선택, Transcript·EditMemo·Candidate·MP4 확인
 - [x] MOV/MP4 업로드 검증 및 UUID 파일명 기반 로컬 저장
 - [x] ffprobe 기반 기본 미디어 정보 조회
 - [x] FFmpeg 오디오 추출 — 로컬 영상의 첫 오디오 스트림을 16 kHz mono PCM WAV로 안전하게 생성
@@ -95,7 +96,9 @@ End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자
 
 실제 `eval_01.MOV`를 `VideoProcessingPipeline.process()` 한 번으로 처리해 STT, EditMemo 탐지, 명시적 5초 Candidate 선택과 H.264/AAC MP4 생성을 완료했다. 상세 결과는 [End-to-End Integration Verification](docs/integration-eval01-v0.1.md)에 기록한다.
 
-FastAPI는 lifespan에서 faster-whisper 모델을 한 번 로드해 재사용하고, `/videos/process`의 blocking Pipeline을 단일 동시 실행 semaphore와 threadpool에서 처리한다. 처리 응답은 로컬 절대 경로 대신 안전한 clip ID·파일명·상대 `download_url`을 제공하며, 다운로드 endpoint는 `outputs/api/<run-id>/clips/` 아래 MP4만 반환한다. Streamlit 연결은 아직 구현하지 않았다.
+FastAPI는 lifespan에서 faster-whisper 모델을 한 번 로드해 재사용하고, `/videos/process`의 blocking Pipeline을 단일 동시 실행 semaphore와 threadpool에서 처리한다. 처리 응답은 로컬 절대 경로 대신 안전한 clip ID·파일명·상대 `download_url`을 제공하며, 다운로드 endpoint는 `outputs/api/<run-id>/clips/` 아래 MP4만 반환한다.
+
+Streamlit MVP는 backend service를 직접 import하지 않는 HTTP client다. 사용자가 5·10·15·30초 Window를 직접 선택하며 AI가 최적 길이를 자동 선택하지 않는다. 실시간 progress/SSE는 아직 구현하지 않았다.
 
 원본 테스트 영상은 개인정보와 용량 문제로 Git에 포함하지 않습니다.
 
@@ -106,3 +109,11 @@ python -m uvicorn app.main:app --reload
 ```
 
 실행 후 `/health`에서 현재 API 상태를 확인할 수 있습니다.
+
+별도 터미널에서 Frontend를 실행합니다.
+
+```powershell
+python -m streamlit run frontend/app.py
+```
+
+Backend 주소를 바꾸려면 `BACKEND_URL` 환경변수를 설정합니다. 기본값은 `http://127.0.0.1:8000`입니다.
