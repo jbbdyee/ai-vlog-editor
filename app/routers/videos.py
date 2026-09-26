@@ -1,9 +1,11 @@
 from dataclasses import asdict
 from pathlib import Path
+import re
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
+from starlette.responses import FileResponse
 
 from app.services.scene_selector import FixedWindowSceneSelector
 from app.services.video_processing_pipeline import (
@@ -21,6 +23,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 UPLOAD_DIRECTORY = PROJECT_ROOT / "uploads"
 PROCESS_OUTPUT_DIRECTORY = PROJECT_ROOT / "outputs" / "api"
 ALLOWED_PROCESS_WINDOWS_SECONDS = frozenset({5.0, 10.0, 15.0, 30.0})
+RESOURCE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
 
 class VideoUploadResponse(BaseModel):
@@ -83,6 +86,7 @@ class RenderedClipResponse(BaseModel):
     duration_seconds: float
     video_codec: str | None
     audio_codec: str | None
+    download_url: str
 
 
 class MemoProcessingResponse(BaseModel):
@@ -183,6 +187,30 @@ async def process_video(
     )
 
 
+@router.get("/clips/{run_id}/{clip_id:path}", response_class=FileResponse)
+async def download_clip(run_id: str, clip_id: str) -> FileResponse:
+    _validate_resource_id(run_id, field_name="run_id")
+    _validate_resource_id(clip_id, field_name="clip_id")
+
+    output_root = PROCESS_OUTPUT_DIRECTORY.resolve()
+    clips_directory = (PROCESS_OUTPUT_DIRECTORY / run_id / "clips").resolve()
+    clip_path = (clips_directory / f"{clip_id}.mp4").resolve()
+
+    if not _is_relative_to(clips_directory, output_root):
+        raise _clip_not_found()
+    if not _is_relative_to(clip_path, clips_directory):
+        raise _clip_not_found()
+    if clip_path.parent != clips_directory or not clip_path.is_file():
+        raise _clip_not_found()
+
+    return FileResponse(
+        path=clip_path,
+        media_type="video/mp4",
+        filename=f"{clip_id}.mp4",
+        content_disposition_type="inline",
+    )
+
+
 def _validate_process_window(window_seconds: float) -> None:
     if window_seconds not in ALLOWED_PROCESS_WINDOWS_SECONDS:
         raise HTTPException(
@@ -192,6 +220,36 @@ def _validate_process_window(window_seconds: float) -> None:
                 "message": "window_seconds must be one of 5, 10, 15, or 30.",
             },
         )
+
+
+def _validate_resource_id(value: str, *, field_name: str) -> None:
+    if RESOURCE_ID_PATTERN.fullmatch(value) is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "INVALID_CLIP_IDENTIFIER",
+                "field": field_name,
+                "message": f"{field_name} must be a 32-character lowercase hexadecimal ID.",
+            },
+        )
+
+
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def _clip_not_found() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={
+            "code": "CLIP_NOT_FOUND",
+            "message": "Rendered clip was not found.",
+        },
+    )
 
 
 def _pipeline_http_exception(error: PipelineExecutionError) -> HTTPException:
@@ -290,6 +348,9 @@ def _to_video_process_response(
                         duration_seconds=memo_result.rendered_clip.duration_seconds,
                         video_codec=memo_result.rendered_clip.video_codec,
                         audio_codec=memo_result.rendered_clip.audio_codec,
+                        download_url=_clip_download_url(
+                            memo_result.rendered_clip.clip_path
+                        ),
                     )
                 ),
             )
@@ -304,3 +365,13 @@ def _to_video_process_response(
         ],
         warnings=list(result.warnings),
     )
+
+
+def _clip_download_url(clip_path: Path) -> str:
+    clip_id = clip_path.stem
+    run_id = clip_path.parent.parent.name
+    _validate_resource_id(run_id, field_name="run_id")
+    _validate_resource_id(clip_id, field_name="clip_id")
+    if clip_path.suffix.lower() != ".mp4" or clip_path.parent.name != "clips":
+        raise ValueError("Rendered clip path does not follow the API output layout.")
+    return f"/videos/clips/{run_id}/{clip_id}"

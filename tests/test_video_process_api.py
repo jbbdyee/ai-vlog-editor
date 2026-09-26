@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.routers.videos import PROCESS_OUTPUT_DIRECTORY
 from app.services.candidate_generator import SceneCandidate
 from app.services.clip_renderer import RenderedClip
 from app.services.media_probe import MediaInfo
@@ -106,6 +107,10 @@ class VideoProcessAPITests(TestCase):
         self.assertEqual(body["memos"][0]["selection"]["strategy_name"], "fixed_window")
         self.assertEqual(body["memos"][0]["rendered_clip"]["clip_id"], "b" * 32)
         self.assertEqual(body["memos"][0]["rendered_clip"]["filename"], f"{'b' * 32}.mp4")
+        self.assertEqual(
+            body["memos"][0]["rendered_clip"]["download_url"],
+            f"/videos/clips/{'c' * 32}/{'b' * 32}",
+        )
         serialized = response.text
         for local_prefix in ("/Users/", "/home/", "C:\\\\"):
             self.assertNotIn(local_prefix, serialized)
@@ -315,7 +320,12 @@ class VideoProcessAPITests(TestCase):
         if candidate is not None:
             clip = RenderedClip(
                 source_path=Path("/Users/private/source.mov"),
-                clip_path=Path(f"/Users/private/outputs/{'b' * 32}.mp4"),
+                clip_path=(
+                    PROCESS_OUTPUT_DIRECTORY
+                    / ("c" * 32)
+                    / "clips"
+                    / f"{'b' * 32}.mp4"
+                ),
                 start_seconds=candidate.start_seconds,
                 end_seconds=candidate.end_seconds,
                 duration_seconds=candidate.end_seconds - candidate.start_seconds,

@@ -34,6 +34,7 @@ MVP v1은 전체 편집 서비스를 만드는 단계가 아니라 이 질문을
 - FFmpeg H.264/AAC 재인코딩 기반 Scene Candidate MP4 Clip Renderer 구현 및 실제 Test 01의 5초 Candidate 검증
 - 명시적으로 주입된 `SceneSelector`를 사용하는 MVP End-to-End application service 구현 — Media Probe, 오디오 추출, word timestamp STT, 메모 탐지, 고정 Window 후보 생성, 선택 및 MP4 렌더링을 연결하고 여러 메모·중간 WAV 정리·단계 timing을 구조화된 결과로 반환
 - `POST /videos/process` multipart API 구현 — 5·10·15·30초 중 필수 Window를 명시하고 lifespan에서 한 번 로드한 faster-whisper 모델을 재사용하며, semaphore로 단일 동시 실행을 제한한 Pipeline을 threadpool에서 호출
+- `GET /videos/clips/{run_id}/{clip_id}` 구현 — 엄격한 UUID hex 검증과 resolve 기반 traversal·symlink escape 방어 후 API 출력 루트 아래 MP4만 제공
 - Evaluation Dataset v0.1 시나리오 문서
 - `evaluation/data/.gitkeep`
 
@@ -41,7 +42,7 @@ MVP v1은 전체 편집 서비스를 만드는 단계가 아니라 이 질문을
 
 사용자 실행 Pipeline은 Ground Truth나 Evaluator를 호출하지 않는다. 고정 Window selector도 기본 Window를 자동 선택하지 않으며 호출자가 `window_seconds`를 반드시 지정한다. 실제 `eval_01.MOV` End-to-End 통합 실행 결과는 `docs/integration-eval01-v0.1.md`에 기록했다.
 
-처리 API는 Pipeline 결과를 로컬 경로 없는 Pydantic DTO로 변환한다. 현재 MP4 download endpoint와 Streamlit 연결은 구현하지 않았다.
+처리 API는 Pipeline 결과를 로컬 경로 없는 Pydantic DTO로 변환하고, 렌더링 결과에 clip 다운로드 endpoint를 가리키는 상대 URL을 포함한다. Streamlit 연결은 아직 구현하지 않았다.
 
 ## 3. Test 01 기준 데이터
 
