@@ -19,6 +19,8 @@ Home → New Project → Upload → Project Setup
 
 사용자는 프로젝트 이름, 목표 길이, 이번 영상의 요구, 기본 스타일을 입력한다. 현재 지시는 ProjectStyle과 장기 UserStyleProfile보다 우선한다.
 
+첫 프로젝트에서는 거대한 스타일 설정 폼 대신 영상 템포, 자막 밀도, 색감, BGM, 중요하게 보는 Content 같은 소수의 축에 대해 가벼운 Style Onboarding을 제공할 수 있다. 초기에는 최소한의 명시적 선호만 받고, 실제 프로젝트 수정 과정에서 사용자의 명시적 동의를 통해 UserStyleProfile을 점진적으로 정교화한다. 정확한 선택지와 schema는 아직 확정하지 않는다.
+
 ## 2. 100+ Upload / Incremental Analysis
 
 집계 중심으로 표시한다.
@@ -40,7 +42,7 @@ Failed 0
 
 ## 4. Episode Split Decision
 
-촬영량이 많으면 장소·주제·스토리 기준 분할안을 보여준다.
+프로젝트는 `SINGLE`, `AUTO_SPLIT`, `USER_CONFIRM_SPLIT` 정책을 지원할 수 있다. `SINGLE`은 한 편을 유지하고, `AUTO_SPLIT`은 촬영량·목표 길이·Narrative/Event 구조를 고려해 자동 분할하며, `USER_CONFIRM_SPLIT`은 장소·주제·Story boundary에 따른 분할안을 사용자에게 보여준다. 정확한 기본 정책은 미결정이다.
 
 ```text
 약 20분 영상 2편을 추천합니다.
@@ -49,11 +51,13 @@ Part 2: 우도 → 해변 → 마지막 날
 [​2편으로 만들기] [한 편으로 만들기] [직접 설정]
 ```
 
-사용자 확인 전에 다음 단계로 자동 진행하지 않는다.
+`USER_CONFIRM_SPLIT`에서는 사용자 확인 전에 다음 단계로 자동 진행하지 않는다.
 
 ## 5. Edit Proposal / Preview
 
 EditPlan의 장면, 순서, 예상 길이, 제외 이유, CreativePlan의 자막·BGM·색감을 확인한다. Fast Preview를 생성한 후 AI Reviewer가 검증하며, `PASS`는 사용자 승인을 의미하지 않는다.
+
+사용자가 촬영 중 남긴 Edit Memo가 반영된 Scene은 `촬영 중 '여기 꼭 살려줘'라고 표시한 장면`과 같은 사용자 친화적 근거로 표시할 수 있다. 내부 Evidence code를 그대로 노출하지 않으며, Memo가 없는 Autonomous Scene도 정상 후보로 함께 표시한다.
 
 ## 6. User Review / Edit Request
 
@@ -78,6 +82,8 @@ EditPlan의 장면, 순서, 예상 길이, 제외 이유, CreativePlan의 자막
 ## 8. Final Render
 
 사용자 승인 후 원본 품질 기준으로 Final Render를 실행한다. Preview는 빠른 확인용이며 Final을 대체하지 않는다.
+
+Final Render/Export에 포함된 BGM, Font, SFX 중 attribution이 필요한 resource가 있다면 resource 이름, source, license, attribution 필요 여부와 text를 확인할 수 있어야 한다. 이 정보는 structured license metadata에서 연결되며 정확한 화면 배치는 미결정이다.
 
 ## 9. Shorts / Reels
 

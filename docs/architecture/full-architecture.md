@@ -53,6 +53,41 @@ Temporary Workspace
 - Reviewer: 검증과 재시도 대상 지정
 - Storage: structured state, binary, vector, temporary artifacts 분리
 
+## Target Repository Structure
+
+다음은 Full Product가 장기적으로 지향하는 target structure이며 현재 Repository 상태가 아니다.
+
+```text
+ai-vlog-editor/
+├─ backend/
+│  ├─ app/
+│  │  ├─ api/
+│  │  ├─ agents/
+│  │  │  ├─ scene/
+│  │  │  ├─ style/
+│  │  │  ├─ planner/
+│  │  │  ├─ creative/
+│  │  │  └─ reviewer/
+│  │  ├─ orchestrator/
+│  │  ├─ tools/
+│  │  ├─ mcp/
+│  │  ├─ retrieval/
+│  │  ├─ services/
+│  │  ├─ schemas/
+│  │  ├─ repositories/
+│  │  └─ core/
+│  └─ tests/
+├─ frontend/
+├─ evaluation/
+│  ├─ datasets/
+│  ├─ experiments/
+│  └─ results/
+├─ docs/
+└─ README.md
+```
+
+이 구조는 현재 코드의 즉시 migration을 의미하지 않는다. 실제 migration 순서와 범위는 Full Design 검토 후 Version Roadmap에서 결정한다. Baseline/Evaluation 코드를 삭제하지 않고, migration 과정에서 기존 테스트와 개발 history를 보존한다.
+
 ## 주요 흐름
 
 1. SourceVideo를 안전한 resource ID로 저장한다.

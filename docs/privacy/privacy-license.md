@@ -37,6 +37,15 @@ FontCatalog, BGMCatalog, SFXCatalog, ColorPresetCatalog만 Creative Agent/Tool�
 
 Creative suitability는 AI가 판단할 수 있지만 license eligibility는 DB Validator가 판단한다.
 
+## Creative Resource Provenance
+
+Creative Resource는 개념적으로 출처와 책임 상태를 구분할 수 있어야 한다.
+
+- `SYSTEM_CATALOG`: Cutory Approved Resource Catalog 정책, 구조화 license metadata, deterministic validator를 적용한다.
+- `USER_PROVIDED`: 사용자가 직접 제공한 BGM, Font, SFX 등으로, 시스템이 저작권 적격성을 임의로 보증하지 않으며 System Catalog과 다른 provenance/responsibility 상태를 유지한다.
+
+이 구분은 Full Product의 향후 안전한 처리 경계이며, 사용자 제공 resource를 특정 Version에서 지원한다고 확정하지 않는다. 구체적 법률 문구와 서비스 약관은 이 문서의 범위가 아니다.
+
 ## 주요 흐름
 
 1. Creative Agent가 catalog resource ID를 제안한다.
@@ -47,6 +56,8 @@ Creative suitability는 AI가 판단할 수 있지만 license eligibility는 DB 
 ## Logging / Lineage
 
 resource ID, policy decision, provider, execution reference는 기록하되 API key, auth header, full prompt, frame/video/audio binary는 log에 저장하지 않는다.
+
+Project에서 파생된 SourceVideo, Transcript, EditMemo, SceneCandidate, EventGroup, EditPlan, CreativePlan, Preview/Render를 식별할 수 있는 lineage를 유지한다. StyleReference가 특정 Project에서 생성되었다면 source project reference를 보존해 삭제 요청 시 연결 범위를 파악할 수 있게 한다. 실제 삭제/보존 범위와 기간은 향후 retention/privacy policy에서 결정하며, 독립적인 장기 UserStyleProfile 전체를 Project 삭제와 함께 자동 삭제하지 않는다.
 
 ## 실패 처리
 

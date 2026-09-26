@@ -31,7 +31,7 @@ UserStyleProfile, ProjectStyle, CurrentInstruction, Scene/Event context, retriev
 
 ## 출력
 
-ResolvedStyle version, 소스별 적용/오버라이드 근거, 장면/에피소드별 제약, unresolved conflicts, warnings.
+ResolvedStyle version, 소스별 적용/오버라이드 근거, 장면/에피소드별 제약, unresolved conflicts, warnings. EditPlan/CreativePlan이 실제 사용한 ResolvedStyle을 snapshot/reference로 보존해 후속 UserStyleProfile 변경과 무관하게 과거 편집을 추적할 수 있게 한다.
 
 ## 주요 흐름
 

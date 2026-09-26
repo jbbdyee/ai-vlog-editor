@@ -31,7 +31,17 @@ Scene Discovery
 - Main Output: 일반적으로 15~25분 Main Vlog
 - Target Duration: 사용자가 직접 지정 가능
 
-촬영량이 많으면 시스템은 한 편으로 압축하거나 장소·주제·스토리 흐름에 따른 Episode 분할안을 제안한다. 분할은 사용자 확인 전에 자동 확정하지 않는다.
+촬영량이 많으면 시스템은 한 편으로 압축하거나 장소·주제·스토리 흐름에 따른 Episode 분할을 수행/제안할 수 있다. 사용자 확인이 필요한 정책에서는 확인 전에 분할을 자동 확정하지 않는다.
+
+### Episode Split Policy
+
+Full Product는 다음 세 정책을 지원할 수 있다.
+
+- `SINGLE`: 한 편의 Vlog로 구성하며 AI가 임의로 여러 Episode로 나누지 않는다.
+- `AUTO_SPLIT`: 촬영량, 목표 길이, Narrative/Event 구조를 고려해 여러 Episode가 적절할 때 AI가 분할한다.
+- `USER_CONFIRM_SPLIT`: AI가 분할안을 제안하고 사용자가 여러 편, 한 편, 직접 설정 중 결정한다. 기본 UX 후보로 사용할 수 있다.
+
+Episode 경계는 단순 시간 slicing이 아니라 EventGroup, 장소, 주제, Story/Narrative boundary, target duration을 함께 고려한다. 정확한 기본 policy와 Version별 지원 범위는 후속 Version Roadmap에서 결정한다.
 
 ## 3. 핵심 제품 원칙
 

@@ -26,6 +26,8 @@ EpisodePlan, EditPlan, SceneEditPlan, selected/excluded scene IDs and reasons, p
 
 EventGroup으로 중복과 alternative를 파악하고 사용자 의도·선호·스토리·목표 길이·technical quality·ResolvedStyle을 함께 고려한다. 품질 flag는 근거 중 하나이며 명시적 User Intent를 자동으로 덮지 않는다. 촬영량이 많으면 Episode 분할안을 만들고 Orchestrator를 통해 사용자 확인을 기다린다.
 
+Episode 정책은 `SINGLE`, `AUTO_SPLIT`, `USER_CONFIRM_SPLIT`을 지원할 수 있다. Planner는 EventGroup, 장소, 주제, Story/Narrative boundary, target duration을 근거로 사용하고 시간만으로 기계적 분할하지 않는다. 기본 정책과 Version별 지원 범위는 이 문서에서 확정하지 않는다.
+
 ## 다른 Component와의 관계
 
 Scene Agent의 후보를 소비하고, Style Agent의 pace/content 정책을 반영하며, Creative Agent에 scene order·intent·duration을 전달한다. Reviewer의 NARRATIVE/CONTENT issue는 해당 Episode/EditPlan 범위만 재계획한다.
