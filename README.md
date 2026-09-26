@@ -84,6 +84,9 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] Gemini `gemini-3.5-flash` Structured Outputs용 Semantic Block Selector 구현 — 실제 eval_01~05 API 평가는 미실행
 - [x] Ground Truth 대비 IoU·Coverage·구간 경계 오차 계산
 - [x] FFmpeg 기반 MP4 클립 생성 — H.264/AAC 재인코딩 및 실제 `eval_01.MOV` 5초 Candidate 검증
+- [x] MVP End-to-End application service — probe, 오디오 추출, STT, 메모 탐지, 명시적으로 주입된 Scene Selector와 클립 렌더링을 순차 실행
+
+End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 
 원본 테스트 영상은 개인정보와 용량 문제로 Git에 포함하지 않습니다.
 

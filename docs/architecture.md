@@ -104,6 +104,14 @@ v0.2 image representation은 proposal별 기존 10%·50%·90% JPEG와 frame ID/t
 
 `app/services/clip_renderer.py`는 검증된 `SceneCandidate` 하나의 시작·종료 시각을 FFmpeg 인자 목록으로 변환한다. 키프레임에 제한되는 stream copy 대신 시간 경계 정확성과 일반적인 MP4 재생 호환성을 위해 H.264 `yuv420p` video와 AAC audio로 재인코딩한다. UUID 기반 출력 경로를 선점하고 실패·빈 출력·ffprobe 검증 실패 시 파일을 제거한다. 모델이 직접 명령 문자열을 생성하지 않는다.
 
+### MVP End-to-End Pipeline
+
+`app/services/video_processing_pipeline.py`는 로컬 source video를 Media Probe → Audio Extraction → STT(word timestamp) → Memo Detection → Candidate Generation → 주입된 Scene Selector → Clip Renderer 순서로 연결하는 application service다. HTTP나 UI 타입을 사용하지 않으며 Ground Truth와 Evaluator도 호출하지 않는다. 여러 EditMemo는 입력 순서대로 독립 처리하고, 명시적 selector abstain은 해당 memo만 렌더링하지 않는다. selector 예외에는 다른 전략으로 fallback하지 않는다.
+
+`app/services/scene_selector.py`의 `SceneSelector` Protocol은 최종 `SceneCandidate` 또는 명시적 미선택 결과를 반환하는 얇은 상위 경계다. `FixedWindowSceneSelector`는 호출자가 반드시 지정한 window와 이미 생성된 candidate를 정확히 매칭할 뿐 좋은 window를 추론하지 않는다. 기존 transcript `BlockSelector` 및 VLM proposal validator는 향후 각각의 adapter 내부에서 계속 재사용하며 이 상위 계약으로 대체하지 않는다.
+
+각 실행은 output root 아래 UUID run directory의 `audio/`, `clips/`를 사용한다. 중간 WAV는 기본적으로 성공·실패 후 삭제하고 명시적으로 보존을 요청한 경우에만 결과에 `ExtractedAudio`를 남긴다. 단계 시간은 `perf_counter` 기반 `PipelineStageTiming`으로 기록하며 별도 observability framework는 사용하지 않는다.
+
 ## 4. 개념 데이터 모델
 
 ```text

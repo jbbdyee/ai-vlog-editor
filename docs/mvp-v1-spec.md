@@ -32,10 +32,13 @@ MVP v1은 전체 편집 서비스를 만드는 단계가 아니라 이 질문을
 - Gemini Vision Contact Sheet feasibility adapter 구현 — 동일 synthetic contact sheet 3장으로 독립 Smoke 2회를 실행했으나 모두 Provider HTTP 503 `UNAVAILABLE`로 Structured Output 전에 종료, run별 재호출과 eval_01~05는 미실행
 - Scene Candidate와 Ground Truth의 IoU·Coverage·구간 경계 오차 Evaluator 구현
 - FFmpeg H.264/AAC 재인코딩 기반 Scene Candidate MP4 Clip Renderer 구현 및 실제 Test 01의 5초 Candidate 검증
+- 명시적으로 주입된 `SceneSelector`를 사용하는 MVP End-to-End application service 구현 — Media Probe, 오디오 추출, word timestamp STT, 메모 탐지, 고정 Window 후보 생성, 선택 및 MP4 렌더링을 연결하고 여러 메모·중간 WAV 정리·단계 timing을 구조화된 결과로 반환
 - Evaluation Dataset v0.1 시나리오 문서
 - `evaluation/data/.gitkeep`
 
 현재 업로드 엔드포인트는 확장자, Content-Type, 컨테이너 헤더를 검증하고 원본 파일명 대신 UUID 기반 파일명으로 `uploads/`에 저장한다. 업로드와 분리된 미디어 조회 서비스는 ffprobe JSON 결과에서 길이, 컨테이너, 영상·음성 스트림 및 코덱을 읽는다.
+
+사용자 실행 Pipeline은 Ground Truth나 Evaluator를 호출하지 않는다. 고정 Window selector도 기본 Window를 자동 선택하지 않으며 호출자가 `window_seconds`를 반드시 지정한다. 실제 `eval_01.MOV` End-to-End 통합 실행은 별도 검증 단계로 남아 있다.
 
 ## 3. Test 01 기준 데이터
 
