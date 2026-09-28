@@ -97,6 +97,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] MVP End-to-End application service — probe, 오디오 추출, STT, 메모 탐지, 명시적으로 주입된 Scene Selector와 클립 렌더링을 순차 실행
 - [x] Cutory v1 PostgreSQL 개발 기반 — PostgreSQL 17.11 Compose, SQLAlchemy 2.x Engine/Session과 분리된 DB 테스트
 - [x] Cutory v1 Product Data Model — Project, SourceVideo, ProcessingStage, Transcript, EditMemo와 최초 Alembic revision
+- [x] Cutory v1 Source Ingestion — Project별 로컬 Original Storage, SourceVideo persistence, SHA-256 fingerprint와 PENDING stage 초기화
 
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 
@@ -128,6 +129,12 @@ $env:RUN_DATABASE_INTEGRATION_TESTS = "1"
 ```
 
 `.env`는 Git에서 제외된다. `compose.yaml`은 Docker named volume을 사용하므로 PostgreSQL data directory가 저장소에 생성되지 않는다. 최초 Product revision은 `projects`, `source_videos`, `processing_stages`, `transcripts`, `edit_memos`를 생성한다. 로컬 PostgreSQL에서 upgrade, schema inspection, downgrade와 re-upgrade를 검증했다. 아직 Repository, CRUD/API 또는 기존 Pipeline persistence는 연결하지 않았다.
+
+## Product Original Source Storage
+
+Product source ingestion은 원본 MOV/MP4 binary를 저장소 루트의 `storage/originals/projects/<project-id>/sources/` 아래 UUID 파일명으로 저장하고, PostgreSQL `source_videos`에는 원본 파일명, machine-independent 상대 resource reference와 SHA-256 fingerprint만 기록한다. 파일 저장과 동시에 fingerprint를 계산하며, 같은 Project의 동일 fingerprint는 식별 정보로 반환하되 자동 거부하지 않는다. 등록된 SourceVideo는 `READY`, PROBE·AUDIO_EXTRACTION·STT·MEMO_DETECTION stage는 `PENDING`으로 시작한다.
+
+이 경로는 기존 단일 영상 Baseline의 `uploads/`와 분리되어 있고 Git에서 제외된다. 현재 ingestion은 application/service 수준이며 Project API, media analysis 자동 실행, Resume/Retry/Reprocess와 Object Storage는 아직 구현하지 않았다.
 
 ## Run the Current API
 

@@ -40,6 +40,12 @@ Video Asset
 
 Cutory v1의 구조화 상태 저장 기반은 PostgreSQL 17.11과 SQLAlchemy 2.x를 사용한다. `backend/app/config.py`가 `POSTGRES_*` 환경변수를 검증하고 credential을 노출하지 않는 SQLAlchemy URL을 구성하며, `backend/app/database.py`가 동기 Engine, Session factory, session lifecycle과 `SELECT 1` 연결 검증을 제공한다. `backend/app/models/product.py`는 Project, SourceVideo, ProcessingStage, Transcript, EditMemo를 분리하고 UUID lineage, current stage unique rule, source fingerprint와 result validity metadata를 정의한다. Transcript segment/word timestamp는 row 폭증 없이 후속 Scene Intelligence가 사용할 수 있도록 구조화 JSON으로 보존한다. `backend/alembic/`은 같은 application config와 Product metadata를 참조하며 최초 revision의 실제 PostgreSQL upgrade, downgrade와 re-upgrade를 검증했다. 아직 Repository, CRUD/API, Resume/Retry engine 또는 기존 Pipeline persistence는 연결하지 않았고 기존 Baseline FastAPI startup도 DB 연결을 강제하지 않는다.
 
+### Product Source Ingestion
+
+`backend/app/storage/source_storage.py`는 Product original binary를 위한 얇은 `SourceStorage` 경계와 Local 구현을 제공한다. Local storage는 `storage/originals/projects/<project-id>/sources/<resource-id>.<ext>` namespace를 사용하고 DB에는 절대 경로 대신 `projects/<project-id>/sources/<resource-id>.<ext>` 상대 reference를 저장한다. 기존 `video_storage`의 MOV/MP4 검증을 재사용하며 저장 스트림에서 SHA-256 fingerprint를 함께 계산한다.
+
+`backend/app/services/source_ingestion.py`는 Project 존재 확인, original 저장, SourceVideo `READY` 등록과 네 processing stage의 `PENDING` 초기화를 한 use case로 묶는다. 같은 Project의 동일 fingerprint는 감지하지만 UX 정책이 정해지기 전에는 거부하지 않는다. DB 저장 실패 시 이미 저장된 original을 보상 삭제하며 cleanup 실패는 원래 DB 오류와 분리된 안전한 diagnostic으로 남긴다. 이 단계는 application/service 수준만 제공하며 Project API나 Probe·Audio Extraction·STT·Memo Detection을 자동 실행하지 않는다. 기존 Baseline `uploads/`는 Product lifetime original storage와 수명주기가 달라 계속 분리한다.
+
 ### API 또는 실행 진입점
 
 입력을 받아 처리 작업을 시작한다. HTTP 업로드는 인터페이스일 뿐 핵심 영상 처리 로직을 포함하지 않는다. 같은 파이프라인을 로컬 파일에서도 호출할 수 있게 분리한다.
