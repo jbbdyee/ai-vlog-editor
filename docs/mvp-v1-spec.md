@@ -1,5 +1,9 @@
 # MVP v1 Specification
 
+> Historical Baseline Document
+>
+> 이 문서의 “MVP v1”은 단일 영상 Baseline을 구현·검증할 당시의 역사적 명칭이다. 현재 [Version Roadmap](roadmap/version-roadmap.md)의 `v1 — Project & Large Video Foundation`과는 다른 범위이며, 현재 v1 구현 기준은 [v1 Detailed Plan](roadmap/v1-plan.md)을 따른다. 기존 설계와 검증 기록은 Baseline/v0 history로 보존한다.
+
 ## 1. 검증 질문
 
 > 촬영 중 남긴 음성 편집 메모를 이용해 사용자가 의도한 장면을 찾고 실제 영상 파일로 추출할 수 있는가?

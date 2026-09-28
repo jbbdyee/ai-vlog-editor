@@ -2,11 +2,19 @@
 
 ## 목적
 
-100+ 영상을 집계 중심으로 다루고 AI가 먼저 반복 작업을 한 뒤, 사용자가 중요한 창작 판단과 장기 메모리를 확인하는 경험을 정의한다.
+Mobile-first 환경에서 100+ 영상을 집계 중심으로 다루고 AI가 먼저 반복 작업을 한 뒤, 사용자가 중요한 창작 판단과 장기 메모리를 확인하는 경험을 정의한다.
 
 ## 현재 Prototype과의 구분
 
 현재 Streamlit은 FastAPI/VideoProcessingPipeline Browser E2E를 검증한 Prototype이며 Full Product Frontend 기술스택으로 확정된 것이 아니다.
+
+## Mobile-first 방향
+
+Final UX는 Desktop/Web-first보다 Mobile-first를 우선한다. 사용자가 스마트폰의 media picker에서 다수 영상을 선택하고, large/resumable upload와 background upload를 통해 전송하며, 앱이 background 상태이거나 기기가 잠긴 뒤에도 영속된 processing state를 다시 확인할 수 있어야 한다.
+
+처리 진행과 partial failure는 모바일 화면에서 이해할 수 있는 집계 상태로 제공하고, 장시간 작업 완료나 사용자 결정 필요 상태를 notification으로 알릴 가능성을 고려한다. 완성된 영상은 모바일 기기에서 확인하고 저장·공유할 수 있어야 한다.
+
+이 방향은 특정 mobile framework, iOS/Android 우선순위, notification 구현 방식을 확정하지 않는다. 현재 v1은 Mobile UI나 background upload client를 구현하지 않고, 미래 Client가 연결될 수 있는 client-independent Backend/Application foundation을 만든다.
 
 ## 주요 화면
 
@@ -81,4 +89,4 @@ Partial source failure는 집계, 영향, 재시도/제외 action을 보여준�
 
 ## 향후 확장
 
-정확한 Frontend framework, timeline interaction, mobile/accessibility, collaboration, publishing UX는 별도 사용성 평가로 확정한다.
+정확한 Frontend 및 mobile framework, timeline interaction, mobile accessibility, collaboration, notification, publishing UX는 별도 사용성 평가로 확정한다.

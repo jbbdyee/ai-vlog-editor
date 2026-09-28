@@ -22,6 +22,10 @@ Scene Discovery
 
 > 사용자의 창작 판단은 남기고, 반복적인 탐색과 편집 노동은 AI에게 맡긴다.
 
+최종 사용자 경험은 Desktop/Web-first보다 Mobile-first를 우선한다. 사용자가 스마트폰에서 다수의 원본 영상을 선택·업로드하고, 앱이 background이거나 기기가 잠긴 동안에도 지속되는 처리 상태를 나중에 확인하며, 완성 영상을 저장·공유하는 흐름을 주요 제품 방향으로 둔다. Backend와 Application 경계는 특정 Client 기술에 종속되지 않게 유지한다.
+
+Mobile-first는 현재 v1에서 Mobile App을 구현한다는 뜻이 아니다. v1은 미래 Mobile Client가 연결될 수 있는 Project/Data/Processing Foundation을 만들며, 최종 mobile framework와 iOS/Android 구현 우선순위는 확정하지 않는다.
+
 ## 2. Typical Project
 
 - Source Videos: 일반적으로 100개 이상
@@ -105,7 +109,7 @@ Main Vlog가 기본 출력이며, 이후 Final Vlog Scene과 본편에서 사용
 
 ## 8. 현재 구현과의 경계
 
-현재 FastAPI, Streamlit, `VideoProcessingPipeline`, fixed-window Baseline, Scene/VLM Spike는 Full Product 전체가 아니다. 이들은 Full Product 구조를 결정하기 전에 검증한 Baseline, feasibility, integration history로 보존한다. 현재 범위는 [MVP v1 Specification](../mvp-v1-spec.md), 실험 결과는 `evaluation/results/`, 실제 통합 검증은 `docs/integration-eval01-v0.1.md`와 `docs/browser-e2e-v0.1.md`를 따른다.
+현재 FastAPI, Streamlit, `VideoProcessingPipeline`, fixed-window Baseline, Scene/VLM Spike는 Full Product 전체가 아니다. 이들은 Full Product 구조를 결정하기 전에 검증한 Baseline, feasibility, integration history로 보존한다. 현재 Version 범위는 [Version Roadmap](../roadmap/version-roadmap.md)과 [v1 Detailed Plan](../roadmap/v1-plan.md)을 따르며, 과거 단일 영상 Baseline은 [MVP v1 Specification](../mvp-v1-spec.md), 실험 결과는 `evaluation/results/`, 실제 통합 검증은 `docs/integration-eval01-v0.1.md`와 `docs/browser-e2e-v0.1.md`에 보존한다.
 
 ## 9. 하지 않는 일
 

@@ -10,22 +10,24 @@
 
 ## 현재 범위
 
-- 현재 개발 범위는 `docs/mvp-v1-spec.md`를 기준으로 한다.
-- MVP v1의 핵심은 음성 편집 메모, STT 타임스탬프, 고정 시간 구간 Baseline, FFmpeg 컷 생성이다.
-- LLM, VLM, 임베딩, Vector DB, 사용자 장기 기억, Multi-Agent, 숏폼 생성은 MVP v1 범위가 아니다.
+- 현재 구현 대상은 Version Roadmap의 `v1 — Project & Large Video Foundation`이다.
+- 현재 개발 범위와 완료 조건은 `docs/roadmap/v1-plan.md`를 가장 직접적인 기준으로 한다.
+- v1은 Project, 100+ SourceVideo, PostgreSQL 기반 상태·결과 저장, Resume/Retry/Reprocess와 Partial Failure를 위한 기반을 구축한다.
+- Scene Agent, MCP, LangGraph, Multi-Agent, RAG, Creative Editing, Reviewer, Final Mobile App, Short-form은 v1 범위가 아니다.
 - 미결정 사항을 임의로 확정하거나 포트폴리오 목적만으로 기술을 추가하지 않는다.
 
 ## 기준 문서
 
-충돌이 있을 때 다음 순서로 사실을 판단한다.
+제품 방향과 현재 Version 범위가 충돌할 때 다음 순서로 판단한다.
 
-1. 현재 저장소의 코드와 자동화된 테스트
-2. `docs/mvp-v1-spec.md`
-3. `docs/product-spec.md`
-4. `docs/project-plan.md`
-5. `docs/ui-design.md` — 미래 UX Blueprint이며 현재 구현 상태가 아니다.
+1. Full Product: `docs/product/full-development-plan.md`
+2. Version 구현 순서: `docs/roadmap/version-roadmap.md`
+3. 현재 v1 Detailed Plan: `docs/roadmap/v1-plan.md`
+4. Historical Baseline: `docs/mvp-v1-spec.md`, `evaluation/results/`, `docs/integration-eval01-v0.1.md`, `docs/browser-e2e-v0.1.md`
 
-문서와 코드가 다르면 차이를 숨기지 말고 먼저 보고한다.
+현재 저장소의 코드와 자동화된 테스트는 이미 구현된 사실의 기준이다. 문서와 코드가 다르면 차이를 숨기지 말고 먼저 보고하되, 과거 Baseline 문서로 현재 v1 범위를 축소하지 않는다.
+
+`docs/mvp-v1-spec.md`의 “MVP v1”은 현재 Version Roadmap의 v1과 다른 단일 영상 Baseline의 역사적 명칭이다. 기존 Evaluation과 통합 검증 기록도 Baseline history로 보존하며 현재 Version의 Scope 문서로 사용하지 않는다.
 
 ## 구현 규칙
 
