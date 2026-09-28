@@ -113,7 +113,7 @@ Streamlit MVP는 backend service를 직접 import하지 않는 HTTP client다. �
 ## Run the Current API
 
 ```powershell
-python -m uvicorn app.main:app --reload
+python -m uvicorn backend.app.main:app --reload
 ```
 
 실행 후 `/health`에서 현재 API 상태를 확인할 수 있습니다.

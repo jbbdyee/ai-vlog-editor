@@ -4,28 +4,28 @@ from dataclasses import dataclass
 from pathlib import Path
 import sys
 
-from app.services.audio_boundary_refiner import refine_scene_boundary
-from app.services.candidate_evaluator import GroundTruthSegment
-from app.services.evaluation_result_store import (
+from backend.app.services.audio_boundary_refiner import refine_scene_boundary
+from backend.app.services.candidate_evaluator import GroundTruthSegment
+from backend.app.services.evaluation_result_store import (
     JsonlLocalVLMEvaluationResultStore,
     LocalVLMEvaluationResult,
 )
-from app.services.local_vlm_evaluation import run_persisted_local_vlm_evaluation
-from app.services.media_probe import probe_media
-from app.services.memo_detector import detect_edit_memos
-from app.services.ollama_vlm_proposal_selector import (
+from backend.app.services.local_vlm_evaluation import run_persisted_local_vlm_evaluation
+from backend.app.services.media_probe import probe_media
+from backend.app.services.memo_detector import detect_edit_memos
+from backend.app.services.ollama_vlm_proposal_selector import (
     OllamaVLMProposalSelector,
     VLMProposalSelectionInput,
 )
-from app.services.proposal_contact_sheets import build_proposal_contact_sheets
-from app.services.scene_boundary_proposals import (
+from backend.app.services.proposal_contact_sheets import build_proposal_contact_sheets
+from backend.app.services.scene_boundary_proposals import (
     BoundarySignalInterval,
     attach_representative_frames,
     generate_scene_boundary_proposals,
 )
-from app.services.stt_service import load_model, transcribe_audio
-from app.services.transcript_scene_retriever import build_transcript_blocks
-from app.services.visual_motion_refiner import refine_visual_boundary
+from backend.app.services.stt_service import load_model, transcribe_audio
+from backend.app.services.transcript_scene_retriever import build_transcript_blocks
+from backend.app.services.visual_motion_refiner import refine_visual_boundary
 
 
 RUN_ID = "local-vlm-eval-v0.2-run1"

@@ -2,14 +2,14 @@
 
 import sys
 
-from app.config import load_environment
-from app.services.evaluation_result_store import (
+from backend.app.config import load_environment
+from backend.app.services.evaluation_result_store import (
     JsonlLocalVLMEvaluationResultStore,
     LocalVLMEvaluationResult,
 )
-from app.services.gemini_vlm_proposal_selector import GeminiVLMProposalSelector
-from app.services.local_vlm_evaluation import run_persisted_local_vlm_evaluation
-from app.services.stt_service import load_model
+from backend.app.services.gemini_vlm_proposal_selector import GeminiVLMProposalSelector
+from backend.app.services.local_vlm_evaluation import run_persisted_local_vlm_evaluation
+from backend.app.services.stt_service import load_model
 from evaluation.run_local_vlm_proposal_v01 import CASES, _prepare_case
 
 

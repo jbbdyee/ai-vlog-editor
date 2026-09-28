@@ -1,21 +1,21 @@
 """Run the persisted Gemini five-frame contact-sheet synthetic smoke once."""
 
-from app.config import load_environment
-from app.services.evaluation_result_store import JsonlVLMSmokeResultStore
-from app.services.gemini_vlm_proposal_selector import GeminiVLMProposalSelector
-from app.services.ollama_vlm_proposal_selector import VLMProposalSelectionInput
-from app.services.proposal_contact_sheets import (
+from backend.app.config import load_environment
+from backend.app.services.evaluation_result_store import JsonlVLMSmokeResultStore
+from backend.app.services.gemini_vlm_proposal_selector import GeminiVLMProposalSelector
+from backend.app.services.ollama_vlm_proposal_selector import VLMProposalSelectionInput
+from backend.app.services.proposal_contact_sheets import (
     FIVE_FRAME_CONTACT_SHEET_CONFIG,
     FIVE_FRAME_CONTACT_SHEET_CONFIG_VERSION,
     build_proposal_contact_sheets,
 )
-from app.services.scene_boundary_proposals import (
+from backend.app.services.scene_boundary_proposals import (
     FIVE_FRAME_SAMPLING_FRACTIONS,
     ProposalFrameSample,
     ProposalKind,
     SceneBoundaryProposal,
 )
-from app.services.vlm_smoke_runner import run_persisted_vlm_smoke_test
+from backend.app.services.vlm_smoke_runner import run_persisted_vlm_smoke_test
 from evaluation.run_local_vlm_contact_sheet_smoke_v02 import _synthetic_jpeg
 
 

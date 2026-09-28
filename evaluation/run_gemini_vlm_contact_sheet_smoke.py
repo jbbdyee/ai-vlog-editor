@@ -1,11 +1,11 @@
 """Run Gemini Vision feasibility once with the synthetic v0.2 contact sheets."""
 
-from app.config import load_environment
-from app.services.evaluation_result_store import JsonlVLMSmokeResultStore
-from app.services.gemini_vlm_proposal_selector import GeminiVLMProposalSelector
-from app.services.ollama_vlm_proposal_selector import VLMProposalSelectionInput
-from app.services.proposal_contact_sheets import build_proposal_contact_sheets
-from app.services.vlm_smoke_runner import run_persisted_vlm_smoke_test
+from backend.app.config import load_environment
+from backend.app.services.evaluation_result_store import JsonlVLMSmokeResultStore
+from backend.app.services.gemini_vlm_proposal_selector import GeminiVLMProposalSelector
+from backend.app.services.ollama_vlm_proposal_selector import VLMProposalSelectionInput
+from backend.app.services.proposal_contact_sheets import build_proposal_contact_sheets
+from backend.app.services.vlm_smoke_runner import run_persisted_vlm_smoke_test
 from evaluation.run_local_vlm_contact_sheet_smoke_v02 import (
     _proposal,
     _synthetic_jpeg,

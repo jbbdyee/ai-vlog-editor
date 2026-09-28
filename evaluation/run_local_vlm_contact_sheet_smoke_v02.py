@@ -2,18 +2,18 @@
 
 import subprocess
 
-from app.services.evaluation_result_store import JsonlVLMSmokeResultStore
-from app.services.ollama_vlm_proposal_selector import (
+from backend.app.services.evaluation_result_store import JsonlVLMSmokeResultStore
+from backend.app.services.ollama_vlm_proposal_selector import (
     OllamaVLMProposalSelector,
     VLMProposalSelectionInput,
 )
-from app.services.proposal_contact_sheets import build_proposal_contact_sheets
-from app.services.scene_boundary_proposals import (
+from backend.app.services.proposal_contact_sheets import build_proposal_contact_sheets
+from backend.app.services.scene_boundary_proposals import (
     ProposalFrameSample,
     ProposalKind,
     SceneBoundaryProposal,
 )
-from app.services.vlm_smoke_runner import run_persisted_vlm_smoke_test
+from backend.app.services.vlm_smoke_runner import run_persisted_vlm_smoke_test
 
 
 RUN_ID = "local-vlm-contact-sheet-smoke-v0.2-run1"
