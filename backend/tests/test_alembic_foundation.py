@@ -6,6 +6,7 @@ from alembic.script import ScriptDirectory
 
 from backend.app.config import PROJECT_ROOT
 from backend.app.database import Base
+import backend.app.models  # noqa: F401  # Register v1 product metadata.
 
 
 class AlembicFoundationTests(TestCase):
@@ -17,4 +18,13 @@ class AlembicFoundationTests(TestCase):
         self.assertEqual(Path(script.dir).resolve(), PROJECT_ROOT / "backend" / "alembic")
         self.assertIsNone(config.get_main_option("sqlalchemy.url", None))
         self.assertTrue((Path(script.dir) / "env.py").is_file())
-        self.assertEqual(dict(Base.metadata.tables), {})
+        self.assertEqual(
+            set(Base.metadata.tables),
+            {
+                "projects",
+                "source_videos",
+                "processing_stages",
+                "transcripts",
+                "edit_memos",
+            },
+        )

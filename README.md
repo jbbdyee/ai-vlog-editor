@@ -95,7 +95,8 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] Ground Truth 대비 IoU·Coverage·구간 경계 오차 계산
 - [x] FFmpeg 기반 MP4 클립 생성 — H.264/AAC 재인코딩 및 실제 `eval_01.MOV` 5초 Candidate 검증
 - [x] MVP End-to-End application service — probe, 오디오 추출, STT, 메모 탐지, 명시적으로 주입된 Scene Selector와 클립 렌더링을 순차 실행
-- [x] Cutory v1 PostgreSQL 개발 기반 — PostgreSQL 17.11 Compose, SQLAlchemy 2.x Engine/Session, Alembic 환경과 분리된 DB 테스트
+- [x] Cutory v1 PostgreSQL 개발 기반 — PostgreSQL 17.11 Compose, SQLAlchemy 2.x Engine/Session과 분리된 DB 테스트
+- [x] Cutory v1 Product Data Model — Project, SourceVideo, ProcessingStage, Transcript, EditMemo와 최초 Alembic revision
 
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 
@@ -126,7 +127,7 @@ $env:RUN_DATABASE_INTEGRATION_TESTS = "1"
 .\.venv\Scripts\python.exe -m alembic current
 ```
 
-`.env`는 Git에서 제외된다. `compose.yaml`은 Docker named volume을 사용하므로 PostgreSQL data directory가 저장소에 생성되지 않는다. 현재 Product model과 migration revision은 없으며 다음 v1 단계에서 실제 schema 변경과 함께 revision을 추가한다.
+`.env`는 Git에서 제외된다. `compose.yaml`은 Docker named volume을 사용하므로 PostgreSQL data directory가 저장소에 생성되지 않는다. 최초 Product revision은 `projects`, `source_videos`, `processing_stages`, `transcripts`, `edit_memos`를 생성한다. 로컬 PostgreSQL에서 upgrade, schema inspection, downgrade와 re-upgrade를 검증했다. 아직 Repository, CRUD/API 또는 기존 Pipeline persistence는 연결하지 않았다.
 
 ## Run the Current API
 

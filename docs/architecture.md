@@ -38,7 +38,7 @@ Video Asset
 
 ### PostgreSQL Foundation
 
-Cutory v1의 구조화 상태 저장 기반은 PostgreSQL 17.11과 SQLAlchemy 2.x를 사용한다. `backend/app/config.py`가 `POSTGRES_*` 환경변수를 검증하고 credential을 노출하지 않는 SQLAlchemy URL을 구성하며, `backend/app/database.py`가 동기 Engine, Session factory, session lifecycle과 `SELECT 1` 연결 검증을 제공한다. `backend/alembic/`은 같은 application config와 빈 `Base.metadata`를 참조한다. 아직 Product model, table 또는 migration revision은 없고 기존 Baseline FastAPI startup도 DB 연결을 강제하지 않는다.
+Cutory v1의 구조화 상태 저장 기반은 PostgreSQL 17.11과 SQLAlchemy 2.x를 사용한다. `backend/app/config.py`가 `POSTGRES_*` 환경변수를 검증하고 credential을 노출하지 않는 SQLAlchemy URL을 구성하며, `backend/app/database.py`가 동기 Engine, Session factory, session lifecycle과 `SELECT 1` 연결 검증을 제공한다. `backend/app/models/product.py`는 Project, SourceVideo, ProcessingStage, Transcript, EditMemo를 분리하고 UUID lineage, current stage unique rule, source fingerprint와 result validity metadata를 정의한다. Transcript segment/word timestamp는 row 폭증 없이 후속 Scene Intelligence가 사용할 수 있도록 구조화 JSON으로 보존한다. `backend/alembic/`은 같은 application config와 Product metadata를 참조하며 최초 revision의 실제 PostgreSQL upgrade, downgrade와 re-upgrade를 검증했다. 아직 Repository, CRUD/API, Resume/Retry engine 또는 기존 Pipeline persistence는 연결하지 않았고 기존 Baseline FastAPI startup도 DB 연결을 강제하지 않는다.
 
 ### API 또는 실행 진입점
 

@@ -5,6 +5,7 @@ from sqlalchemy import engine_from_config, pool
 
 from backend.app.config import DatabaseSettings
 from backend.app.database import Base
+import backend.app.models  # noqa: F401  # Register product metadata for Alembic.
 
 
 config = context.config

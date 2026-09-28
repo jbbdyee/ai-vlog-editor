@@ -15,6 +15,7 @@ from backend.app.database import (
     get_database_session,
     session_scope,
 )
+import backend.app.models  # noqa: F401  # Register v1 product metadata.
 
 
 class DatabaseFoundationTests(TestCase):
@@ -85,5 +86,14 @@ class DatabaseFoundationTests(TestCase):
         self.assertNotIn("unit-test-secret", str(raised.exception))
         self.assertIsNone(raised.exception.__cause__)
 
-    def test_foundation_metadata_contains_no_product_tables(self) -> None:
-        self.assertEqual(dict(Base.metadata.tables), {})
+    def test_foundation_metadata_contains_v1_product_tables(self) -> None:
+        self.assertEqual(
+            set(Base.metadata.tables),
+            {
+                "projects",
+                "source_videos",
+                "processing_stages",
+                "transcripts",
+                "edit_memos",
+            },
+        )
