@@ -1,0 +1,4 @@
+Cutory database migrations are managed by Alembic.
+
+The database URL is loaded from the application's POSTGRES_* environment settings.
+No product tables or initial revision are created in the PostgreSQL Foundation step.

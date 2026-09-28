@@ -36,6 +36,10 @@ Video Asset
 
 ## 3. 컴포넌트 경계
 
+### PostgreSQL Foundation
+
+Cutory v1의 구조화 상태 저장 기반은 PostgreSQL 17.11과 SQLAlchemy 2.x를 사용한다. `backend/app/config.py`가 `POSTGRES_*` 환경변수를 검증하고 credential을 노출하지 않는 SQLAlchemy URL을 구성하며, `backend/app/database.py`가 동기 Engine, Session factory, session lifecycle과 `SELECT 1` 연결 검증을 제공한다. `backend/alembic/`은 같은 application config와 빈 `Base.metadata`를 참조한다. 아직 Product model, table 또는 migration revision은 없고 기존 Baseline FastAPI startup도 DB 연결을 강제하지 않는다.
+
 ### API 또는 실행 진입점
 
 입력을 받아 처리 작업을 시작한다. HTTP 업로드는 인터페이스일 뿐 핵심 영상 처리 로직을 포함하지 않는다. 같은 파이프라인을 로컬 파일에서도 호출할 수 있게 분리한다.

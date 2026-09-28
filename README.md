@@ -95,6 +95,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] Ground Truth 대비 IoU·Coverage·구간 경계 오차 계산
 - [x] FFmpeg 기반 MP4 클립 생성 — H.264/AAC 재인코딩 및 실제 `eval_01.MOV` 5초 Candidate 검증
 - [x] MVP End-to-End application service — probe, 오디오 추출, STT, 메모 탐지, 명시적으로 주입된 Scene Selector와 클립 렌더링을 순차 실행
+- [x] Cutory v1 PostgreSQL 개발 기반 — PostgreSQL 17.11 Compose, SQLAlchemy 2.x Engine/Session, Alembic 환경과 분리된 DB 테스트
 
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 
@@ -110,10 +111,27 @@ Streamlit MVP는 backend service를 직접 import하지 않는 HTTP client다. �
 
 원본 테스트 영상은 개인정보와 용량 문제로 Git에 포함하지 않습니다.
 
+## Local PostgreSQL Foundation
+
+Cutory v1은 Product table을 추가하기 전에 PostgreSQL 17.11, SQLAlchemy 2.x와 Alembic을 사용하는 개발 기반을 먼저 구성한다. 현재 DB 연결은 기존 Baseline API startup과 분리되어 있으므로 PostgreSQL을 실행하지 않아도 기존 `/health`와 영상 처리 기능을 사용할 수 있다.
+
+PowerShell에서 로컬 DB를 준비하고 연결을 확인한다.
+
+```powershell
+Copy-Item .env.example .env
+# .env의 POSTGRES_PASSWORD를 로컬 전용 값으로 변경한다.
+docker compose up -d postgres
+$env:RUN_DATABASE_INTEGRATION_TESTS = "1"
+.\.venv\Scripts\python.exe -m unittest backend.tests.integration.test_postgresql_connection -v
+.\.venv\Scripts\python.exe -m alembic current
+```
+
+`.env`는 Git에서 제외된다. `compose.yaml`은 Docker named volume을 사용하므로 PostgreSQL data directory가 저장소에 생성되지 않는다. 현재 Product model과 migration revision은 없으며 다음 v1 단계에서 실제 schema 변경과 함께 revision을 추가한다.
+
 ## Run the Current API
 
 ```powershell
-python -m uvicorn backend.app.main:app --reload
+.\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --reload
 ```
 
 실행 후 `/health`에서 현재 API 상태를 확인할 수 있습니다.
@@ -121,7 +139,7 @@ python -m uvicorn backend.app.main:app --reload
 별도 터미널에서 Frontend를 실행합니다.
 
 ```powershell
-python -m streamlit run frontend/app.py
+.\.venv\Scripts\python.exe -m streamlit run frontend/app.py
 ```
 
 Backend 주소를 바꾸려면 `BACKEND_URL` 환경변수를 설정합니다. 기본값은 `http://127.0.0.1:8000`입니다.
