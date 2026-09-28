@@ -48,6 +48,8 @@ class SourceStorage(Protocol):
 
     def exists(self, resource_reference: str) -> bool: ...
 
+    def resolve(self, resource_reference: str) -> Path: ...
+
     def delete(self, resource_reference: str) -> None: ...
 
 
@@ -102,6 +104,10 @@ class LocalSourceStorage:
 
     def exists(self, resource_reference: str) -> bool:
         return self._resolve_reference(resource_reference).is_file()
+
+    def resolve(self, resource_reference: str) -> Path:
+        """Resolve an opaque reference without weakening root-escape validation."""
+        return self._resolve_reference(resource_reference)
 
     def delete(self, resource_reference: str) -> None:
         try:

@@ -46,6 +46,12 @@ Cutory v1의 구조화 상태 저장 기반은 PostgreSQL 17.11과 SQLAlchemy 2.
 
 `backend/app/services/source_ingestion.py`는 Project 존재 확인, original 저장, SourceVideo `READY` 등록과 네 processing stage의 `PENDING` 초기화를 한 use case로 묶는다. 같은 Project의 동일 fingerprint는 감지하지만 UX 정책이 정해지기 전에는 거부하지 않는다. DB 저장 실패 시 이미 저장된 original을 보상 삭제하며 cleanup 실패는 원래 DB 오류와 분리된 안전한 diagnostic으로 남긴다. 이 단계는 application/service 수준만 제공하며 Project API나 Probe·Audio Extraction·STT·Memo Detection을 자동 실행하지 않는다. 기존 Baseline `uploads/`는 Product lifetime original storage와 수명주기가 달라 계속 분리한다.
 
+### Product Source Processing
+
+`backend/app/services/source_processing.py`는 SourceVideo 하나를 처리하는 application 경계다. `LocalSourceStorage.resolve()`로 검증된 original path를 얻고 기존 `probe_media`, `extract_audio`, `transcribe_audio`, `detect_edit_memos`를 순서대로 재사용한다. Probe 결과는 SourceVideo metadata에, segment/word timestamp를 포함한 STT 결과는 Transcript JSON에, memo DTO는 EditMemo row에 매핑한다. Memo가 0개여도 정상 완료다.
+
+각 ProcessingStage의 RUNNING 상태와 성공/실패 결과는 별도 commit하여 이전 완료 결과가 다음 stage 실패 뒤에도 남는다. stage input fingerprint에는 SourceVideo fingerprint를 기록하고, 알 수 없는 tool/config version은 만들지 않는다. 실패 DB 필드는 고정된 안전한 code/message만 저장하며 traceback, 로컬 절대 경로와 원본 provider 응답은 저장하지 않는다. SourceVideo는 처리 중 `PROCESSING`, 전체 성공 시 `COMPLETED`, stage 실패 시 `FAILED`가 된다. `backend/app/storage/processing_workspace.py`의 source-owned temporary workspace는 WAV를 original과 분리하고 성공·실패 뒤 정리한다. 기존 Baseline `VideoProcessingPipeline`은 변경하지 않으며 Resume/Retry/Reprocess와 multi-source coordination은 후속 단계다.
+
 ### API 또는 실행 진입점
 
 입력을 받아 처리 작업을 시작한다. HTTP 업로드는 인터페이스일 뿐 핵심 영상 처리 로직을 포함하지 않는다. 같은 파이프라인을 로컬 파일에서도 호출할 수 있게 분리한다.

@@ -230,6 +230,7 @@ evaluation/data/*
 uploads/
 outputs/
 /storage/
+/temporary/
 
 # 테스트 오디오 데이터
 evaluation/audio/*

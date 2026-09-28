@@ -8,6 +8,10 @@ from backend.app.storage.source_storage import (
     SourceStorageError,
     StoredSource,
 )
+from backend.app.storage.processing_workspace import (
+    LocalProcessingWorkspace,
+    ProcessingWorkspaceError,
+)
 
 __all__ = [
     "FINGERPRINT_ALGORITHM",
@@ -16,4 +20,6 @@ __all__ = [
     "SourceStorage",
     "SourceStorageError",
     "StoredSource",
+    "LocalProcessingWorkspace",
+    "ProcessingWorkspaceError",
 ]
