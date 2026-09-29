@@ -1,6 +1,8 @@
 # Cutory v1 — Project & Large Video Foundation
 
-> Status: Phase C-2 — v1 Detailed Plan Documentation
+> Status: Completed
+>
+> Completion evidence: [v1 Completion](v1-completion.md), [Foundation Evaluation](../../evaluation/results/cutory-v1-foundation-eval-v0.1.md)
 >
 > 이 문서는 [Cutory Version Roadmap](version-roadmap.md)의 v1을 구현하기 위한 상세 계획이다. 구현 코드, 확정 DB schema, 특정 ORM·queue·cloud vendor 선택을 포함하지 않는다.
 

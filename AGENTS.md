@@ -10,10 +10,10 @@
 
 ## 현재 범위
 
-- 현재 구현 대상은 Version Roadmap의 `v1 — Project & Large Video Foundation`이다.
-- 현재 개발 범위와 완료 조건은 `docs/roadmap/v1-plan.md`를 가장 직접적인 기준으로 한다.
-- v1은 Project, 100+ SourceVideo, PostgreSQL 기반 상태·결과 저장, Resume/Retry/Reprocess와 Partial Failure를 위한 기반을 구축한다.
-- Scene Agent, MCP, LangGraph, Multi-Agent, RAG, Creative Editing, Reviewer, Final Mobile App, Short-form은 v1 범위가 아니다.
+- Version Roadmap의 `v1 — Project & Large Video Foundation`은 완료됐다.
+- 완료 범위와 근거는 `docs/roadmap/v1-plan.md`, `docs/roadmap/v1-completion.md`, `evaluation/results/cutory-v1-foundation-eval-v0.1.md`를 따른다.
+- 현재 단계는 `v2 — Tool / MCP & Scene Intelligence`의 Detailed Design이며 v2 구현은 아직 시작하지 않았다.
+- 아직 존재하지 않는 v2 Detailed Plan을 추측해 구현하거나 Scene Agent, LangGraph, Multi-Agent, RAG, Creative Editing, Reviewer, Final Mobile App, Short-form을 앞당기지 않는다.
 - 미결정 사항을 임의로 확정하거나 포트폴리오 목적만으로 기술을 추가하지 않는다.
 
 ## 기준 문서
@@ -22,10 +22,11 @@
 
 1. Full Product: `docs/product/full-development-plan.md`
 2. Version 구현 순서: `docs/roadmap/version-roadmap.md`
-3. 현재 v1 Detailed Plan: `docs/roadmap/v1-plan.md`
-4. Historical Baseline: `docs/mvp-v1-spec.md`, `evaluation/results/`, `docs/integration-eval01-v0.1.md`, `docs/browser-e2e-v0.1.md`
+3. 완료된 v1: `docs/roadmap/v1-plan.md`, `docs/roadmap/v1-completion.md`, `evaluation/results/cutory-v1-foundation-eval-v0.1.md`
+4. 현재 Version Detailed Plan: v2 Detailed Plan은 아직 생성되지 않음
+5. Historical Baseline: `docs/mvp-v1-spec.md`, `evaluation/results/`의 과거 실험, `docs/integration-eval01-v0.1.md`, `docs/browser-e2e-v0.1.md`
 
-현재 저장소의 코드와 자동화된 테스트는 이미 구현된 사실의 기준이다. 문서와 코드가 다르면 차이를 숨기지 말고 먼저 보고하되, 과거 Baseline 문서로 현재 v1 범위를 축소하지 않는다.
+현재 저장소의 코드와 자동화된 테스트는 이미 구현된 사실의 기준이다. 문서와 코드가 다르면 차이를 숨기지 말고 먼저 보고하되, 과거 Baseline 문서로 완료된 v1 범위를 축소하지 않는다.
 
 `docs/mvp-v1-spec.md`의 “MVP v1”은 현재 Version Roadmap의 v1과 다른 단일 영상 Baseline의 역사적 명칭이다. 기존 Evaluation과 통합 검증 기록도 Baseline history로 보존하며 현재 Version의 Scope 문서로 사용하지 않는다.
 

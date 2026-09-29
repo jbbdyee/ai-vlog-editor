@@ -55,6 +55,10 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 ## Documentation
 
 - [Cutory Full Product Design Source of Truth](docs/product/full-development-plan.md)
+- [Version Roadmap](docs/roadmap/version-roadmap.md)
+- [Completed v1 Detailed Plan](docs/roadmap/v1-plan.md)
+- [Cutory v1 Completion](docs/roadmap/v1-completion.md)
+- [Cutory v1 Foundation Evaluation](evaluation/results/cutory-v1-foundation-eval-v0.1.md)
 - [Full Product Architecture](docs/architecture/full-architecture.md)
 - [Full Product User Journey](docs/product/user-journey.md)
 - [Product Specification](docs/product-spec.md)
@@ -69,9 +73,13 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 
 ## Current Repository Status
 
-2026-09-24 현재 저장소에서 확인된 상태입니다.
+2026-09-29 현재 저장소에서 확인된 상태입니다.
 
-> 아래는 현재 Baseline/MVP 구현 상태다. Multi-Agent, MCP, RAG, Memory, 100+ 영상 처리를 포함한 [Full Product Design](docs/product/full-development-plan.md)은 최종 제품 방향이며 현재 구현 완료를 의미하지 않는다.
+> Current: **v1 — Project & Large Video Foundation: Completed**
+>
+> Next: **v2 — Tool / MCP & Scene Intelligence: Detailed Design**
+>
+> 아래 목록은 Historical Baseline과 완료된 v1 구현 상태를 함께 구분해 기록한다. [Full Product Design](docs/product/full-development-plan.md) 전체가 구현됐다는 의미는 아니다.
 
 - [x] 프로젝트 문제와 제품 원칙 정의
 - [x] MVP v1 범위 및 평가 전략 정의
@@ -102,6 +110,8 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] Cutory v1 Source Resume — 결과 유효성 기반 Resume, 명시적 Retry/Reprocess, stale RUNNING 복구와 downstream invalidation
 - [x] Cutory v1 Project Processing — 다중 Source 선택·순차/제한 동시 처리, 완료 결과 재사용과 부분 실패 집계
 - [x] Cutory v1 Project API — Project/Source 등록, 202 processing 시작과 PostgreSQL 기반 진행 상태 조회
+- [x] Cutory v1 Foundation Evaluation — 120 synthetic Source와 480 Stage의 scale/state/failure 검증
+- [x] Cutory v1 Completion — Completion Gate, 한계와 v2 handoff 문서화
 
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 
@@ -132,19 +142,19 @@ $env:RUN_DATABASE_INTEGRATION_TESTS = "1"
 .\.venv\Scripts\python.exe -m alembic current
 ```
 
-`.env`는 Git에서 제외된다. `compose.yaml`은 Docker named volume을 사용하므로 PostgreSQL data directory가 저장소에 생성되지 않는다. 최초 Product revision은 `projects`, `source_videos`, `processing_stages`, `transcripts`, `edit_memos`를 생성한다. 로컬 PostgreSQL에서 upgrade, schema inspection, downgrade와 re-upgrade를 검증했다. 아직 Repository, CRUD/API 또는 기존 Pipeline persistence는 연결하지 않았다.
+`.env`는 Git에서 제외된다. `compose.yaml`은 Docker named volume을 사용하므로 PostgreSQL data directory가 저장소에 생성되지 않는다. 최초 Product revision은 `projects`, `source_videos`, `processing_stages`, `transcripts`, `edit_memos`를 생성한다. 로컬 PostgreSQL에서 upgrade, schema inspection, downgrade와 re-upgrade를 검증했다. 기존 단일 영상 Baseline은 DB startup을 강제하지 않으며, v1 Product application/API 경로가 별도로 PostgreSQL을 사용한다.
 
 ## Product Original Source Storage
 
 Product source ingestion은 원본 MOV/MP4 binary를 저장소 루트의 `storage/originals/projects/<project-id>/sources/` 아래 UUID 파일명으로 저장하고, PostgreSQL `source_videos`에는 원본 파일명, machine-independent 상대 resource reference와 SHA-256 fingerprint만 기록한다. 파일 저장과 동시에 fingerprint를 계산하며, 같은 Project의 동일 fingerprint는 식별 정보로 반환하되 자동 거부하지 않는다. 등록된 SourceVideo는 `READY`, PROBE·AUDIO_EXTRACTION·STT·MEMO_DETECTION stage는 `PENDING`으로 시작한다.
 
-이 경로는 기존 단일 영상 Baseline의 `uploads/`와 분리되어 있고 Git에서 제외된다. 현재 ingestion은 application/service 수준이며 Project API, media analysis 자동 실행, Resume/Retry/Reprocess와 Object Storage는 아직 구현하지 않았다.
+이 경로는 기존 단일 영상 Baseline의 `uploads/`와 분리되어 있고 Git에서 제외된다. ingestion은 Project API와 Product processing 경로에서 사용되며, Resume/Retry/Reprocess까지 연결됐다. Object Storage는 아직 구현하지 않았다.
 
 ## Product Source Processing
 
 `process_source()` application service는 등록된 SourceVideo 하나를 Original Storage reference로 해석한 뒤 기존 Media Probe → Audio Extraction → faster-whisper STT(`word_timestamps=True`) → Memo Detection 서비스를 순서대로 호출한다. 각 ProcessingStage는 `PENDING → RUNNING → COMPLETED` 또는 `FAILED`를 별도 commit하고, media metadata는 SourceVideo에, timestamp가 포함된 STT 결과는 Transcript에, 탐지 결과는 EditMemo에 저장한다. 오류 필드에는 stage별 안전한 code/message만 기록한다.
 
-추출 WAV는 `temporary/projects/<project-id>/sources/<source-id>/audio/` 아래에만 생성하고 성공·실패 후 source workspace를 정리한다. Original source는 삭제하지 않는다. 기존 `VideoProcessingPipeline`과 HTTP API는 Baseline regression 경로로 그대로 공존하며, 현재 Product 경로에는 자동 Resume/Retry/Reprocess, multi-source coordinator 또는 새 API가 없다.
+추출 WAV는 `temporary/projects/<project-id>/sources/<source-id>/audio/` 아래에만 생성하고 성공·실패 후 source workspace를 정리한다. Original source는 삭제하지 않는다. 기존 `VideoProcessingPipeline`과 HTTP API는 Baseline regression 경로로 그대로 공존하며, Product 경로는 명시적 Resume/Retry/Reprocess, multi-source Project runner와 Project API를 제공한다.
 
 ## Source Resume, Retry and Reprocess
 

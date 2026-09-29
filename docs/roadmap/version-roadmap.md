@@ -1,6 +1,6 @@
 # Cutory Version Roadmap
 
-> Status: Phase B — Version Roadmap
+> Status: Active Version Roadmap — v1 Completed, v2 Detailed Design Next
 >
 > 이 문서는 현재 Baseline에서 [Cutory Full Product Design](../product/full-development-plan.md)까지 도달하는 구현 순서를 정의한다. Full Product 범위를 축소하거나 각 Version의 상세 구현을 확정하는 문서가 아니다.
 
@@ -39,9 +39,9 @@ Design
 
 정확한 benchmark, dataset 규모, 품질 threshold와 운영 SLO는 각 Version Detailed Plan과 Evaluation 설계에서 사전에 고정한다. 평가 결과를 본 뒤 같은 실험의 성공 기준을 바꾸지 않는다.
 
-## 3. Baseline / v0 — 현재 구현 상태
+## 3. Baseline / v0 — Historical 구현 상태
 
-현재 저장소는 Full Product v1 완료 상태가 아니라 Baseline/feasibility/integration history를 가진 **v0**다. 현재 사실은 [README](../../README.md), [MVP v1 Specification](../mvp-v1-spec.md), [Pipeline Integration Verification](../integration-eval01-v0.1.md), [Browser E2E Verification](../browser-e2e-v0.1.md), [Evaluation Dataset](../../evaluation/README.md)과 `evaluation/results/` 기록을 기준으로 한다.
+이 절은 v1 시작 전 Baseline/feasibility/integration history인 **v0**를 보존한다. 당시 사실은 [README](../../README.md), [MVP v1 Specification](../mvp-v1-spec.md), [Pipeline Integration Verification](../integration-eval01-v0.1.md), [Browser E2E Verification](../browser-e2e-v0.1.md), [Evaluation Dataset](../../evaluation/README.md)과 `evaluation/results/` 기록을 기준으로 한다. 현재 v1 완료 상태는 [v1 Completion](v1-completion.md)을 따른다.
 
 ### 구현 및 실제 검증된 범위
 
@@ -72,7 +72,7 @@ Design
 
 이 실험들은 최종 Scene Intelligence로 확정된 것이 아니다. 성공과 실패 모두 v2의 Scene Evidence, candidate reduction, provider/runtime 판단과 평가 설계에 사용하는 근거다.
 
-### 현재 없는 Full Product capability
+### v0 당시 없던 Full Product capability
 
 - Project와 100+ SourceVideo의 product persistence
 - incremental/resumable multi-source processing과 project-level partial failure
@@ -124,6 +124,10 @@ v6 — 전체 사용자 경험, Final Render, optional Short-form과 배포를 �
 후속 Version 구현 중 앞 단계의 schema/capability를 확장할 수 있지만, 이미 검증된 결과를 이유 없이 다시 만들거나 history를 삭제하지 않는다.
 
 ## 5. v1 — Project & Large Video Foundation
+
+> Status: Completed
+>
+> Completion evidence: [v1 Completion](v1-completion.md), [Foundation Evaluation](../../evaluation/results/cutory-v1-foundation-eval-v0.1.md) (`cutory-v1-foundation-eval-v0.1-run1`)
 
 ### 목적
 
@@ -477,7 +481,7 @@ End-to-End Full Product, Final Render와 optional Short-form workflow, productio
 
 ## 12. Per-Version Detailed Plan 정책
 
-전체 Version의 구현 상세를 지금 한 번에 확정하지 않는다. Roadmap 검수 후 다음 작업은 v1 Detailed Plan 작성이다. 각 Version 시작 직전에 필요하면 다음 문서를 만든다.
+전체 Version의 구현 상세를 지금 한 번에 확정하지 않는다. v1은 완료됐으며, 다음 작업은 v1 결과를 입력으로 사용하는 v2 Detailed Plan 작성이다. 각 Version 시작 직전에 필요하면 다음 문서를 만든다.
 
 ```text
 docs/roadmap/v1-plan.md
@@ -493,7 +497,7 @@ docs/roadmap/v2-plan.md
 - 재사용 가능한 산출물과 남은 위험
 - 다음 Version의 dependency와 범위에 미치는 영향
 
-현재 Phase B에서는 이 `version-roadmap.md`만 생성하며 v1~v6 상세 계획은 작성하지 않는다.
+현재는 v2 Detailed Design 전환 단계이며 `docs/roadmap/v2-plan.md`는 아직 생성되지 않았다.
 
 ## 13. 의도적으로 미결정인 사항
 
@@ -520,7 +524,7 @@ docs/roadmap/v2-plan.md
 
 ## 14. 하지 않는 일
 
-- 현재 Baseline을 Full Product v1 완료 상태로 과장하지 않는다.
+- Historical Baseline을 완료된 Roadmap v1 또는 Full Product 완료 상태로 재해석하지 않는다.
 - Roadmap을 이유로 Full Product Design capability를 삭제하거나 축소하지 않는다.
 - 이 문서에서 repository migration, DB, Agent, MCP, LangGraph, RAG 또는 frontend를 구현하지 않는다.
 - 기존 Baseline/Evaluation 실패 기록을 삭제하거나 성공으로 재해석하지 않는다.
