@@ -56,7 +56,13 @@ Cutory v1의 구조화 상태 저장 기반은 PostgreSQL 17.11과 SQLAlchemy 2.
 
 `backend/app/services/source_processing_state.py`는 네 Stage의 dependency, result validity와 resume plan을 결정한다. PROBE는 필수 media metadata, STT는 구조화 Transcript, MEMO_DETECTION은 유효한 Transcript와 완료 상태를 요구한다. Memo row가 0개인 결과도 valid다. 모든 Stage는 현재 Source fingerprint와 자신의 `input_fingerprint`가 일치해야 하며 호출자가 실제로 아는 version expectation을 제공한 경우에만 config/tool/result version을 비교한다. 대용량 original의 SHA-256은 매 resume가 아니라 명시적 integrity check에서만 재계산하고 mismatch는 source identity 오류로 실행을 차단한다.
 
-Resume은 완료된 유효 결과를 재사용한다. WAV는 완료 뒤 삭제되므로 STT 재개 시 AUDIO를 별도 dependency recreation attempt로 다시 실행하고 attempt count에 남긴다. Retry는 FAILED Stage에 대한 단일 explicit operation이며 자동 loop가 없다. Reprocess는 지정 Stage와 downstream을 PENDING으로 invalidation하고, STT부터 다시 처리하면 기존 EditMemo와 Transcript를 삭제한 뒤 현재 결과 하나로 교체한다. stale RUNNING은 heartbeat/lease 대신 explicit cutoff 기반 recovery만 제공하며 `STALE_EXECUTION_RECOVERED`로 FAILED 상태를 durable하게 남긴 후 retry한다. Stage 시작 시 DB row lock과 상태 재검사로 동시 시작 race를 줄이지만 distributed lock을 보장하지 않는다. Project API, queue/worker와 multi-source coordinator는 아직 없다.
+Resume은 완료된 유효 결과를 재사용한다. WAV는 완료 뒤 삭제되므로 STT 재개 시 AUDIO를 별도 dependency recreation attempt로 다시 실행하고 attempt count에 남긴다. Retry는 FAILED Stage에 대한 단일 explicit operation이며 자동 loop가 없다. Reprocess는 지정 Stage와 downstream을 PENDING으로 invalidation하고, STT부터 다시 처리하면 기존 EditMemo와 Transcript를 삭제한 뒤 현재 결과 하나로 교체한다. stale RUNNING은 heartbeat/lease 대신 explicit cutoff 기반 recovery만 제공하며 `STALE_EXECUTION_RECOVERED`로 FAILED 상태를 durable하게 남긴 후 retry한다. Stage 시작 시 DB row lock과 상태 재검사로 동시 시작 race를 줄이지만 distributed lock을 보장하지 않는다. Project API와 queue/worker는 아직 없다.
+
+### Project Multi-Source Processing
+
+`backend/app/services/project_processing.py`는 Project 단위 application runner다. SourceVideo를 원본 파일명과 무관한 `created_at, id` 순서로 선택하고 각 Source마다 독립 Session으로 기존 `resume_source()`를 호출한다. 완료 결과는 Stage 상태뿐 아니라 기존 result-validity 규칙을 통과해야 재사용하며, FAILED는 자동 retry하지 않고 RUNNING은 명시적 stale recovery 없이 실행하지 않는다. Source별 오류는 안전한 code와 outcome으로 격리되어 뒤 Source 처리를 계속하고, Project는 전체 성공 시 `COMPLETED`, 일부 실패 시 `COMPLETED_WITH_WARNINGS`, 전부 실패 시 `FAILED`, blocked/remaining이 있으면 `PROCESSING`으로 남는다. Source가 없는 Project는 실행 완료로 과장하지 않고 `CREATED`를 유지한다.
+
+처리 진행률은 현재 `(완료 + 실패) / 전체 Source`의 단순 Source 완료 기준이며 UX 계약은 아니다. `max_concurrency`는 명시적으로 제한되고 기본값은 1이다. 병렬 실행도 Session을 공유하지 않지만 공유 STT model의 thread safety와 CPU/GPU·memory 사용량은 아직 평가되지 않았으므로 운영 기본 동시성을 높이지 않는다. 이 계층은 DB를 truth source로 사용하고 반환 DTO는 한 번의 실행 summary일 뿐이며, HTTP/background job, 자동 retry/stale recovery, cancellation과 distributed coordination은 포함하지 않는다.
 
 ### API 또는 실행 진입점
 

@@ -100,6 +100,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] Cutory v1 Source Ingestion — Project별 로컬 Original Storage, SourceVideo persistence, SHA-256 fingerprint와 PENDING stage 초기화
 - [x] Cutory v1 Source Processing — 기존 Probe·Audio·STT·Memo 서비스를 SourceVideo/ProcessingStage와 연결하고 결과를 PostgreSQL에 단계별 영속화
 - [x] Cutory v1 Source Resume — 결과 유효성 기반 Resume, 명시적 Retry/Reprocess, stale RUNNING 복구와 downstream invalidation
+- [x] Cutory v1 Project Processing — 다중 Source 선택·순차/제한 동시 처리, 완료 결과 재사용과 부분 실패 집계
 
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 
@@ -148,7 +149,13 @@ Product source ingestion은 원본 MOV/MP4 binary를 저장소 루트의 `storag
 
 Product Source processing은 Stage의 `COMPLETED`만 신뢰하지 않고 source fingerprint, 필수 Product 결과, 선택적으로 지정된 config/tool/result version을 함께 검사한다. `resume_source()`는 유효한 완료 Stage를 재사용하고 필요한 downstream만 실행한다. WAV는 temporary-by-default이므로 STT를 다시 실행해야 할 때 AUDIO를 dependency recreation attempt로 다시 기록하며 장기 보존하지 않는다. 원본 전체 SHA-256 재검사는 매 resume에 강제하지 않고 명시적인 integrity verification에서만 수행한다.
 
-`retry_source_stage()`는 FAILED Stage를 한 번 명시적으로 재실행하고 선택적 `max_attempts`로 호출자가 retry 한도를 제공할 수 있다. 자동 retry loop와 기본 횟수는 아직 없다. `reprocess_source_from()`은 지정 Stage부터 현재 Transcript/EditMemo를 교체하고 downstream을 다시 실행한다. RUNNING은 일반 resume에서 중복 실행하지 않으며, heartbeat가 없는 현재 구조에서는 `started_at`과 호출자 cutoff를 사용하는 explicit stale recovery 뒤에만 retry할 수 있다. Stage 시작은 DB row lock과 상태 재확인으로 보호하지만 distributed lock이나 multi-source coordinator를 구현한 것은 아니다.
+`retry_source_stage()`는 FAILED Stage를 한 번 명시적으로 재실행하고 선택적 `max_attempts`로 호출자가 retry 한도를 제공할 수 있다. 자동 retry loop와 기본 횟수는 아직 없다. `reprocess_source_from()`은 지정 Stage부터 현재 Transcript/EditMemo를 교체하고 downstream을 다시 실행한다. RUNNING은 일반 resume에서 중복 실행하지 않으며, heartbeat가 없는 현재 구조에서는 `started_at`과 호출자 cutoff를 사용하는 explicit stale recovery 뒤에만 retry할 수 있다. Stage 시작은 DB row lock과 상태 재확인으로 보호하지만 distributed lock을 보장하지 않는다.
+
+## Product Project Processing
+
+`process_project()`는 Project의 SourceVideo를 `created_at + id` 순서로 조회하고 Step 6의 `resume_source()`를 재사용한다. 유효한 완료 Source는 다시 실행하지 않고 `REUSED`, FAILED Source는 자동 retry 없이 보존하며, RUNNING Stage가 있는 Source는 명시적 stale recovery 전까지 `BLOCKED`로 남긴다. 한 Source 실패는 뒤 Source 처리를 중단하지 않으며 최종 Project 상태와 완료·실패·차단·잔여 수를 PostgreSQL 상태에서 집계한다.
+
+동시성은 `max_concurrency`로 제한하고 기본값은 1이다. 병렬 실행을 명시하면 Source마다 독립 SQLAlchemy Session을 사용하지만, faster-whisper 공유 모델의 동시 호출 안전성과 자원 사용량은 아직 평가하지 않았으므로 기본값을 높이지 않았다. 현재 경계는 동기 application service이며 Project API, background job, 자동 retry/stale recovery, queue/worker는 포함하지 않는다.
 
 ## Run the Current API
 
