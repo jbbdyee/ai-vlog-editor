@@ -62,7 +62,13 @@ Resume은 완료된 유효 결과를 재사용한다. WAV는 완료 뒤 삭제�
 
 `backend/app/services/project_processing.py`는 Project 단위 application runner다. SourceVideo를 원본 파일명과 무관한 `created_at, id` 순서로 선택하고 각 Source마다 독립 Session으로 기존 `resume_source()`를 호출한다. 완료 결과는 Stage 상태뿐 아니라 기존 result-validity 규칙을 통과해야 재사용하며, FAILED는 자동 retry하지 않고 RUNNING은 명시적 stale recovery 없이 실행하지 않는다. Source별 오류는 안전한 code와 outcome으로 격리되어 뒤 Source 처리를 계속하고, Project는 전체 성공 시 `COMPLETED`, 일부 실패 시 `COMPLETED_WITH_WARNINGS`, 전부 실패 시 `FAILED`, blocked/remaining이 있으면 `PROCESSING`으로 남는다. Source가 없는 Project는 실행 완료로 과장하지 않고 `CREATED`를 유지한다.
 
-처리 진행률은 현재 `(완료 + 실패) / 전체 Source`의 단순 Source 완료 기준이며 UX 계약은 아니다. `max_concurrency`는 명시적으로 제한되고 기본값은 1이다. 병렬 실행도 Session을 공유하지 않지만 공유 STT model의 thread safety와 CPU/GPU·memory 사용량은 아직 평가되지 않았으므로 운영 기본 동시성을 높이지 않는다. 이 계층은 DB를 truth source로 사용하고 반환 DTO는 한 번의 실행 summary일 뿐이며, HTTP/background job, 자동 retry/stale recovery, cancellation과 distributed coordination은 포함하지 않는다.
+처리 진행률은 현재 `(완료 + 실패) / 전체 Source`의 단순 Source 완료 기준이며 UX 계약은 아니다. `max_concurrency`는 명시적으로 제한되고 기본값은 1이다. 병렬 실행도 Session을 공유하지 않지만 공유 STT model의 thread safety와 CPU/GPU·memory 사용량은 아직 평가되지 않았으므로 운영 기본 동시성을 높이지 않는다. 이 계층은 DB를 truth source로 사용하고 반환 DTO는 한 번의 실행 summary일 뿐이며, runner 자체에는 자동 retry/stale recovery, cancellation과 distributed coordination이 없다.
+
+### Project API and In-process Execution
+
+`backend/app/routers/projects.py`는 Project 생성·조회, 단일 Source 등록, processing 시작과 상태 조회의 명시적 Pydantic DTO를 제공한다. Router는 ORM row나 storage reference를 그대로 노출하지 않고 `project_service.py`, `source_ingestion.py`, `project_processing.py`를 호출한다. 상태 조회는 executor counter가 아니라 PostgreSQL의 Project, SourceVideo, ProcessingStage와 result validity를 읽어 완료·실패·blocked·remaining을 계산한다. 따라서 process 재시작으로 active registry가 비어도 영속 상태를 조회할 수 있다.
+
+FastAPI lifespan은 기존 shared STT model과 Baseline semaphore를 유지하면서 Project 전용 단일-worker `ThreadPoolExecutor`와 thread-safe active Project registry를 소유한다. `POST /projects/{id}/process`는 작업을 등록한 뒤 `202 Accepted`를 반환하고 같은 process에서 동일 Project가 active하면 `409 Conflict`를 반환한다. executor shutdown은 lifespan에서 정리한다. 이 실행 경계는 event loop를 blocking media 처리로 막지 않고 동시성을 1로 제한하지만 durable queue, distributed lock 또는 다중 server coordination은 아니다. process 종료 후 자동 재개하지 않으며 사용자가 다시 시작을 요청하면 기존 Resume/Project runner가 유효 결과를 재사용한다.
 
 ### API 또는 실행 진입점
 

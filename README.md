@@ -101,6 +101,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] Cutory v1 Source Processing — 기존 Probe·Audio·STT·Memo 서비스를 SourceVideo/ProcessingStage와 연결하고 결과를 PostgreSQL에 단계별 영속화
 - [x] Cutory v1 Source Resume — 결과 유효성 기반 Resume, 명시적 Retry/Reprocess, stale RUNNING 복구와 downstream invalidation
 - [x] Cutory v1 Project Processing — 다중 Source 선택·순차/제한 동시 처리, 완료 결과 재사용과 부분 실패 집계
+- [x] Cutory v1 Project API — Project/Source 등록, 202 processing 시작과 PostgreSQL 기반 진행 상태 조회
 
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 
@@ -155,7 +156,21 @@ Product Source processing은 Stage의 `COMPLETED`만 신뢰하지 않고 source 
 
 `process_project()`는 Project의 SourceVideo를 `created_at + id` 순서로 조회하고 Step 6의 `resume_source()`를 재사용한다. 유효한 완료 Source는 다시 실행하지 않고 `REUSED`, FAILED Source는 자동 retry 없이 보존하며, RUNNING Stage가 있는 Source는 명시적 stale recovery 전까지 `BLOCKED`로 남긴다. 한 Source 실패는 뒤 Source 처리를 중단하지 않으며 최종 Project 상태와 완료·실패·차단·잔여 수를 PostgreSQL 상태에서 집계한다.
 
-동시성은 `max_concurrency`로 제한하고 기본값은 1이다. 병렬 실행을 명시하면 Source마다 독립 SQLAlchemy Session을 사용하지만, faster-whisper 공유 모델의 동시 호출 안전성과 자원 사용량은 아직 평가하지 않았으므로 기본값을 높이지 않았다. 현재 경계는 동기 application service이며 Project API, background job, 자동 retry/stale recovery, queue/worker는 포함하지 않는다.
+동시성은 `max_concurrency`로 제한하고 기본값은 1이다. 병렬 실행을 명시하면 Source마다 독립 SQLAlchemy Session을 사용하지만, faster-whisper 공유 모델의 동시 호출 안전성과 자원 사용량은 아직 평가하지 않았으므로 기본값을 높이지 않았다. Project runner 자체는 동기 application service이며 자동 retry/stale recovery와 queue/worker는 포함하지 않는다.
+
+## Product Project API
+
+Project 기반 제품 흐름은 다음 HTTP API로 노출된다.
+
+- `POST /projects` — Project 생성
+- `GET /projects/{project_id}` — Project 정보와 처리 집계 조회
+- `POST /projects/{project_id}/sources` — MOV/MP4 Source 하나 등록
+- `POST /projects/{project_id}/process` — 처리를 in-process executor에 요청하고 `202 Accepted` 반환
+- `GET /projects/{project_id}/processing` — PostgreSQL 기반 Project/Source/Stage 진행 상태 조회
+
+처리 시작 요청은 전체 영상 처리가 끝날 때까지 HTTP 연결을 유지하지 않는다. lifespan이 소유하는 단일-worker executor가 기존 `process_project()`를 실행하며 shared faster-whisper 모델을 재사용한다. 같은 프로세스 안에서 동일 Project의 중복 실행 요청은 `409 Conflict`로 거부한다. 이 registry는 distributed lock이 아니며 executor 작업도 durable queue가 아니다. 프로세스가 종료돼도 PostgreSQL의 Project/Source/Stage 상태는 유지되므로 상태 조회와 사용자 재요청의 기반은 남지만, startup 자동 resume는 아직 없다.
+
+응답은 allowlist DTO만 사용하며 storage reference, fingerprint 원문, 로컬 경로와 Transcript 본문을 포함하지 않는다. Project DB 환경변수가 없는 경우 Product API는 안전한 `503`을 반환하지만 기존 단일 영상 Baseline API startup과 실행은 계속 가능하다.
 
 ## Run the Current API
 
