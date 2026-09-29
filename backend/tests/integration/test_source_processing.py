@@ -1,7 +1,9 @@
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase, skipUnless
+from unittest.mock import Mock
 
 from sqlalchemy import delete, select
 
@@ -23,9 +25,23 @@ from backend.app.services.media_probe import MediaInfo
 from backend.app.services.memo_detector import EditMemo
 from backend.app.services.source_processing import (
     SourceProcessingServices,
+    SourceProcessingStateError,
+    SourceStageExecutionError,
     process_source,
+    reprocess_source_from,
+    resume_source,
+    retry_source_stage,
 )
-from backend.app.services.stt_service import STTResult, TranscriptSegment, TranscriptWord
+from backend.app.services.source_processing_state import (
+    determine_resume_plan,
+    recover_stale_running_stage,
+)
+from backend.app.services.stt_service import (
+    STTError,
+    STTResult,
+    TranscriptSegment,
+    TranscriptWord,
+)
 from backend.app.storage.processing_workspace import LocalProcessingWorkspace
 from backend.app.storage.source_storage import LocalSourceStorage
 
@@ -105,14 +121,7 @@ class SourceProcessingIntegrationTests(TestCase):
         self.temporary_directory.cleanup()
 
     def test_stage_and_analysis_results_are_durable_in_postgresql(self) -> None:
-        services = SourceProcessingServices(
-            probe=lambda _path: MediaInfo(
-                21.25, True, True, "hevc", "aac", "mov,mp4"
-            ),
-            extract=self._extract_audio,
-            transcribe=lambda _path, **_kwargs: _transcript_result(),
-            detect_memos=lambda _result: (_memo(),),
-        )
+        services = self._services()
 
         result = process_source(
             session=self.session,
@@ -153,11 +162,168 @@ class SourceProcessingIntegrationTests(TestCase):
         self.assertEqual(list((self.root / "temporary").rglob("*.wav")), [])
         self.assertTrue(self.storage.resolve(source.storage_reference).is_file())
 
+    def test_restart_plan_retry_and_completed_duplicate_guard(self) -> None:
+        failing_services = self._services()
+        failing_services.transcribe.side_effect = STTError("simulated crash failure")
+        with self.assertRaises(SourceStageExecutionError):
+            process_source(
+                session=self.session,
+                storage=self.storage,
+                workspace=self.workspace,
+                source_video_id=self.source_id,
+                services=failing_services,
+            )
+        self._restart_session()
+
+        plan = determine_resume_plan(
+            session=self.session, source_video_id=self.source_id
+        )
+        self.assertEqual(plan.start_stage, ProcessingStageKind.AUDIO_EXTRACTION)
+        self.assertIn(ProcessingStageKind.STT, plan.invalid_stages)
+
+        retry_services = self._services()
+        completed = retry_source_stage(
+            session=self.session,
+            storage=self.storage,
+            workspace=self.workspace,
+            source_video_id=self.source_id,
+            stage_kind=ProcessingStageKind.STT,
+            services=retry_services,
+        )
+        self.assertEqual(completed.processing_status, SourceVideoStatus.COMPLETED)
+        self._restart_session()
+
+        duplicate_guard_services = self._services()
+        resumed = resume_source(
+            session=self.session,
+            storage=self.storage,
+            workspace=self.workspace,
+            source_video_id=self.source_id,
+            services=duplicate_guard_services,
+        )
+        self.assertEqual(resumed.processing_status, SourceVideoStatus.COMPLETED)
+        duplicate_guard_services.probe.assert_not_called()
+        duplicate_guard_services.extract.assert_not_called()
+        duplicate_guard_services.transcribe.assert_not_called()
+        duplicate_guard_services.detect_memos.assert_not_called()
+
+    def test_reprocess_from_stt_replaces_persisted_results(self) -> None:
+        first = process_source(
+            session=self.session,
+            storage=self.storage,
+            workspace=self.workspace,
+            source_video_id=self.source_id,
+            services=self._services(),
+        )
+        old_transcript_id = first.transcript_id
+        self._restart_session()
+
+        second = reprocess_source_from(
+            session=self.session,
+            storage=self.storage,
+            workspace=self.workspace,
+            source_video_id=self.source_id,
+            from_stage=ProcessingStageKind.STT,
+            services=self._services(),
+        )
+        self._restart_session()
+
+        transcripts = self.session.scalars(
+            select(Transcript).where(Transcript.source_video_id == self.source_id)
+        ).all()
+        memos = self.session.scalars(
+            select(EditMemoRecord).where(
+                EditMemoRecord.source_video_id == self.source_id
+            )
+        ).all()
+        self.assertNotEqual(second.transcript_id, old_transcript_id)
+        self.assertEqual(len(transcripts), 1)
+        self.assertEqual(len(memos), 1)
+        self.assertEqual(memos[0].transcript_id, second.transcript_id)
+
+    def test_crash_restart_stale_recovery_is_persisted_before_retry(self) -> None:
+        source = self.session.get(SourceVideo, self.source_id)
+        stages = {
+            stage.stage: stage
+            for stage in self.session.scalars(
+                select(ProcessingStage).where(
+                    ProcessingStage.source_video_id == self.source_id
+                )
+            ).all()
+        }
+        source.duration_seconds = 21.25
+        source.video_codec = "hevc"
+        source.audio_codec = "aac"
+        source.format_name = "mov,mp4"
+        for kind in (ProcessingStageKind.PROBE, ProcessingStageKind.AUDIO_EXTRACTION):
+            stages[kind].status = ProcessingStageStatus.COMPLETED
+            stages[kind].attempt_count = 1
+            stages[kind].input_fingerprint = source.fingerprint
+        stages[ProcessingStageKind.STT].status = ProcessingStageStatus.RUNNING
+        stages[ProcessingStageKind.STT].attempt_count = 1
+        stages[ProcessingStageKind.STT].started_at = (
+            datetime.now(timezone.utc) - timedelta(hours=2)
+        )
+        stages[ProcessingStageKind.STT].input_fingerprint = source.fingerprint
+        source.processing_status = SourceVideoStatus.PROCESSING
+        self.session.commit()
+        self._restart_session()
+
+        with self.assertRaises(SourceProcessingStateError):
+            resume_source(
+                session=self.session,
+                storage=self.storage,
+                workspace=self.workspace,
+                source_video_id=self.source_id,
+                services=self._services(),
+            )
+        recover_stale_running_stage(
+            session=self.session,
+            source_video_id=self.source_id,
+            stage_kind=ProcessingStageKind.STT,
+            stale_before=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
+        self._restart_session()
+        recovered = self.session.scalar(
+            select(ProcessingStage).where(
+                ProcessingStage.source_video_id == self.source_id,
+                ProcessingStage.stage == ProcessingStageKind.STT,
+            )
+        )
+        self.assertEqual(recovered.status, ProcessingStageStatus.FAILED)
+        self.assertEqual(recovered.safe_error_code, "STALE_EXECUTION_RECOVERED")
+
+        result = retry_source_stage(
+            session=self.session,
+            storage=self.storage,
+            workspace=self.workspace,
+            source_video_id=self.source_id,
+            stage_kind=ProcessingStageKind.STT,
+            services=self._services(),
+        )
+        self.assertEqual(result.processing_status, SourceVideoStatus.COMPLETED)
+
     def _extract_audio(self, source_path: Path, output_directory: Path) -> ExtractedAudio:
         output_directory.mkdir(parents=True, exist_ok=True)
         audio_path = output_directory / "integration.wav"
         audio_path.write_bytes(b"RIFF-integration")
         return ExtractedAudio(source_path, audio_path, 21.25, 16_000, 1, "pcm_s16le")
+
+    def _services(self) -> SourceProcessingServices:
+        return SourceProcessingServices(
+            probe=Mock(
+                return_value=MediaInfo(
+                    21.25, True, True, "hevc", "aac", "mov,mp4"
+                )
+            ),
+            extract=Mock(side_effect=self._extract_audio),
+            transcribe=Mock(return_value=_transcript_result()),
+            detect_memos=Mock(return_value=(_memo(),)),
+        )
+
+    def _restart_session(self) -> None:
+        self.session.close()
+        self.session = self.factory()
 
 
 def _video_stream():

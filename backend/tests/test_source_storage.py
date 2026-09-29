@@ -46,6 +46,10 @@ class LocalSourceStorageTests(TestCase):
         stored_path = self.storage.resolve(stored.resource_reference)
         self.assertTrue(stored_path.is_relative_to(self.root))
         self.assertEqual(stored_path.read_bytes(), content)
+        self.assertEqual(
+            self.storage.fingerprint(stored.resource_reference),
+            stored.fingerprint,
+        )
 
         self.storage.delete(stored.resource_reference)
         self.assertFalse(self.storage.exists(stored.resource_reference))

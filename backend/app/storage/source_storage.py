@@ -50,6 +50,8 @@ class SourceStorage(Protocol):
 
     def resolve(self, resource_reference: str) -> Path: ...
 
+    def fingerprint(self, resource_reference: str) -> str: ...
+
     def delete(self, resource_reference: str) -> None: ...
 
 
@@ -108,6 +110,19 @@ class LocalSourceStorage:
     def resolve(self, resource_reference: str) -> Path:
         """Resolve an opaque reference without weakening root-escape validation."""
         return self._resolve_reference(resource_reference)
+
+    def fingerprint(self, resource_reference: str) -> str:
+        """Explicitly re-hash an original when an integrity check is requested."""
+        fingerprint = sha256()
+        try:
+            with self._resolve_reference(resource_reference).open("rb") as source_file:
+                while chunk := source_file.read(COPY_BUFFER_SIZE):
+                    fingerprint.update(chunk)
+        except OSError as error:
+            raise SourceStorageError(
+                "Could not verify the original source fingerprint."
+            ) from error
+        return fingerprint.hexdigest()
 
     def delete(self, resource_reference: str) -> None:
         try:

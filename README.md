@@ -99,6 +99,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] Cutory v1 Product Data Model — Project, SourceVideo, ProcessingStage, Transcript, EditMemo와 최초 Alembic revision
 - [x] Cutory v1 Source Ingestion — Project별 로컬 Original Storage, SourceVideo persistence, SHA-256 fingerprint와 PENDING stage 초기화
 - [x] Cutory v1 Source Processing — 기존 Probe·Audio·STT·Memo 서비스를 SourceVideo/ProcessingStage와 연결하고 결과를 PostgreSQL에 단계별 영속화
+- [x] Cutory v1 Source Resume — 결과 유효성 기반 Resume, 명시적 Retry/Reprocess, stale RUNNING 복구와 downstream invalidation
 
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 
@@ -142,6 +143,12 @@ Product source ingestion은 원본 MOV/MP4 binary를 저장소 루트의 `storag
 `process_source()` application service는 등록된 SourceVideo 하나를 Original Storage reference로 해석한 뒤 기존 Media Probe → Audio Extraction → faster-whisper STT(`word_timestamps=True`) → Memo Detection 서비스를 순서대로 호출한다. 각 ProcessingStage는 `PENDING → RUNNING → COMPLETED` 또는 `FAILED`를 별도 commit하고, media metadata는 SourceVideo에, timestamp가 포함된 STT 결과는 Transcript에, 탐지 결과는 EditMemo에 저장한다. 오류 필드에는 stage별 안전한 code/message만 기록한다.
 
 추출 WAV는 `temporary/projects/<project-id>/sources/<source-id>/audio/` 아래에만 생성하고 성공·실패 후 source workspace를 정리한다. Original source는 삭제하지 않는다. 기존 `VideoProcessingPipeline`과 HTTP API는 Baseline regression 경로로 그대로 공존하며, 현재 Product 경로에는 자동 Resume/Retry/Reprocess, multi-source coordinator 또는 새 API가 없다.
+
+## Source Resume, Retry and Reprocess
+
+Product Source processing은 Stage의 `COMPLETED`만 신뢰하지 않고 source fingerprint, 필수 Product 결과, 선택적으로 지정된 config/tool/result version을 함께 검사한다. `resume_source()`는 유효한 완료 Stage를 재사용하고 필요한 downstream만 실행한다. WAV는 temporary-by-default이므로 STT를 다시 실행해야 할 때 AUDIO를 dependency recreation attempt로 다시 기록하며 장기 보존하지 않는다. 원본 전체 SHA-256 재검사는 매 resume에 강제하지 않고 명시적인 integrity verification에서만 수행한다.
+
+`retry_source_stage()`는 FAILED Stage를 한 번 명시적으로 재실행하고 선택적 `max_attempts`로 호출자가 retry 한도를 제공할 수 있다. 자동 retry loop와 기본 횟수는 아직 없다. `reprocess_source_from()`은 지정 Stage부터 현재 Transcript/EditMemo를 교체하고 downstream을 다시 실행한다. RUNNING은 일반 resume에서 중복 실행하지 않으며, heartbeat가 없는 현재 구조에서는 `started_at`과 호출자 cutoff를 사용하는 explicit stale recovery 뒤에만 retry할 수 있다. Stage 시작은 DB row lock과 상태 재확인으로 보호하지만 distributed lock이나 multi-source coordinator를 구현한 것은 아니다.
 
 ## Run the Current API
 

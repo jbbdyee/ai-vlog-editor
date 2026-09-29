@@ -52,6 +52,12 @@ Cutory v1의 구조화 상태 저장 기반은 PostgreSQL 17.11과 SQLAlchemy 2.
 
 각 ProcessingStage의 RUNNING 상태와 성공/실패 결과는 별도 commit하여 이전 완료 결과가 다음 stage 실패 뒤에도 남는다. stage input fingerprint에는 SourceVideo fingerprint를 기록하고, 알 수 없는 tool/config version은 만들지 않는다. 실패 DB 필드는 고정된 안전한 code/message만 저장하며 traceback, 로컬 절대 경로와 원본 provider 응답은 저장하지 않는다. SourceVideo는 처리 중 `PROCESSING`, 전체 성공 시 `COMPLETED`, stage 실패 시 `FAILED`가 된다. `backend/app/storage/processing_workspace.py`의 source-owned temporary workspace는 WAV를 original과 분리하고 성공·실패 뒤 정리한다. 기존 Baseline `VideoProcessingPipeline`은 변경하지 않으며 Resume/Retry/Reprocess와 multi-source coordination은 후속 단계다.
 
+### Source Resume and Result Validity
+
+`backend/app/services/source_processing_state.py`는 네 Stage의 dependency, result validity와 resume plan을 결정한다. PROBE는 필수 media metadata, STT는 구조화 Transcript, MEMO_DETECTION은 유효한 Transcript와 완료 상태를 요구한다. Memo row가 0개인 결과도 valid다. 모든 Stage는 현재 Source fingerprint와 자신의 `input_fingerprint`가 일치해야 하며 호출자가 실제로 아는 version expectation을 제공한 경우에만 config/tool/result version을 비교한다. 대용량 original의 SHA-256은 매 resume가 아니라 명시적 integrity check에서만 재계산하고 mismatch는 source identity 오류로 실행을 차단한다.
+
+Resume은 완료된 유효 결과를 재사용한다. WAV는 완료 뒤 삭제되므로 STT 재개 시 AUDIO를 별도 dependency recreation attempt로 다시 실행하고 attempt count에 남긴다. Retry는 FAILED Stage에 대한 단일 explicit operation이며 자동 loop가 없다. Reprocess는 지정 Stage와 downstream을 PENDING으로 invalidation하고, STT부터 다시 처리하면 기존 EditMemo와 Transcript를 삭제한 뒤 현재 결과 하나로 교체한다. stale RUNNING은 heartbeat/lease 대신 explicit cutoff 기반 recovery만 제공하며 `STALE_EXECUTION_RECOVERED`로 FAILED 상태를 durable하게 남긴 후 retry한다. Stage 시작 시 DB row lock과 상태 재검사로 동시 시작 race를 줄이지만 distributed lock을 보장하지 않는다. Project API, queue/worker와 multi-source coordinator는 아직 없다.
+
 ### API 또는 실행 진입점
 
 입력을 받아 처리 작업을 시작한다. HTTP 업로드는 인터페이스일 뿐 핵심 영상 처리 로직을 포함하지 않는다. 같은 파이프라인을 로컬 파일에서도 호출할 수 있게 분리한다.

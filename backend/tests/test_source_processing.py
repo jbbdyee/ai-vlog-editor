@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
@@ -22,10 +23,21 @@ from backend.app.services.audio_extractor import ExtractedAudio
 from backend.app.services.media_probe import MediaInfo, MediaProbeError
 from backend.app.services.memo_detector import EditMemo, MemoDetectionError
 from backend.app.services.source_processing import (
+    SourceFingerprintMismatchError,
     SourceProcessingServices,
     SourceProcessingStateError,
     SourceStageExecutionError,
     process_source,
+    reprocess_source_from,
+    resume_source,
+    retry_source_stage,
+)
+from backend.app.services.source_processing_state import (
+    SourceStateError,
+    StageVersionExpectation,
+    determine_resume_plan,
+    invalidate_from_stage,
+    recover_stale_running_stage,
 )
 from backend.app.services.stt_service import (
     STTError,
@@ -214,6 +226,232 @@ class SourceProcessingTests(TestCase):
         )
         self.assertTrue(original_path.is_file())
 
+    def test_resume_reuses_all_valid_completed_results_without_service_calls(self) -> None:
+        first = self._process()
+        original_transcript_id = first.transcript_id
+        self._reset_services()
+
+        resumed = self._resume()
+
+        self.assertEqual(resumed.transcript_id, original_transcript_id)
+        self.assertEqual(resumed.memo_count, 1)
+        self.assertEqual(self.events, [])
+        self.services.probe.assert_not_called()
+        self.services.extract.assert_not_called()
+        self.services.transcribe.assert_not_called()
+        self.services.detect_memos.assert_not_called()
+
+    def test_resume_reuses_probe_and_recreates_ephemeral_audio_for_stt(self) -> None:
+        self._complete_probe_only()
+
+        result = self._resume()
+
+        self.assertEqual(result.processing_status, SourceVideoStatus.COMPLETED)
+        self.assertEqual(self.events, ["extract", "transcribe", "detect"])
+        self.services.probe.assert_not_called()
+
+    def test_resume_with_valid_transcript_runs_only_pending_memo(self) -> None:
+        self._process()
+        invalidate_from_stage(
+            session=self.session,
+            source_video_id=self.source.id,
+            from_stage=ProcessingStageKind.MEMO_DETECTION,
+        )
+        self._reset_services()
+
+        result = self._resume()
+
+        self.assertEqual(result.processing_status, SourceVideoStatus.COMPLETED)
+        self.assertEqual(self.events, ["detect"])
+
+    def test_missing_transcript_invalidates_stt_and_requires_audio_recreation(self) -> None:
+        self._process()
+        transcript = self.session.scalar(
+            select(Transcript).where(Transcript.source_video_id == self.source.id)
+        )
+        for memo in list(transcript.edit_memos):
+            self.session.delete(memo)
+        self.session.delete(transcript)
+        self.session.commit()
+
+        plan = determine_resume_plan(session=self.session, source_video_id=self.source.id)
+
+        self.assertIn(ProcessingStageKind.STT, plan.invalid_stages)
+        self.assertEqual(plan.start_stage, ProcessingStageKind.AUDIO_EXTRACTION)
+
+    def test_zero_memo_completed_result_is_valid_for_resume(self) -> None:
+        self.services.detect_memos.side_effect = lambda _result: ()
+        self._process()
+        self._reset_services()
+
+        plan = determine_resume_plan(session=self.session, source_video_id=self.source.id)
+        result = self._resume()
+
+        self.assertEqual(plan.execution_stages, ())
+        self.assertEqual(result.memo_count, 0)
+        self.assertEqual(self.events, [])
+
+    def test_fingerprint_and_version_mismatch_invalidate_completed_results(self) -> None:
+        self._process()
+        stt_stage = self._stage(ProcessingStageKind.STT)
+        stt_stage.tool_version = "old-tool"
+        self.session.commit()
+
+        version_plan = determine_resume_plan(
+            session=self.session,
+            source_video_id=self.source.id,
+            version_expectations={
+                ProcessingStageKind.STT: StageVersionExpectation(
+                    tool_version="new-tool"
+                )
+            },
+        )
+        stt_stage.input_fingerprint = "different-fingerprint"
+        self.session.commit()
+        fingerprint_plan = determine_resume_plan(
+            session=self.session, source_video_id=self.source.id
+        )
+
+        self.assertIn(ProcessingStageKind.STT, version_plan.invalid_stages)
+        self.assertIn(ProcessingStageKind.STT, fingerprint_plan.invalid_stages)
+
+    def test_explicit_original_hash_verification_rejects_changed_bytes(self) -> None:
+        self._process()
+        self.storage.resolve(self.source.storage_reference).write_bytes(
+            b"\x00\x00\x00\x18ftypisomchanged"
+        )
+
+        with self.assertRaises(SourceFingerprintMismatchError):
+            self._resume(verify_source_fingerprint=True)
+
+    def test_failed_stt_retry_reuses_probe_and_increments_attempt_once(self) -> None:
+        self.services.transcribe.side_effect = STTError("first attempt failed")
+        with self.assertRaises(SourceStageExecutionError):
+            self._process()
+        self._reset_services()
+
+        result = retry_source_stage(
+            session=self.session,
+            storage=self.storage,
+            workspace=self.workspace,
+            source_video_id=self.source.id,
+            stage_kind=ProcessingStageKind.STT,
+            stt_model=self.stt_model,
+            services=self.services,
+            max_attempts=3,
+        )
+
+        self.assertEqual(result.processing_status, SourceVideoStatus.COMPLETED)
+        self.assertEqual(self.events, ["extract", "transcribe", "detect"])
+        self.assertEqual(self._stage(ProcessingStageKind.PROBE).attempt_count, 1)
+        self.assertEqual(self._stage(ProcessingStageKind.AUDIO_EXTRACTION).attempt_count, 2)
+        self.assertEqual(self._stage(ProcessingStageKind.STT).attempt_count, 2)
+
+    def test_retry_failure_is_single_attempt_and_retry_limit_is_explicit(self) -> None:
+        self.services.transcribe.side_effect = STTError("first attempt failed")
+        with self.assertRaises(SourceStageExecutionError):
+            self._process()
+        self._reset_services()
+        self.services.transcribe.side_effect = STTError("second attempt failed")
+
+        with self.assertRaises(SourceStageExecutionError):
+            retry_source_stage(
+                session=self.session,
+                storage=self.storage,
+                workspace=self.workspace,
+                source_video_id=self.source.id,
+                stage_kind=ProcessingStageKind.STT,
+                services=self.services,
+                max_attempts=3,
+            )
+        self.assertEqual(self._stage(ProcessingStageKind.STT).attempt_count, 2)
+        with self.assertRaises(SourceProcessingStateError):
+            retry_source_stage(
+                session=self.session,
+                storage=self.storage,
+                workspace=self.workspace,
+                source_video_id=self.source.id,
+                stage_kind=ProcessingStageKind.STT,
+                services=self.services,
+                max_attempts=2,
+            )
+
+    def test_reprocess_from_stt_replaces_transcript_and_memos(self) -> None:
+        first = self._process()
+        old_transcript_id = first.transcript_id
+        self._reset_services()
+
+        result = reprocess_source_from(
+            session=self.session,
+            storage=self.storage,
+            workspace=self.workspace,
+            source_video_id=self.source.id,
+            from_stage=ProcessingStageKind.STT,
+            stt_model=self.stt_model,
+            services=self.services,
+        )
+
+        self.assertNotEqual(result.transcript_id, old_transcript_id)
+        self.assertEqual(result.memo_count, 1)
+        self.assertEqual(self.events, ["extract", "transcribe", "detect"])
+        self.assertIsNone(self.session.get(Transcript, old_transcript_id))
+
+    def test_reprocess_from_probe_invalidates_and_executes_every_stage(self) -> None:
+        self._process()
+        self._reset_services()
+
+        result = reprocess_source_from(
+            session=self.session,
+            storage=self.storage,
+            workspace=self.workspace,
+            source_video_id=self.source.id,
+            from_stage=ProcessingStageKind.PROBE,
+            services=self.services,
+        )
+
+        self.assertEqual(result.processing_status, SourceVideoStatus.COMPLETED)
+        self.assertEqual(self.events, ["probe", "extract", "transcribe", "detect"])
+        self.assertEqual(
+            {self._stage(stage).attempt_count for stage in ProcessingStageKind}, {2}
+        )
+
+    def test_running_stage_blocks_resume_until_explicit_stale_recovery(self) -> None:
+        self._complete_probe_only()
+        audio = self._stage(ProcessingStageKind.AUDIO_EXTRACTION)
+        audio.status = ProcessingStageStatus.RUNNING
+        audio.started_at = datetime.now(timezone.utc) - timedelta(hours=2)
+        self.source.processing_status = SourceVideoStatus.PROCESSING
+        self.session.commit()
+
+        with self.assertRaises(SourceProcessingStateError):
+            self._resume()
+        with self.assertRaises(SourceStateError):
+            recover_stale_running_stage(
+                session=self.session,
+                source_video_id=self.source.id,
+                stage_kind=ProcessingStageKind.AUDIO_EXTRACTION,
+                stale_before=datetime.now(timezone.utc) - timedelta(hours=3),
+            )
+
+        recover_stale_running_stage(
+            session=self.session,
+            source_video_id=self.source.id,
+            stage_kind=ProcessingStageKind.AUDIO_EXTRACTION,
+            stale_before=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
+        self.assertEqual(audio.status, ProcessingStageStatus.FAILED)
+        self.assertEqual(audio.safe_error_code, "STALE_EXECUTION_RECOVERED")
+
+        result = retry_source_stage(
+            session=self.session,
+            storage=self.storage,
+            workspace=self.workspace,
+            source_video_id=self.source.id,
+            stage_kind=ProcessingStageKind.AUDIO_EXTRACTION,
+            services=self.services,
+        )
+        self.assertEqual(result.processing_status, SourceVideoStatus.COMPLETED)
+
     def _create_source(self) -> SourceVideo:
         project = Project(
             name="Source Processing Unit",
@@ -301,6 +539,32 @@ class SourceProcessingTests(TestCase):
             stt_model=self.stt_model,
             services=self.services,
         )
+
+    def _resume(self, *, verify_source_fingerprint: bool = False):
+        return resume_source(
+            session=self.session,
+            storage=self.storage,
+            workspace=self.workspace,
+            source_video_id=self.source.id,
+            stt_model=self.stt_model,
+            services=self.services,
+            verify_source_fingerprint=verify_source_fingerprint,
+        )
+
+    def _reset_services(self) -> None:
+        self.events.clear()
+        self.services = self._happy_services()
+
+    def _complete_probe_only(self) -> None:
+        probe = self._stage(ProcessingStageKind.PROBE)
+        probe.status = ProcessingStageStatus.COMPLETED
+        probe.attempt_count = 1
+        probe.input_fingerprint = self.source.fingerprint
+        self.source.duration_seconds = 21.25
+        self.source.video_codec = "hevc"
+        self.source.audio_codec = "aac"
+        self.source.format_name = "mov,mp4"
+        self.session.commit()
 
     def _assert_stage_failure(
         self, expected_stage: ProcessingStageKind
