@@ -1,4 +1,4 @@
-"""Cutory v1 product data models."""
+"""Cutory product and Scene Intelligence data models."""
 
 from backend.app.models.product import (
     EditMemo,
@@ -12,6 +12,20 @@ from backend.app.models.product import (
     SourceVideoStatus,
     Transcript,
 )
+from backend.app.models.scene import (
+    EventGroup,
+    EventGroupMember,
+    SceneAnalysisAttempt,
+    SceneAnalysisAttemptStatus,
+    SceneAnalysisWorkItem,
+    SceneAnalysisWorkStatus,
+    SceneCandidate,
+    SceneDiscoveryMethod,
+    SceneEvidence,
+    SceneEvidenceModality,
+    SceneRelation,
+    SceneRelationType,
+)
 
 __all__ = [
     "EditMemo",
@@ -24,4 +38,16 @@ __all__ = [
     "SourceVideo",
     "SourceVideoStatus",
     "Transcript",
+    "EventGroup",
+    "EventGroupMember",
+    "SceneAnalysisAttempt",
+    "SceneAnalysisAttemptStatus",
+    "SceneAnalysisWorkItem",
+    "SceneAnalysisWorkStatus",
+    "SceneCandidate",
+    "SceneDiscoveryMethod",
+    "SceneEvidence",
+    "SceneEvidenceModality",
+    "SceneRelation",
+    "SceneRelationType",
 ]

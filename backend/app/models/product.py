@@ -113,6 +113,12 @@ class Project(TimestampMixin, Base):
     source_videos: Mapped[list[SourceVideo]] = relationship(
         back_populates="project", passive_deletes=True
     )
+    event_groups: Mapped[list[EventGroup]] = relationship(
+        back_populates="project", passive_deletes=True
+    )
+    scene_analysis_work_items: Mapped[list[SceneAnalysisWorkItem]] = relationship(
+        back_populates="project", passive_deletes=True
+    )
 
 
 class SourceVideo(TimestampMixin, Base):
@@ -174,6 +180,12 @@ class SourceVideo(TimestampMixin, Base):
         back_populates="source_video",
         foreign_keys="EditMemo.source_video_id",
         passive_deletes=True,
+    )
+    scene_candidates: Mapped[list[SceneCandidate]] = relationship(
+        back_populates="source_video", passive_deletes=True
+    )
+    scene_analysis_work_items: Mapped[list[SceneAnalysisWorkItem]] = relationship(
+        back_populates="source_video", passive_deletes=True
     )
 
 

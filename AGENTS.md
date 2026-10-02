@@ -12,8 +12,8 @@
 
 - Version Roadmap의 `v1 — Project & Large Video Foundation`은 완료됐다.
 - 완료 범위와 근거는 `docs/roadmap/v1-plan.md`, `docs/roadmap/v1-completion.md`, `evaluation/results/cutory-v1-foundation-eval-v0.1.md`를 따른다.
-- 현재 단계는 `v2 — Tool / MCP & Scene Intelligence`의 Detailed Design이며 v2 구현은 아직 시작하지 않았다.
-- 아직 존재하지 않는 v2 Detailed Plan을 추측해 구현하거나 Scene Agent, LangGraph, Multi-Agent, RAG, Creative Editing, Reviewer, Final Mobile App, Short-form을 앞당기지 않는다.
+- `v2 — Tool / MCP & Scene Intelligence`의 Detailed Plan이 수립됐으며 `docs/roadmap/v2-plan.md`를 현재 v2 구현의 Source of Truth로 사용한다.
+- 현재 구현 단계는 v2 Step 1 — Scene Intelligence Data Foundation이다. Scene Agent, LangGraph, Multi-Agent, RAG, Creative Editing, Reviewer, Final Mobile App, Short-form을 앞당기지 않는다.
 - 미결정 사항을 임의로 확정하거나 포트폴리오 목적만으로 기술을 추가하지 않는다.
 
 ## 기준 문서
@@ -23,7 +23,7 @@
 1. Full Product: `docs/product/full-development-plan.md`
 2. Version 구현 순서: `docs/roadmap/version-roadmap.md`
 3. 완료된 v1: `docs/roadmap/v1-plan.md`, `docs/roadmap/v1-completion.md`, `evaluation/results/cutory-v1-foundation-eval-v0.1.md`
-4. 현재 Version Detailed Plan: v2 Detailed Plan은 아직 생성되지 않음
+4. 현재 Version Detailed Plan: `docs/roadmap/v2-plan.md`
 5. Historical Baseline: `docs/mvp-v1-spec.md`, `evaluation/results/`의 과거 실험, `docs/integration-eval01-v0.1.md`, `docs/browser-e2e-v0.1.md`
 
 현재 저장소의 코드와 자동화된 테스트는 이미 구현된 사실의 기준이다. 문서와 코드가 다르면 차이를 숨기지 말고 먼저 보고하되, 과거 Baseline 문서로 완료된 v1 범위를 축소하지 않는다.

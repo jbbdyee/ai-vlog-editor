@@ -29,6 +29,13 @@ EXPECTED_PRODUCT_TABLES = {
     "processing_stages",
     "transcripts",
     "edit_memos",
+    "scene_candidates",
+    "scene_evidences",
+    "scene_relations",
+    "event_groups",
+    "event_group_members",
+    "scene_analysis_work_items",
+    "scene_analysis_attempts",
 }
 
 

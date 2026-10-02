@@ -40,6 +40,12 @@ Video Asset
 
 Cutory v1의 구조화 상태 저장 기반은 PostgreSQL 17.11과 SQLAlchemy 2.x를 사용한다. `backend/app/config.py`가 `POSTGRES_*` 환경변수를 검증하고 credential을 노출하지 않는 SQLAlchemy URL을 구성하며, `backend/app/database.py`가 동기 Engine, Session factory, session lifecycle과 `SELECT 1` 연결 검증을 제공한다. `backend/app/models/product.py`는 Project, SourceVideo, ProcessingStage, Transcript, EditMemo를 분리하고 UUID lineage, current stage unique rule, source fingerprint와 result validity metadata를 정의한다. Transcript segment/word timestamp는 row 폭증 없이 후속 Scene Intelligence가 사용할 수 있도록 구조화 JSON으로 보존한다. `backend/alembic/`은 같은 application config와 Product metadata를 참조하며 최초 revision의 실제 PostgreSQL upgrade, downgrade와 re-upgrade를 검증했다. 아직 Repository, CRUD/API, Resume/Retry engine 또는 기존 Pipeline persistence는 연결하지 않았고 기존 Baseline FastAPI startup도 DB 연결을 강제하지 않는다.
 
+### Scene Intelligence Data Foundation
+
+`backend/app/models/scene.py`는 v2 Scene Intelligence 결과를 위한 `SceneCandidate`, `SceneEvidence`, `SceneRelation`, `EventGroup`, `EventGroupMember`, `SceneAnalysisWorkItem`, `SceneAnalysisAttempt`를 같은 SQLAlchemy metadata에 등록한다. Candidate는 `MEMO_GUIDED` 또는 `AUTONOMOUS` 발견 경로와 검증된 source interval을 저장하고, transcript/audio/visual/shot/quality 근거는 별도 Evidence로 보존한다. QualityFlag는 별도 table이 아니며 SceneEvidence subtype으로 표현한다. 일반 SceneUnit, SceneRole, CandidatePriority와 Final Scene table은 만들지 않았다.
+
+WorkItem과 Attempt는 logical Scene analysis와 실제 시도의 lineage·version·safe failure를 남기는 최소 durable foundation이다. 아직 Resume/Retry, discovery, relation inference 또는 Event Grouping algorithm은 구현하지 않는다. FK에는 자동 delete cascade를 두지 않으며 retention과 Project 간 relation/group membership 검증은 application policy로 남긴다.
+
 ### Product Source Ingestion
 
 `backend/app/storage/source_storage.py`는 Product original binary를 위한 얇은 `SourceStorage` 경계와 Local 구현을 제공한다. Local storage는 `storage/originals/projects/<project-id>/sources/<resource-id>.<ext>` namespace를 사용하고 DB에는 절대 경로 대신 `projects/<project-id>/sources/<resource-id>.<ext>` 상대 reference를 저장한다. 기존 `video_storage`의 MOV/MP4 검증을 재사용하며 저장 스트림에서 SHA-256 fingerprint를 함께 계산한다.

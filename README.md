@@ -75,9 +75,9 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 
 2026-09-29 현재 저장소에서 확인된 상태입니다.
 
-> Current: **v1 — Project & Large Video Foundation: Completed**
+> Previous: **v1 — Project & Large Video Foundation: Completed**
 >
-> Next: **v2 — Tool / MCP & Scene Intelligence: Detailed Design**
+> Current: **v2 Step 1 — Scene Intelligence Data Foundation**
 >
 > 아래 목록은 Historical Baseline과 완료된 v1 구현 상태를 함께 구분해 기록한다. [Full Product Design](docs/product/full-development-plan.md) 전체가 구현됐다는 의미는 아니다.
 
@@ -112,6 +112,9 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] Cutory v1 Project API — Project/Source 등록, 202 processing 시작과 PostgreSQL 기반 진행 상태 조회
 - [x] Cutory v1 Foundation Evaluation — 120 synthetic Source와 480 Stage의 scale/state/failure 검증
 - [x] Cutory v1 Completion — Completion Gate, 한계와 v2 handoff 문서화
+- [x] Cutory v2 Scene Data Foundation — SceneCandidate/Evidence/Relation, EventGroup membership와 Scene 전용 WorkItem/Attempt schema
+
+Scene Data Foundation은 이후 discovery 결과를 저장하기 위한 persistence 기반만 제공한다. 일반 `SceneUnit`, 별도 `QualityFlag`, `SceneRole`, CandidatePriority와 Final Scene table은 만들지 않았고, Scene discovery·Event Grouping·Resume/Retry algorithm도 아직 구현하지 않았다.
 
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 

@@ -25,11 +25,18 @@ EXPECTED_TABLES = {
     "processing_stages",
     "transcripts",
     "edit_memos",
+    "scene_candidates",
+    "scene_evidences",
+    "scene_relations",
+    "event_groups",
+    "event_group_members",
+    "scene_analysis_work_items",
+    "scene_analysis_attempts",
 }
 
 
 class ProductModelMetadataTests(TestCase):
-    def test_metadata_contains_exactly_v1_product_tables(self) -> None:
+    def test_metadata_contains_all_current_product_tables(self) -> None:
         self.assertEqual(set(Base.metadata.tables), EXPECTED_TABLES)
         for table_name in EXPECTED_TABLES:
             table = Base.metadata.tables[table_name]

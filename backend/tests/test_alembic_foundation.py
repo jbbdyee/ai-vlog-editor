@@ -6,7 +6,7 @@ from alembic.script import ScriptDirectory
 
 from backend.app.config import PROJECT_ROOT
 from backend.app.database import Base
-import backend.app.models  # noqa: F401  # Register v1 product metadata.
+import backend.app.models  # noqa: F401  # Register current product metadata.
 
 
 class AlembicFoundationTests(TestCase):
@@ -26,5 +26,12 @@ class AlembicFoundationTests(TestCase):
                 "processing_stages",
                 "transcripts",
                 "edit_memos",
+                "scene_candidates",
+                "scene_evidences",
+                "scene_relations",
+                "event_groups",
+                "event_group_members",
+                "scene_analysis_work_items",
+                "scene_analysis_attempts",
             },
         )
