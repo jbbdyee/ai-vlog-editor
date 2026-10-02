@@ -55,3 +55,16 @@ Tool error는 domain, stage, retryability, safe message, affected resource ID를
 ## 향후 확장
 
 Tool schema/versioning, idempotency key, sandbox/resource quota, execution metrics는 MCP/API 구현에서 구체화한다.
+
+## 현재 구현
+
+`backend/app/tools/`에 MCP와 독립적인 내부 Tool Layer가 구현되어 있다.
+
+- `probe_video`: UUID SourceVideo를 검증된 original로 해석하고 기존 `probe_media()` 결과를 path 없이 반환한다.
+- `extract_audio`: 기존 `extract_audio()`가 만든 WAV를 workspace registry에 등록하고 opaque temporary artifact ID와 audio metadata만 반환한다.
+- `transcribe_audio`: registry가 ownership/scope를 확인한 WAV와 caller가 미리 로드한 STT model로 기존 `transcribe_audio()`를 호출한다.
+- `detect_edit_memos`: 구조화 Transcript DTO를 기존 `detect_edit_memos()`에 매핑하며 memo 0개도 정상 결과다.
+
+공통 `ToolResult`는 `SUCCEEDED` data와 `FAILED` error가 동시에 존재하지 못하게 하고 invocation ID, Tool 이름/version, 시작·종료 시각과 duration을 기록한다. 예상 가능한 오류만 안전한 code/message로 변환하며 traceback, stderr, provider 원문, credential과 로컬 path는 반환하지 않는다. 이 결과는 한 번의 호출 계약이고 Scene WorkItem/Attempt persistence가 아니다.
+
+Temporary artifact 수명과 Tool 간 연결은 application 책임이고 Tool 내부 business retry는 없다. 현재 MCP SDK, MCP Server/Client와 Scene Discovery Tool은 구현하지 않았다.

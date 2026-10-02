@@ -46,6 +46,14 @@ Cutory v1의 구조화 상태 저장 기반은 PostgreSQL 17.11과 SQLAlchemy 2.
 
 WorkItem과 Attempt는 logical Scene analysis와 실제 시도의 lineage·version·safe failure를 남기는 최소 durable foundation이다. 아직 Resume/Retry, discovery, relation inference 또는 Event Grouping algorithm은 구현하지 않는다. FK에는 자동 delete cascade를 두지 않으며 retention과 Project 간 relation/group membership 검증은 application policy로 남긴다.
 
+### Scene Intelligence Internal Tool Layer
+
+`backend/app/tools/`는 향후 Scene Intelligence application과 MCP adapter가 공통으로 사용할 transport-independent capability 경계다. 초기 Tool은 `probe_video`, `extract_audio`, `transcribe_audio`, `detect_edit_memos` 네 개이며 각각 기존 v1 서비스를 호출한다. `DatabaseSourceResourceResolver`는 UUID SourceVideo와 선택적 Project ownership을 확인한 뒤 `LocalSourceStorage.resolve()`로 내부 Path를 얻는다. Tool 입력에는 절대·상대 path, storage reference와 URL을 허용하지 않으며 Path는 결과 DTO에 포함하지 않는다.
+
+모든 Tool은 명시적 version, invocation ID, UTC timing과 duration을 가진 `ToolResult`를 반환한다. 예상 가능한 resource/media/STT/input 실패만 allowlist `ToolError`로 변환하고 programmer error는 숨기지 않는다. `ToolResult`는 단일 in-process invocation 결과이고 durable Scene WorkItem/Attempt transaction을 관리하지 않는다. Audio Tool 결과는 workspace-scoped registry의 opaque `TemporaryArtifactRef`이며 실제 WAV 경로, ownership과 scope는 registry 내부에만 존재한다. Application이 Tool 간 수명을 관리하고 Tool은 생성 도중 실패한 partial output만 정리한다. Tool 내부 retry loop와 MCP dependency는 없다.
+
+ffprobe와 FFmpeg는 기존 argument-list 실행을 유지하면서 각각 30초와 600초의 보수적 기본 timeout을 갖고 호출별 override가 가능하다. 이는 비정상 subprocess가 worker를 무기한 점유하지 않게 하는 실행 상한이며 재시도 정책은 아니다.
+
 ### Product Source Ingestion
 
 `backend/app/storage/source_storage.py`는 Product original binary를 위한 얇은 `SourceStorage` 경계와 Local 구현을 제공한다. Local storage는 `storage/originals/projects/<project-id>/sources/<resource-id>.<ext>` namespace를 사용하고 DB에는 절대 경로 대신 `projects/<project-id>/sources/<resource-id>.<ext>` 상대 reference를 저장한다. 기존 `video_storage`의 MOV/MP4 검증을 재사용하며 저장 스트림에서 SHA-256 fingerprint를 함께 계산한다.

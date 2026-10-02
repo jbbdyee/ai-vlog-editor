@@ -142,4 +142,13 @@ class MediaProbeTests(TestCase):
             encoding="utf-8",
             errors="replace",
             check=False,
+            timeout=30.0,
         )
+
+    @patch("backend.app.services.media_probe.subprocess.run")
+    def test_timeout_is_project_error(self, run_mock) -> None:
+        media_path = self._create_file("timeout.mp4")
+        run_mock.side_effect = subprocess.TimeoutExpired(["ffprobe"], 1)
+
+        with self.assertRaisesRegex(MediaProbeError, "timed out"):
+            probe_media(media_path, timeout_seconds=1)

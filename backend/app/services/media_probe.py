@@ -5,6 +5,9 @@ import subprocess
 from typing import Any
 
 
+DEFAULT_FFPROBE_TIMEOUT_SECONDS = 30.0
+
+
 class MediaProbeError(RuntimeError):
     """Raised when ffprobe cannot produce usable media information."""
 
@@ -19,7 +22,11 @@ class MediaInfo:
     format_name: str
 
 
-def probe_media(path: str | Path) -> MediaInfo:
+def probe_media(
+    path: str | Path,
+    *,
+    timeout_seconds: float = DEFAULT_FFPROBE_TIMEOUT_SECONDS,
+) -> MediaInfo:
     """Run ffprobe for a local file and return normalized media information."""
     media_path = Path(path)
     if not media_path.is_file():
@@ -44,7 +51,10 @@ def probe_media(path: str | Path) -> MediaInfo:
             encoding="utf-8",
             errors="replace",
             check=False,
+            timeout=timeout_seconds,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise MediaProbeError("ffprobe timed out.") from exc
     except OSError as exc:
         raise MediaProbeError(f"Could not start ffprobe: {exc}") from exc
 

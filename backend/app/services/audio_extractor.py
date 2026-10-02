@@ -9,6 +9,7 @@ from backend.app.services.media_probe import MediaProbeError, probe_media
 DEFAULT_SAMPLE_RATE_HZ = 16_000
 DEFAULT_CHANNELS = 1
 DEFAULT_PCM_CODEC = "pcm_s16le"
+DEFAULT_FFMPEG_TIMEOUT_SECONDS = 600.0
 
 
 class AudioExtractionError(RuntimeError):
@@ -30,6 +31,7 @@ def extract_audio(
     output_directory: str | Path,
     *,
     ffmpeg_executable: str = "ffmpeg",
+    timeout_seconds: float = DEFAULT_FFMPEG_TIMEOUT_SECONDS,
 ) -> ExtractedAudio:
     """Extract the first audio stream from a local video as a PCM WAV file."""
     media_path = Path(source_path)
@@ -84,7 +86,11 @@ def extract_audio(
             encoding="utf-8",
             errors="replace",
             check=False,
+            timeout=timeout_seconds,
         )
+    except subprocess.TimeoutExpired as exc:
+        audio_path.unlink(missing_ok=True)
+        raise AudioExtractionError("FFmpeg audio extraction timed out.") from exc
     except OSError as exc:
         audio_path.unlink(missing_ok=True)
         raise AudioExtractionError(f"Could not start FFmpeg: {exc}") from exc

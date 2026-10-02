@@ -150,6 +150,22 @@ class AudioExtractorTests(TestCase):
 
         self.assertEqual(list(self.output_directory.iterdir()), [])
 
+    @patch("backend.app.services.audio_extractor.subprocess.run")
+    @patch("backend.app.services.audio_extractor.probe_media")
+    def test_timeout_removes_partial_output(self, probe_mock, run_mock) -> None:
+        probe_mock.return_value = self._media_info()
+
+        def time_out(command, **kwargs):
+            Path(command[-1]).write_bytes(b"partial")
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+        run_mock.side_effect = time_out
+
+        with self.assertRaisesRegex(AudioExtractionError, "timed out"):
+            extract_audio(self.source_path, self.output_directory, timeout_seconds=1)
+
+        self.assertEqual(list(self.output_directory.iterdir()), [])
+
     @staticmethod
     def _media_info(*, has_audio_stream: bool = True) -> MediaInfo:
         return MediaInfo(
