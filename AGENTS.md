@@ -13,7 +13,7 @@
 - Version Roadmap의 `v1 — Project & Large Video Foundation`은 완료됐다.
 - 완료 범위와 근거는 `docs/roadmap/v1-plan.md`, `docs/roadmap/v1-completion.md`, `evaluation/results/cutory-v1-foundation-eval-v0.1.md`를 따른다.
 - `v2 — Tool / MCP & Scene Intelligence`의 Detailed Plan이 수립됐으며 `docs/roadmap/v2-plan.md`를 현재 v2 구현의 Source of Truth로 사용한다.
-- 현재 구현 단계는 v2 Step 3 — Video Editing MCP Server이다. Scene Agent, LangGraph, Multi-Agent, RAG, Creative Editing, Reviewer, Final Mobile App, Short-form을 앞당기지 않는다.
+- 현재 구현 단계는 v2 Step 4 — Memo-guided Scene Discovery deterministic baseline이다. KEEP + JUST_NOW/EARLIER의 same-source 탐색만 지원하며 LLM/VLM, Autonomous Discovery, Event Grouping, Scene Agent, LangGraph, Multi-Agent, RAG, Creative Editing, Reviewer, Final Mobile App, Short-form을 앞당기지 않는다.
 - 미결정 사항을 임의로 확정하거나 포트폴리오 목적만으로 기술을 추가하지 않는다.
 
 ## 기준 문서
