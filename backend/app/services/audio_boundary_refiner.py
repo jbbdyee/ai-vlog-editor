@@ -358,3 +358,9 @@ def _number(value: object, label: str) -> float:
     if not math.isfinite(number):
         raise AudioBoundaryRefinementError(f"{label} must be finite.")
     return number
+
+
+# Reusable deterministic measurement primitives. Autonomous discovery uses these
+# without reusing this module's memo/block-specific boundary decision.
+read_pcm_frame_dbfs = _read_frame_dbfs
+build_audio_activity_intervals = _build_activity_intervals

@@ -66,6 +66,12 @@ ffprobe와 FFmpeg는 기존 argument-list 실행을 유지하면서 각각 30초
 
 provider-independent selector 계약의 현재 구현은 명시적 rule chain만 사용한다. `JUST_NOW`에서 memo 직전 2초 안의 transcript block이 하나일 때만 선택하고, tie·근거 부족·지원하지 않는 intent는 정상 abstention한다. `EARLIER`는 안전한 semantic reference가 없으면 abstain한다. validator는 allowlist proposal ID와 source, interval, search region, duration, config fingerprint를 확인한 뒤에만 기존 `SceneCandidate(MEMO_GUIDED)`와 네 종류 Evidence를 저장한다. Candidate confidence는 근거 없는 숫자를 만들지 않고 null로 둔다. LLM/VLM, audio/visual refinement, cross-source, Autonomous Discovery와 Event Grouping은 없다.
 
+### Autonomous Scene Discovery deterministic baseline
+
+`backend/app/services/autonomous_discovery.py`는 Memo 유무와 무관하게 Source 하나의 cheap deterministic signal을 분석한다. `AnalysisInterval`은 저장하지 않는 runtime DTO다. Transcript는 segment interval·speech presence·최소 reaction cue(`우와`, `와`, `대박`, `헐`)만 만들고, Audio는 기존 PCM16 RMS primitive로 activity와 silence/long silence를, Visual은 기존 FFmpeg grayscale frame difference primitive로 activity와 static interval을 만든다. Quality signal은 기술적 관측일 뿐 삭제 판단이 아니다.
+
+Promotion은 opaque score 없이 `REACTION_CUE_PLUS_AUDIO`, `TRANSCRIPT_STRUCTURE_PLUS_AUDIO`, `AUDIO_PLUS_VISUAL_ACTIVITY`의 interval intersection만 허용한다. 단일 modality 또는 quality-only 결과는 정상 abstention한다. exact interval Candidate가 있으면 재사용해 Evidence를 추가하고 discovery provenance를 바꾸지 않으며, high-overlap·containment·nearby는 병합하지 않는다. Transcript/Audio/Visual/Promotion WorkItem과 Attempt가 modality failure를 분리하며 일부 modality 실패 시 warning과 함께 가능한 분석을 완료한다. Candidate confidence는 null이고 Evidence payload에는 bounded measurement와 rule ID만 저장한다. 현재 schema가 Evidence를 Candidate에 종속하므로 Candidate로 승격되지 않은 quality fact는 runtime/WorkItem 집계까지만 보존한다. LLM/VLM, SceneRole, EventGroup, cross-source와 새 MCP Tool은 없다.
+
 ### Product Source Ingestion
 
 `backend/app/storage/source_storage.py`는 Product original binary를 위한 얇은 `SourceStorage` 경계와 Local 구현을 제공한다. Local storage는 `storage/originals/projects/<project-id>/sources/<resource-id>.<ext>` namespace를 사용하고 DB에는 절대 경로 대신 `projects/<project-id>/sources/<resource-id>.<ext>` 상대 reference를 저장한다. 기존 `video_storage`의 MOV/MP4 검증을 재사용하며 저장 스트림에서 SHA-256 fingerprint를 함께 계산한다.

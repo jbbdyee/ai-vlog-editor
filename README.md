@@ -77,7 +77,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 
 > Previous: **v1 — Project & Large Video Foundation: Completed**
 >
-> Current: **v2 Step 4 — Memo-guided Scene Discovery deterministic baseline**
+> Current: **v2 Step 5 — Autonomous Scene Discovery deterministic baseline**
 >
 > 아래 목록은 Historical Baseline과 완료된 v1 구현 상태를 함께 구분해 기록한다. [Full Product Design](docs/product/full-development-plan.md) 전체가 구현됐다는 의미는 아니다.
 
@@ -116,6 +116,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] Cutory v2 Internal Tool Layer — resource ID 기반 Probe·Audio·STT·Memo adapter, safe `ToolResult`와 opaque temporary audio reference
 - [x] Cutory v2 Video Editing MCP Server — stdio transport와 `probe_video` 단일 공개 capability
 - [x] Cutory v2 Memo-guided Scene Discovery deterministic baseline — persisted EditMemo에서 bounded proposal, 선택/abstain, 검증, Candidate/Evidence 영속화
+- [x] Cutory v2 Autonomous Scene Discovery deterministic baseline — transcript/audio/visual/quality cheap signal, cross-modal promotion, partial failure와 Evidence 영속화
 
 Scene Data Foundation은 discovery 결과를 저장하기 위한 persistence 기반을 제공한다. 일반 `SceneUnit`, 별도 `QualityFlag`, `SceneRole`, CandidatePriority와 Final Scene table은 만들지 않았고, Autonomous Discovery·Event Grouping·Scene 전용 Resume/Retry algorithm은 아직 구현하지 않았다.
 
@@ -123,7 +124,9 @@ Internal Tool Layer는 기존 `probe_media`, `extract_audio`, `transcribe_audio`
 
 Video Editing MCP Server는 `python -m backend.app.mcp.server`로 실행하는 local-first stdio process다. 현재 공개 Tool은 `probe_video` 하나뿐이며 MCP adapter가 Internal Tool을 정확히 한 번 호출한다. MCP 응답은 allowlist media metadata, safe error와 실행 metadata만 포함하고 raw path·storage reference·stderr·credential을 제외한다. Resources/Prompts, extract_audio/STT/Memo 공개, Streamable HTTP와 Scene/Agent 기능은 아직 구현하지 않았다.
 
-Memo-guided Scene Discovery는 persisted `EditMemo` 하나를 `MemoIntent → TemporalSearchRegion → SceneProposal[] → deterministic selection/abstain → validator`로 처리한다. production 지원은 `KEEP`과 `JUST_NOW`/`EARLIER`, same-source search로 제한한다. 선택 성공 시 기존 `SceneCandidate(MEMO_GUIDED)`와 `USER_MEMO`, `TEMPORAL_REFERENCE`, `TRANSCRIPT_MATCH`, `SEMANTIC_SELECTION` Evidence를 저장하며, 의미가 불명확하면 WorkItem/Attempt를 정상 완료하고 Candidate를 만들지 않는다. LLM/VLM, audio/visual refinement, Autonomous Discovery와 새 MCP Tool은 포함하지 않는다. 로컬 eval 5개가 없어 실제 historical 평가는 실행하지 않았고 synthetic focused 결과는 `evaluation/results/memo-guided-baseline-v0.1.md`에 기록한다.
+Memo-guided Scene Discovery는 persisted `EditMemo` 하나를 `MemoIntent → TemporalSearchRegion → SceneProposal[] → deterministic selection/abstain → validator`로 처리한다. production 지원은 `KEEP`과 `JUST_NOW`/`EARLIER`, same-source search로 제한한다. 선택 성공 시 기존 `SceneCandidate(MEMO_GUIDED)`와 `USER_MEMO`, `TEMPORAL_REFERENCE`, `TRANSCRIPT_MATCH`, `SEMANTIC_SELECTION` Evidence를 저장하며, 의미가 불명확하면 WorkItem/Attempt를 정상 완료하고 Candidate를 만들지 않는다. 이 경로 자체에는 LLM/VLM이나 audio/visual refinement가 없고 새 MCP Tool도 추가하지 않았다. 로컬 eval 5개가 없어 실제 historical 평가는 실행하지 않았고 synthetic focused 결과는 `evaluation/results/memo-guided-baseline-v0.1.md`에 기록한다.
+
+Autonomous Scene Discovery는 EditMemo와 독립적으로 persisted Transcript 구조, PCM RMS activity/silence, FFmpeg grayscale frame difference/static interval을 분석한다. 단일 speech·audio·motion·quality signal은 Candidate로 승격하지 않고 reaction+audio, transcript structure+audio 또는 audio+visual이 같은 구간에서 겹치는 명시적 rule만 사용한다. Candidate confidence는 null이며 exact interval만 재사용한다. Memo Candidate와 정확히 겹치면 기존 Candidate의 provenance를 유지한 채 Autonomous Evidence를 추가하고, high-overlap 구간은 병합하지 않는다. modality partial failure는 별도 WorkItem/Attempt에 남기고 가능한 signal로 정상 completion할 수 있다. LLM/VLM 호출은 0이며 실제 media/GT가 없어 semantic accuracy는 아직 검증되지 않았다. 결과는 `evaluation/results/autonomous-baseline-v0.1.md`에 기록한다.
 
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 

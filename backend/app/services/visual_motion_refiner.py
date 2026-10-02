@@ -587,3 +587,11 @@ def _number(value: object, label: str) -> float:
     if not math.isfinite(number):
         raise ValueError(f"{label} must be finite.")
     return number
+
+
+# Reusable deterministic measurement primitives. Autonomous discovery owns its
+# promotion policy and does not reuse this module's selected-block decision.
+extract_grayscale_frames = _extract_pgm_frames
+calculate_motion_scores = _motion_scores
+median_smooth_motion_scores = _median_smooth
+build_visual_activity_intervals = _build_motion_intervals
