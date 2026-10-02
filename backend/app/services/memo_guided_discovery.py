@@ -7,7 +7,7 @@ import hashlib
 import json
 import math
 import re
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 from sqlalchemy import select
@@ -26,12 +26,18 @@ from backend.app.models import (
     SourceVideo,
 )
 
+if TYPE_CHECKING:
+    from backend.app.services.transcript_proposal_selector import (
+        TranscriptProposalSelector,
+    )
+
 
 PARSER_VERSION = "memo-intent-v0.1"
 PROPOSAL_VERSION = "memo-proposals-v0.1"
 SELECTOR_VERSION = "deterministic-selector-v0.1"
 WORK_TYPE = "MEMO_GUIDED_DISCOVERY"
 TARGET_TYPE = "EDIT_MEMO"
+SEMANTIC_WORK_TYPE = "SEMANTIC_MEMO_PROPOSAL_SELECTION"
 
 
 class MemoAction(str, Enum):
@@ -153,6 +159,9 @@ class MemoGuidedDiscoveryResult:
     proposal_count: int
     candidate_id: UUID | None
     reused_candidate: bool
+    semantic_work_item_id: UUID | None = None
+    semantic_execution_outcome: str | None = None
+    provider_call_count: int = 0
 
 
 def parse_memo_intent(memo: EditMemo) -> MemoIntent:
@@ -365,6 +374,7 @@ def process_memo_guided_discovery(
     *,
     config: MemoGuidedSearchConfig = DEFAULT_CONFIG,
     selector: SemanticSelector | None = None,
+    transcript_proposal_selector: TranscriptProposalSelector | None = None,
 ) -> MemoGuidedDiscoveryResult:
     memo = session.get(EditMemo, memo_id)
     if memo is None:
@@ -379,23 +389,26 @@ def process_memo_guided_discovery(
             SceneAnalysisWorkItem.target_id == memo.id,
         )
     )
+    existing_attempt = None
     if existing is not None:
         if existing.status is not SceneAnalysisWorkStatus.COMPLETED:
             raise MemoGuidedDiscoveryError("Memo discovery already has a non-completed work item.")
         candidate = session.scalar(
             select(SceneCandidate).where(SceneCandidate.analysis_work_item_id == existing.id)
         )
-        attempt = session.scalar(
+        existing_attempt = session.scalar(
             select(SceneAnalysisAttempt)
             .where(SceneAnalysisAttempt.work_item_id == existing.id)
             .order_by(SceneAnalysisAttempt.attempt_number.desc())
         )
-        status_text = (existing.result_reference or "abstain:INSUFFICIENT_EVIDENCE").split(":")[-1]
-        status = SelectionStatus.SELECTED if candidate else SelectionStatus(status_text)
-        return MemoGuidedDiscoveryResult(
-            existing.id, attempt.id, source.id, memo.id, status, "IDEMPOTENT_REUSE", 0,
-            candidate.id if candidate else None, candidate is not None,
-        )
+        if candidate is not None or transcript_proposal_selector is None:
+            status_text = (existing.result_reference or "abstain:INSUFFICIENT_EVIDENCE").split(":")[-1]
+            status = SelectionStatus.SELECTED if candidate else SelectionStatus(status_text)
+            return MemoGuidedDiscoveryResult(
+                existing.id, existing_attempt.id, source.id, memo.id, status,
+                "IDEMPOTENT_REUSE", 0, candidate.id if candidate else None,
+                candidate is not None,
+            )
 
     config_fingerprint = _fingerprint(asdict(config))
     input_fingerprint = _fingerprint(
@@ -410,26 +423,30 @@ def process_memo_guided_discovery(
             },
         }
     )
-    work_item = SceneAnalysisWorkItem(
-        project_id=source.project_id,
-        source_video_id=source.id,
-        work_type=WORK_TYPE,
-        target_type=TARGET_TYPE,
-        target_id=memo.id,
-        status=SceneAnalysisWorkStatus.RUNNING,
-        input_fingerprint=input_fingerprint,
-        producer="memo-guided-discovery",
-        producer_version=PROPOSAL_VERSION,
-        config_fingerprint=config_fingerprint,
-    )
-    attempt = SceneAnalysisAttempt(
-        work_item=work_item,
-        attempt_number=1,
-        status=SceneAnalysisAttemptStatus.RUNNING,
-        started_at=datetime.now(timezone.utc),
-    )
-    session.add_all([work_item, attempt])
-    session.commit()
+    if existing is None:
+        work_item = SceneAnalysisWorkItem(
+            project_id=source.project_id,
+            source_video_id=source.id,
+            work_type=WORK_TYPE,
+            target_type=TARGET_TYPE,
+            target_id=memo.id,
+            status=SceneAnalysisWorkStatus.RUNNING,
+            input_fingerprint=input_fingerprint,
+            producer="memo-guided-discovery",
+            producer_version=PROPOSAL_VERSION,
+            config_fingerprint=config_fingerprint,
+        )
+        attempt = SceneAnalysisAttempt(
+            work_item=work_item,
+            attempt_number=1,
+            status=SceneAnalysisAttemptStatus.RUNNING,
+            started_at=datetime.now(timezone.utc),
+        )
+        session.add_all([work_item, attempt])
+        session.commit()
+    else:
+        work_item = existing
+        attempt = existing_attempt
     try:
         intent = parse_memo_intent(memo)
         proposals: tuple[SceneProposal, ...] = ()
@@ -456,6 +473,30 @@ def process_memo_guided_discovery(
                 just_now_max_gap_seconds=config.just_now_max_gap_seconds
             )
             selection = active_selector.select(intent, region, proposals, transcript_context)
+            semantic_work_item_id = None
+            semantic_execution_outcome = None
+            provider_call_count = 0
+            if selector is None and transcript_proposal_selector is not None:
+                (
+                    selection,
+                    semantic_work_item_id,
+                    semantic_execution_outcome,
+                    provider_call_count,
+                ) = _select_semantically_when_needed(
+                    session=session,
+                    source=source,
+                    memo=memo,
+                    intent=intent,
+                    proposals=proposals,
+                    transcript_context=transcript_context,
+                    deterministic_selection=selection,
+                    selector=transcript_proposal_selector,
+                    upstream_input_fingerprint=input_fingerprint,
+                )
+        if intent.parse_status is IntentParseStatus.UNSUPPORTED:
+            semantic_work_item_id = None
+            semantic_execution_outcome = None
+            provider_call_count = 0
         chosen = None
         if region is not None:
             chosen = validate_selection(
@@ -484,6 +525,7 @@ def process_memo_guided_discovery(
         return MemoGuidedDiscoveryResult(
             work_item.id, attempt.id, source.id, memo.id, selection.status,
             selection.reason_code, len(proposals), candidate.id if candidate else None, reused,
+            semantic_work_item_id, semantic_execution_outcome, provider_call_count,
         )
     except Exception as exc:
         session.rollback()
@@ -550,6 +592,22 @@ def _promote_candidate(
         (SceneEvidenceModality.TRANSCRIPT, "TRANSCRIPT_MATCH", {"proposal_id": proposal.proposal_id, "segment_ids": list(proposal.evidence_refs)}),
         (SceneEvidenceModality.TRANSCRIPT, "SEMANTIC_SELECTION", {"selector": selection.selector, "selector_version": selection.selector_version, "reason_code": selection.reason_code}),
     )
+    if selection.selector != "deterministic-rule-chain":
+        evidence_specs += (
+            (
+                SceneEvidenceModality.TRANSCRIPT,
+                "LLM_PROPOSAL_SELECTION",
+                {
+                    "selected_proposal_id": proposal.proposal_id,
+                    "semantic_status": selection.status.value,
+                    "reason_code": selection.reason_code,
+                    "capability": "TRANSCRIPT_PROPOSAL_SELECTOR",
+                    "selector": selection.selector,
+                    "selector_version": selection.selector_version,
+                    "summary": selection.summary,
+                },
+            ),
+        )
     for modality, evidence_type, payload in evidence_specs:
         if evidence_type in existing_types:
             continue
@@ -610,6 +668,199 @@ def _segment_context(segments: list[dict[str, object]]) -> dict[str, str]:
         for index, segment in enumerate(segments, start=1)
         if isinstance(segment, dict)
     }
+
+
+def _select_semantically_when_needed(
+    *,
+    session: Session,
+    source: SourceVideo,
+    memo: EditMemo,
+    intent: MemoIntent,
+    proposals: tuple[SceneProposal, ...],
+    transcript_context: dict[str, str],
+    deterministic_selection: SemanticSelection,
+    selector: TranscriptProposalSelector,
+    upstream_input_fingerprint: str,
+) -> tuple[SemanticSelection, UUID | None, str | None, int]:
+    from backend.app.services.transcript_proposal_selector import (
+        PROMPT_VERSION,
+        SCHEMA_VERSION,
+        SemanticExecutionOutcome,
+        build_selection_input,
+        escalation_reason_for,
+        to_semantic_selection,
+        validate_semantic_result,
+    )
+
+    selection_input = build_selection_input(
+        intent=intent,
+        memo_text=memo.transcript_text,
+        proposals=proposals,
+        transcript_context=transcript_context,
+    )
+    reason = escalation_reason_for(
+        deterministic_selection,
+        intent=intent,
+        eligible_proposal_count=len(selection_input.proposals) if selection_input else 0,
+    )
+    if selection_input is None or reason is None:
+        return deterministic_selection, None, None, 0
+
+    provider_name = getattr(selector, "provider_name", None)
+    model = getattr(selector, "model", None)
+    if not isinstance(provider_name, str) or not provider_name or not isinstance(model, str) or not model:
+        raise MemoGuidedDiscoveryError("Transcript proposal selector configuration is invalid.")
+    semantic_config_fingerprint = _fingerprint(
+        {
+            "capability": selection_input.capability,
+            "provider": provider_name,
+            "model": model,
+            "prompt_version": PROMPT_VERSION,
+            "schema_version": SCHEMA_VERSION,
+            "escalation_reason": reason.value,
+        }
+    )
+    semantic_work_input_fingerprint = _fingerprint(
+        {
+            "upstream": upstream_input_fingerprint,
+            "semantic_input": selection_input.semantic_input_fingerprint,
+            "proposal_manifest": selection_input.proposal_manifest_fingerprint,
+        }
+    )
+    cached = session.scalar(
+        select(SceneAnalysisWorkItem)
+        .where(
+            SceneAnalysisWorkItem.work_type == SEMANTIC_WORK_TYPE,
+            SceneAnalysisWorkItem.target_type == TARGET_TYPE,
+            SceneAnalysisWorkItem.target_id == memo.id,
+            SceneAnalysisWorkItem.status == SceneAnalysisWorkStatus.COMPLETED,
+            SceneAnalysisWorkItem.input_fingerprint == semantic_work_input_fingerprint,
+            SceneAnalysisWorkItem.config_fingerprint == semantic_config_fingerprint,
+        )
+        .order_by(SceneAnalysisWorkItem.created_at.desc())
+    )
+    if cached is not None:
+        cached_result = _decode_semantic_result_reference(cached.result_reference)
+        return (
+            SemanticSelection(
+                status=SelectionStatus(cached_result["semantic_status"]),
+                selected_proposal_id=cached_result.get("selected_id"),
+                confidence=None,
+                reason_code=cached_result["reason_code"],
+                summary=cached_result.get("summary"),
+                selector=f"{provider_name}-transcript-proposal-selector",
+                selector_version=f"{PROMPT_VERSION}:{model}",
+            ),
+            cached.id,
+            SemanticExecutionOutcome.SUCCEEDED.value,
+            0,
+        )
+
+    work_item = SceneAnalysisWorkItem(
+        project_id=source.project_id,
+        source_video_id=source.id,
+        work_type=SEMANTIC_WORK_TYPE,
+        target_type=TARGET_TYPE,
+        target_id=memo.id,
+        status=SceneAnalysisWorkStatus.RUNNING,
+        input_fingerprint=semantic_work_input_fingerprint,
+        producer=provider_name,
+        producer_version=f"{PROMPT_VERSION}:{SCHEMA_VERSION}:{model}",
+        config_fingerprint=semantic_config_fingerprint,
+    )
+    attempt = SceneAnalysisAttempt(
+        work_item=work_item,
+        attempt_number=1,
+        status=SceneAnalysisAttemptStatus.RUNNING,
+        started_at=datetime.now(timezone.utc),
+    )
+    session.add_all([work_item, attempt])
+    session.commit()
+
+    try:
+        execution = selector.select(selection_input)
+    except Exception:
+        execution = None
+    now = datetime.now(timezone.utc)
+    if execution is None:
+        work_item.status = SceneAnalysisWorkStatus.FAILED
+        attempt.status = SceneAnalysisAttemptStatus.FAILED
+        attempt.completed_at = now
+        attempt.safe_error_code = "SEMANTIC_PROVIDER_FAILURE"
+        attempt.safe_error_message = "Semantic provider request failed."
+        work_item.result_reference = json.dumps(
+            {"outcome": "PROVIDER_FAILURE", "reason": reason.value}, separators=(",", ":")
+        )
+        session.commit()
+        return deterministic_selection, work_item.id, "PROVIDER_FAILURE", 1
+
+    if execution.outcome is not SemanticExecutionOutcome.SUCCEEDED:
+        work_item.status = SceneAnalysisWorkStatus.FAILED
+        attempt.status = SceneAnalysisAttemptStatus.FAILED
+        attempt.completed_at = now
+        attempt.safe_error_code = (execution.safe_error_code or execution.outcome.value)[:64]
+        attempt.safe_error_message = (
+            execution.safe_error_message or "Semantic selection failed."
+        )[:512]
+        work_item.result_reference = json.dumps(
+            {"outcome": execution.outcome.value, "reason": reason.value}, separators=(",", ":")
+        )
+        session.commit()
+        return deterministic_selection, work_item.id, execution.outcome.value, 1
+
+    try:
+        analysis = validate_semantic_result(execution, selection_input)
+        semantic_selection = to_semantic_selection(
+            analysis, provider=provider_name, model=model
+        )
+    except ValueError:
+        work_item.status = SceneAnalysisWorkStatus.FAILED
+        attempt.status = SceneAnalysisAttemptStatus.FAILED
+        attempt.completed_at = now
+        attempt.safe_error_code = "SEMANTIC_VALIDATION_FAILURE"
+        attempt.safe_error_message = "Semantic output failed deterministic validation."
+        work_item.result_reference = json.dumps(
+            {"outcome": "VALIDATION_FAILURE", "reason": reason.value}, separators=(",", ":")
+        )
+        session.commit()
+        return deterministic_selection, work_item.id, "VALIDATION_FAILURE", 1
+
+    metadata = execution.metadata
+    result_payload = {
+        "outcome": execution.outcome.value,
+        "semantic_status": analysis.semantic_status.value,
+        "selected_id": analysis.selected_id,
+        "reason_code": analysis.reason_code,
+        "summary": analysis.bounded_summary,
+        "provider": provider_name,
+        "model": model,
+        "prompt_version": PROMPT_VERSION,
+        "schema_version": SCHEMA_VERSION,
+        "escalation_reason": reason.value,
+        "latency_seconds": round(metadata.latency_seconds, 6) if metadata else None,
+        "input_tokens": metadata.input_tokens if metadata else None,
+        "output_tokens": metadata.output_tokens if metadata else None,
+        "total_tokens": metadata.total_tokens if metadata else None,
+    }
+    work_item.status = SceneAnalysisWorkStatus.COMPLETED
+    work_item.result_reference = json.dumps(
+        result_payload, ensure_ascii=False, separators=(",", ":")
+    )
+    work_item.result_fingerprint = _fingerprint(result_payload)
+    attempt.status = SceneAnalysisAttemptStatus.COMPLETED
+    attempt.completed_at = now
+    session.commit()
+    return semantic_selection, work_item.id, execution.outcome.value, 1
+
+
+def _decode_semantic_result_reference(value: str | None) -> dict[str, object]:
+    try:
+        parsed = json.loads(value or "")
+    except json.JSONDecodeError as error:
+        raise MemoGuidedDiscoveryError("Cached semantic result is malformed.") from error
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("semantic_status"), str):
+        raise MemoGuidedDiscoveryError("Cached semantic result is malformed.")
+    return parsed
 
 
 def _selection(status: SelectionStatus, reason: str) -> SemanticSelection:

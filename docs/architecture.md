@@ -72,6 +72,14 @@ provider-independent selector 계약의 현재 구현은 명시적 rule chain만
 
 Promotion은 opaque score 없이 `REACTION_CUE_PLUS_AUDIO`, `TRANSCRIPT_STRUCTURE_PLUS_AUDIO`, `AUDIO_PLUS_VISUAL_ACTIVITY`의 interval intersection만 허용한다. 단일 modality 또는 quality-only 결과는 정상 abstention한다. exact interval Candidate가 있으면 재사용해 Evidence를 추가하고 discovery provenance를 바꾸지 않으며, high-overlap·containment·nearby는 병합하지 않는다. Transcript/Audio/Visual/Promotion WorkItem과 Attempt가 modality failure를 분리하며 일부 modality 실패 시 warning과 함께 가능한 분석을 완료한다. Candidate confidence는 null이고 Evidence payload에는 bounded measurement와 rule ID만 저장한다. 현재 schema가 Evidence를 Candidate에 종속하므로 Candidate로 승격되지 않은 quality fact는 runtime/WorkItem 집계까지만 보존한다. LLM/VLM, SceneRole, EventGroup, cross-source와 새 MCP Tool은 없다.
 
+### Selective Text LLM Transcript Proposal Selection
+
+`backend/app/services/transcript_proposal_selector.py`는 Memo-guided deterministic selector가 해결하지 못한 semantic selection만 위한 provider-independent capability다. 유일한 deterministic Proposal, Proposal 0개, unsupported intent에는 AI를 호출하지 않는다. 현재 escalation reason은 `AMBIGUOUS_TRANSCRIPT_PROPOSALS`, `SEMANTIC_REFERENCE_UNRESOLVED`, `TRANSCRIPT_INSUFFICIENT`로 제한한다. Input은 bounded Memo와 기존 Proposal ID별 bounded transcript snippet뿐이며 전체 Transcript, timestamp, path, Ground Truth와 media를 포함하지 않는다.
+
+`backend/app/services/openai_transcript_proposal_provider.py`는 OpenAI Responses API Structured Outputs 호출, timeout, usage metadata와 safe provider failure mapping만 담당한다. 기본 모델은 `CUTORY_SEMANTIC_TEXT_MODEL`로 교체 가능한 `gpt-6-luna`이고 prompt/schema version은 각각 `transcript-proposal-selector-v0.1`, `transcript-proposal-selection-v0.1`이다. Provider output은 기존 Proposal ID 선택 또는 `AMBIGUOUS`, `NO_MATCH`, `INSUFFICIENT_EVIDENCE`만 허용하며 Python validator가 ID allowlist, capability/schema와 selected/abstain invariant를 다시 검증한다. 실제 interval은 계속 local Proposal manifest가 소유하고 Candidate confidence는 null이다.
+
+Semantic 호출은 별도 `SEMANTIC_MEMO_PROPOSAL_SELECTION` WorkItem/Attempt에 provider, model, prompt/schema/config와 semantic input fingerprint를 남긴다. 동일 fingerprint의 완료 결과는 재사용하고 provider/model/prompt 변경은 semantic cache만 무효화한다. Provider failure, timeout, parse/validation failure는 semantic work만 실패시키고 기존 deterministic Proposal과 결과는 보존한다. 선택 성공 시 `SceneEvidence(TRANSCRIPT, LLM_PROPOSAL_SELECTION)`에 bounded 결과만 저장하며 full prompt/response/transcript는 저장하지 않는다. 현재 환경의 API key 부재로 actual OpenAI evaluation은 미실행이고 VLM, Agent와 새 MCP Tool은 없다.
+
 ### Product Source Ingestion
 
 `backend/app/storage/source_storage.py`는 Product original binary를 위한 얇은 `SourceStorage` 경계와 Local 구현을 제공한다. Local storage는 `storage/originals/projects/<project-id>/sources/<resource-id>.<ext>` namespace를 사용하고 DB에는 절대 경로 대신 `projects/<project-id>/sources/<resource-id>.<ext>` 상대 reference를 저장한다. 기존 `video_storage`의 MOV/MP4 검증을 재사용하며 저장 스트림에서 SHA-256 fingerprint를 함께 계산한다.

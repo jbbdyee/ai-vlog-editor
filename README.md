@@ -77,7 +77,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 
 > Previous: **v1 — Project & Large Video Foundation: Completed**
 >
-> Current: **v2 Step 5 — Autonomous Scene Discovery deterministic baseline**
+> Current: **v2 Step 6-B — Selective Text LLM Transcript Proposal Selection**
 >
 > 아래 목록은 Historical Baseline과 완료된 v1 구현 상태를 함께 구분해 기록한다. [Full Product Design](docs/product/full-development-plan.md) 전체가 구현됐다는 의미는 아니다.
 
@@ -117,6 +117,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] Cutory v2 Video Editing MCP Server — stdio transport와 `probe_video` 단일 공개 capability
 - [x] Cutory v2 Memo-guided Scene Discovery deterministic baseline — persisted EditMemo에서 bounded proposal, 선택/abstain, 검증, Candidate/Evidence 영속화
 - [x] Cutory v2 Autonomous Scene Discovery deterministic baseline — transcript/audio/visual/quality cheap signal, cross-modal promotion, partial failure와 Evidence 영속화
+- [x] Cutory v2 Selective Text LLM — deterministic selector가 해결하지 못한 bounded Memo Proposal만 OpenAI Structured Outputs로 선택하거나 abstain하고 Python manifest validator와 별도 semantic WorkItem/Attempt로 검증·영속화
 
 Scene Data Foundation은 discovery 결과를 저장하기 위한 persistence 기반을 제공한다. 일반 `SceneUnit`, 별도 `QualityFlag`, `SceneRole`, CandidatePriority와 Final Scene table은 만들지 않았고, Autonomous Discovery·Event Grouping·Scene 전용 Resume/Retry algorithm은 아직 구현하지 않았다.
 
@@ -127,6 +128,8 @@ Video Editing MCP Server는 `python -m backend.app.mcp.server`로 실행하는 l
 Memo-guided Scene Discovery는 persisted `EditMemo` 하나를 `MemoIntent → TemporalSearchRegion → SceneProposal[] → deterministic selection/abstain → validator`로 처리한다. production 지원은 `KEEP`과 `JUST_NOW`/`EARLIER`, same-source search로 제한한다. 선택 성공 시 기존 `SceneCandidate(MEMO_GUIDED)`와 `USER_MEMO`, `TEMPORAL_REFERENCE`, `TRANSCRIPT_MATCH`, `SEMANTIC_SELECTION` Evidence를 저장하며, 의미가 불명확하면 WorkItem/Attempt를 정상 완료하고 Candidate를 만들지 않는다. 이 경로 자체에는 LLM/VLM이나 audio/visual refinement가 없고 새 MCP Tool도 추가하지 않았다. 로컬 eval 5개가 없어 실제 historical 평가는 실행하지 않았고 synthetic focused 결과는 `evaluation/results/memo-guided-baseline-v0.1.md`에 기록한다.
 
 Autonomous Scene Discovery는 EditMemo와 독립적으로 persisted Transcript 구조, PCM RMS activity/silence, FFmpeg grayscale frame difference/static interval을 분석한다. 단일 speech·audio·motion·quality signal은 Candidate로 승격하지 않고 reaction+audio, transcript structure+audio 또는 audio+visual이 같은 구간에서 겹치는 명시적 rule만 사용한다. Candidate confidence는 null이며 exact interval만 재사용한다. Memo Candidate와 정확히 겹치면 기존 Candidate의 provenance를 유지한 채 Autonomous Evidence를 추가하고, high-overlap 구간은 병합하지 않는다. modality partial failure는 별도 WorkItem/Attempt에 남기고 가능한 signal로 정상 completion할 수 있다. LLM/VLM 호출은 0이며 실제 media/GT가 없어 semantic accuracy는 아직 검증되지 않았다. 결과는 `evaluation/results/autonomous-baseline-v0.1.md`에 기록한다.
+
+Selective Text LLM 경로는 기존 Memo-guided deterministic selector가 유일한 Proposal을 선택한 경우 Provider를 호출하지 않는다. Transcript Proposal이 의미적으로 경쟁하거나 `EARLIER` 의미 참조가 해결되지 않은 경우에만 bounded Memo와 Proposal snippet을 `TranscriptProposalSelector`로 전달한다. OpenAI adapter의 기본 모델은 config로 교체 가능한 `gpt-6-luna`이고, Responses API Structured Outputs 결과는 기존 Proposal ID 또는 `AMBIGUOUS`/`NO_MATCH`/`INSUFFICIENT_EVIDENCE`만 허용한다. Python validator가 ID allowlist, schema/capability와 manifest를 다시 검증하며 timestamp는 로컬 Proposal이 계속 소유한다. Provider 실패는 별도 semantic WorkItem/Attempt에만 기록되고 기존 deterministic 결과를 삭제하지 않는다. 현재 개발 환경에는 `OPENAI_API_KEY`가 없어 실제 Provider 평가는 실행하지 않았으며 synthetic contract와 PostgreSQL persistence 결과는 `evaluation/results/selective-text-llm-v0.1.md`에 기록한다. VLM과 새 MCP Tool은 추가하지 않았다.
 
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 
