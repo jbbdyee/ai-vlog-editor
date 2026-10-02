@@ -9,6 +9,7 @@ google-genai==2.25.0
 h11==0.16.0
 httpx==0.28.1
 idna==3.19
+mcp==2.2.0
 openai==3.19.2
 pydantic==2.13.4
 pydantic_core==2.46.4

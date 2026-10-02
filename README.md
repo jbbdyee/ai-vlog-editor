@@ -77,7 +77,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 
 > Previous: **v1 — Project & Large Video Foundation: Completed**
 >
-> Current: **v2 Step 1 — Scene Intelligence Data Foundation**
+> Current: **v2 Step 3 — Video Editing MCP Server**
 >
 > 아래 목록은 Historical Baseline과 완료된 v1 구현 상태를 함께 구분해 기록한다. [Full Product Design](docs/product/full-development-plan.md) 전체가 구현됐다는 의미는 아니다.
 
@@ -114,10 +114,13 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] Cutory v1 Completion — Completion Gate, 한계와 v2 handoff 문서화
 - [x] Cutory v2 Scene Data Foundation — SceneCandidate/Evidence/Relation, EventGroup membership와 Scene 전용 WorkItem/Attempt schema
 - [x] Cutory v2 Internal Tool Layer — resource ID 기반 Probe·Audio·STT·Memo adapter, safe `ToolResult`와 opaque temporary audio reference
+- [x] Cutory v2 Video Editing MCP Server — stdio transport와 `probe_video` 단일 공개 capability
 
 Scene Data Foundation은 이후 discovery 결과를 저장하기 위한 persistence 기반만 제공한다. 일반 `SceneUnit`, 별도 `QualityFlag`, `SceneRole`, CandidatePriority와 Final Scene table은 만들지 않았고, Scene discovery·Event Grouping·Resume/Retry algorithm도 아직 구현하지 않았다.
 
-Internal Tool Layer는 기존 `probe_media`, `extract_audio`, `transcribe_audio`, `detect_edit_memos`를 다시 구현하지 않고 안전한 resource resolution과 구조화 결과 경계로 감싼다. Source Tool 입력은 UUID이며 raw path나 storage reference를 받지 않는다. 추출 WAV는 실제 workspace registry가 opaque artifact ID로 관리하고 Tool 결과에 경로를 노출하지 않는다. `ToolResult`는 한 번의 in-process 호출 결과이며 durable `SceneAnalysisWorkItem`/`SceneAnalysisAttempt`와 별개다. Tool 내부 business retry와 MCP SDK/Server/Client는 아직 구현하지 않았다.
+Internal Tool Layer는 기존 `probe_media`, `extract_audio`, `transcribe_audio`, `detect_edit_memos`를 다시 구현하지 않고 안전한 resource resolution과 구조화 결과 경계로 감싼다. Source Tool 입력은 UUID이며 raw path나 storage reference를 받지 않는다. 추출 WAV는 실제 workspace registry가 opaque artifact ID로 관리하고 Tool 결과에 경로를 노출하지 않는다. `ToolResult`는 한 번의 in-process 호출 결과이며 durable `SceneAnalysisWorkItem`/`SceneAnalysisAttempt`와 별개다. Tool 내부 business retry는 구현하지 않았다.
+
+Video Editing MCP Server는 `python -m backend.app.mcp.server`로 실행하는 local-first stdio process다. 현재 공개 Tool은 `probe_video` 하나뿐이며 MCP adapter가 Internal Tool을 정확히 한 번 호출한다. MCP 응답은 allowlist media metadata, safe error와 실행 metadata만 포함하고 raw path·storage reference·stderr·credential을 제외한다. Resources/Prompts, extract_audio/STT/Memo 공개, Streamable HTTP와 Scene/Agent 기능은 아직 구현하지 않았다.
 
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 

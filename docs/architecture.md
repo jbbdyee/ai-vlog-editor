@@ -50,9 +50,15 @@ WorkItem과 Attempt는 logical Scene analysis와 실제 시도의 lineage·versi
 
 `backend/app/tools/`는 향후 Scene Intelligence application과 MCP adapter가 공통으로 사용할 transport-independent capability 경계다. 초기 Tool은 `probe_video`, `extract_audio`, `transcribe_audio`, `detect_edit_memos` 네 개이며 각각 기존 v1 서비스를 호출한다. `DatabaseSourceResourceResolver`는 UUID SourceVideo와 선택적 Project ownership을 확인한 뒤 `LocalSourceStorage.resolve()`로 내부 Path를 얻는다. Tool 입력에는 절대·상대 path, storage reference와 URL을 허용하지 않으며 Path는 결과 DTO에 포함하지 않는다.
 
-모든 Tool은 명시적 version, invocation ID, UTC timing과 duration을 가진 `ToolResult`를 반환한다. 예상 가능한 resource/media/STT/input 실패만 allowlist `ToolError`로 변환하고 programmer error는 숨기지 않는다. `ToolResult`는 단일 in-process invocation 결과이고 durable Scene WorkItem/Attempt transaction을 관리하지 않는다. Audio Tool 결과는 workspace-scoped registry의 opaque `TemporaryArtifactRef`이며 실제 WAV 경로, ownership과 scope는 registry 내부에만 존재한다. Application이 Tool 간 수명을 관리하고 Tool은 생성 도중 실패한 partial output만 정리한다. Tool 내부 retry loop와 MCP dependency는 없다.
+모든 Tool은 명시적 version, invocation ID, UTC timing과 duration을 가진 `ToolResult`를 반환한다. 예상 가능한 resource/media/STT/input 실패만 allowlist `ToolError`로 변환하고 programmer error는 숨기지 않는다. `ToolResult`는 단일 in-process invocation 결과이고 durable Scene WorkItem/Attempt transaction을 관리하지 않는다. Audio Tool 결과는 workspace-scoped registry의 opaque `TemporaryArtifactRef`이며 실제 WAV 경로, ownership과 scope는 registry 내부에만 존재한다. Application이 Tool 간 수명을 관리하고 Tool은 생성 도중 실패한 partial output만 정리한다. Tool 내부 retry loop는 없다.
 
 ffprobe와 FFmpeg는 기존 argument-list 실행을 유지하면서 각각 30초와 600초의 보수적 기본 timeout을 갖고 호출별 override가 가능하다. 이는 비정상 subprocess가 worker를 무기한 점유하지 않게 하는 실행 상한이며 재시도 정책은 아니다.
+
+### Video Editing MCP Server
+
+`backend/app/mcp/`는 공식 MCP Python SDK 2.2.0의 `MCPServer`를 사용하고 `python -m backend.app.mcp.server` stdio entrypoint를 제공한다. 서버는 시작 시 PostgreSQL engine/session factory와 Product original storage만 구성하고, STT model이나 audio workspace는 초기화하지 않는다. 종료 시 SDK lifespan에서 DB engine을 dispose한다.
+
+현재 MCP allowlist에는 `probe_video`만 있다. MCP의 UUID schema 검증 뒤 adapter가 Internal `probe_video` Tool을 정확히 한 번 호출하고, Internal Tool이 ResourceResolver와 기존 ffprobe service를 사용한다. expected Tool failure는 safe structured response이고 programmer failure는 Tool failure로 위장하지 않으며 MCP internal error로 sanitization된다. stdio log는 stderr에 tool name, invocation ID, status, safe error code와 duration만 남긴다. Resources/Prompts, business retry, Streamable HTTP/SSE, extract_audio/STT/Memo 공개와 Scene/Agent orchestration은 없다.
 
 ### Product Source Ingestion
 

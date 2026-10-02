@@ -54,3 +54,20 @@ Transport error, validation error, capability failure, timeout, resource missing
 ## 향후 확장
 
 정확한 MCP schema, auth, deployment boundary, streaming/progress, capability version negotiation은 구현 단계에서 결정한다.
+
+## 현재 구현
+
+`backend/app/mcp/`에 공식 MCP Python SDK 2.2.0 기반의 최소 Video Editing MCP Server가 구현되어 있다. 실행 entrypoint는 `python -m backend.app.mcp.server`이고 transport는 stdio다. Server process는 PostgreSQL session factory와 `LocalSourceStorage`만 구성하며 현재 공개 capability는 `probe_video` 하나다.
+
+```text
+MCP Client
+→ stdio protocol/schema validation
+→ probe_video MCP adapter
+→ Internal probe_video Tool
+→ ResourceResolver
+→ existing probe_media / ffprobe
+```
+
+입력은 필수 `source_video_id: UUID`와 선택적 Project scope assertion인 `project_id: UUID | null`만 받는다. 성공 응답은 allowlist media metadata와 Tool execution metadata를, expected failure는 safe code/message와 retryability를 반환한다. raw path, storage reference, stderr, ORM object와 credential은 반환하지 않는다. Programmer error는 expected Tool failure로 변환하지 않고 MCP internal error로 sanitization한다.
+
+현재 MCP Resources와 Prompts는 없으며 `extract_audio`, `transcribe_audio`, `detect_edit_memos`도 공개하지 않는다. MCP Server는 retry, Scene selection, WorkItem/Attempt transaction이나 workflow orchestration을 담당하지 않는다. Streamable HTTP, SSE, auth와 remote deployment도 구현하지 않았다.
