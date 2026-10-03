@@ -9,9 +9,10 @@ SourceVideo에서 Final Render와 Short-form 후보까지 데이터가 어떻게
 ```text
 Project + SourceVideo
 → MediaInfo / Transcript / EditMemo / Technical Signals
-→ SceneCandidate + SceneEvidence + QualityFlags
+→ SceneCandidate + Observed SceneEvidence + QualityFlags
 → SceneRelations / EventGroups
-→ ResolvedStyle + EpisodePlan + EditPlan
+→ optional Scene Agent semantic/role hints
+→ ResolvedStyle + EpisodePlan + EditPlan / authoritative SceneEditPlan role
 → CreativePlan
 → PreviewRender
 → Review + ReviewIssues
@@ -22,9 +23,19 @@ Project + SourceVideo
 
 ## Scene Discovery Data
 
-Memo-guided candidate와 Autonomous candidate, Story/B-roll/Transition candidate를 동일 SceneCandidate family로 구조화하되 출처 Evidence를 유지한다. SceneRole은 `HIGHLIGHT`, `STORY`, `REACTION`, `ESTABLISHING`, `B_ROLL`, `TRANSITION`, `BEHIND`, `FILLER`, `BAD_TAKE`를 표현할 수 있다.
+Memo-guided candidate와 Autonomous candidate를 동일 SceneCandidate family로 구조화하되 출처 Evidence를 유지한다. v2 SceneCandidate에는 Project-context final SceneRole을 고정하지 않는다. Scene Agent는 필요하면 evidence-backed optional semantic/role hint를 제공할 수 있고, Edit Planner가 Project와 EditPlan context에서 SceneEditPlan의 authoritative editorial/narrative role을 결정한다.
 
 Evidence의 예는 `USER_MEMO`, `TRANSCRIPT`, `AUDIO_REACTION`, `VISUAL_EVENT`, `MOTION`, `SHOT_CHANGE`, `USER_PREFERENCE`다. QualityFlag의 예는 `BLUR`, `SHAKE`, `DARK`, `OVEREXPOSED`, `LONG_SILENCE`, `DUPLICATE`, `ACCIDENTAL_RECORDING`, `LOW_AUDIO_QUALITY`다. Technical quality, confidence, preference match를 서로 다른 field로 다룬다.
+
+개념 taxonomy도 한 enum으로 섞지 않는다.
+
+- Observed semantic fact: reaction observed, dialogue present, location view, action/event cue
+- Technical quality: blur, shake, dark, long silence, static, low audio quality
+- Candidate utility/preference: explicit user memo, preference match, likely-highlight signal
+- Editorial/narrative role: `STORY`, `ESTABLISHING`, `B_ROLL`, `TRANSITION` 등. final authority는 Edit Planner
+- Exclusion/preservation reason: `BAD_TAKE`, duplicate, unused good scene, behind-the-scenes preservation
+
+`REACTION`은 observed fact와 final reaction-shot usage를 구분한다. `HIGHLIGHT`는 절대 속성이 아니라 Project context에 따른 선택 판단이다. `BAD_TAKE`는 role이 아니며 quality issue가 있어도 explicit user intent를 자동으로 무효화하지 않는다. exact enum과 multi-label contract는 v3 Detailed Plan에서 결정한다.
 
 ## Cross-video Event Data
 
@@ -44,8 +55,8 @@ EditPlan, EpisodePlan, CreativePlan은 immutable version으로 보존하고 succ
 ```text
 FinalRender
 ↑ CreativePlan v3
-↑ EditPlan v2
-↑ SceneEditPlan / SceneCandidate
+↑ EditPlan v3
+↑ SceneEditPlan authoritative role / Scene Agent optional hint / SceneCandidate
 ↑ EventGroup / SceneEvidence
 ↑ SourceVideo
 ```

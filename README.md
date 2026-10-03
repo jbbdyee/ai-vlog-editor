@@ -77,7 +77,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 
 > Previous: **v1 — Project & Large Video Foundation: Completed**
 >
-> Current: **v2 Gap Closure G4-B — Shot Structure deterministic baseline completed**
+> Current: **v2 Structural/Foundation Implementation Complete — Gap Closure in progress; G4-C SceneRole scope amendment completed**
 >
 > 아래 목록은 Historical Baseline과 완료된 v1 구현 상태를 함께 구분해 기록한다. [Full Product Design](docs/product/full-development-plan.md) 전체가 구현됐다는 의미는 아니다.
 
@@ -121,8 +121,11 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] Cutory v2 deterministic Event Grouping baseline — explicit cheap blocking으로 Candidate pair를 축소하고 exact duplicate Relation, conservative accepted-relation grouping, unassigned와 incremental processing을 영속화
 - [x] Cutory v2 Scene Resume / Reprocess — Work result contract, Candidate result-link, modality별 fingerprint, targeted invalidation, explicit retry/stale recovery와 incremental Event update
 - [x] Cutory v2 Shot Structure deterministic baseline — FFmpeg `scdet` 기반 hard-cut 구조, bounded Shot manifest, 독립 `SHOT_EVIDENCE` Work와 Candidate 보조 Evidence 구현. actual synthetic 4-fixture와 PostgreSQL 17.11/Alembic 검증 완료
+- [x] Cutory v2 G4-C SceneRole scope amendment — v2는 observed Evidence를 소유하고, v3 Scene Agent hint는 optional/non-authoritative이며, v3 Edit Planner가 SceneEditPlan의 final editorial/narrative role을 결정하도록 Source of Truth 정리
 
-Scene Data Foundation은 discovery 결과를 저장하기 위한 persistence 기반을 제공한다. 일반 `SceneUnit`, 별도 `QualityFlag`, `SceneRole`, CandidatePriority와 Final Scene table은 만들지 않았다. Scene 전용 실행 상태는 완료 결과의 input/config/producer와 Work별 result contract를 검사하고, result-link가 가리키는 최신 유효 Candidate만 Event snapshot에 포함한다.
+Scene Data Foundation은 discovery 결과를 저장하기 위한 persistence 기반을 제공한다. 일반 `SceneUnit`, 별도 `QualityFlag`, `SceneRole`, CandidatePriority와 Final Scene table은 만들지 않았다. 이는 SceneRole capability 삭제가 아니다. v2는 observed Evidence를 제공하고, v3 Scene Agent는 필요할 때 optional role/usage hint를 제공하며, v3 Edit Planner가 Project/EditPlan context에서 final role을 결정한다. Scene 전용 실행 상태는 완료 결과의 input/config/producer와 Work별 result contract를 검사하고, result-link가 가리키는 최신 유효 Candidate만 Event snapshot에 포함한다.
+
+현재 v2 전체는 아직 Completed가 아니다. Gap Closure 상태는 G1 actual Text LLM evaluation `BLOCKED_NO_API_KEY`, G4-A review/G4-B Shot Structure/G4-C scope amendment 완료, G2/G3/G5 pending이다.
 
 Internal Tool Layer는 기존 `probe_media`, `extract_audio`, `transcribe_audio`, `detect_edit_memos`를 다시 구현하지 않고 안전한 resource resolution과 구조화 결과 경계로 감싼다. Source Tool 입력은 UUID이며 raw path나 storage reference를 받지 않는다. 추출 WAV는 실제 workspace registry가 opaque artifact ID로 관리하고 Tool 결과에 경로를 노출하지 않는다. `ToolResult`는 한 번의 in-process 호출 결과이며 durable `SceneAnalysisWorkItem`/`SceneAnalysisAttempt`와 별개다. Tool 내부 business retry는 구현하지 않았다.
 

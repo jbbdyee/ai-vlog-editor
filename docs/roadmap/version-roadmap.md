@@ -1,6 +1,6 @@
 # Cutory Version Roadmap
 
-> Status: Active Version Roadmap — v1 Completed, v2 Detailed Design Next
+> Status: Active Version Roadmap — v1 Completed, v2 Structural/Foundation Implementation Complete with Gap Closure in progress
 >
 > 이 문서는 현재 Baseline에서 [Cutory Full Product Design](../product/full-development-plan.md)까지 도달하는 구현 순서를 정의한다. Full Product 범위를 축소하거나 각 Version의 상세 구현을 확정하는 문서가 아니다.
 
@@ -204,6 +204,7 @@ Project/resource ID, 100+ Source analysis state, reusable Transcript/EditMemo/me
 - Memo-guided Scene Discovery와 전체 footage 대상 Autonomous Scene Discovery 병행
 - Memo가 있어도 Autonomous Discovery를 비활성화하지 않는 정책
 - Scene segmentation, SceneCandidate, SceneEvidence, SceneQualityFlag
+- 관측 가능한 Transcript/Audio/Visual/Shot/Quality Evidence. Project-context final SceneRole은 만들지 않음
 - technical quality, confidence, preference match 분리
 - `Cheap → Expensive Analysis`와 deep-analysis 전 Candidate Reduction
 - 필요한 후보 구간에 한정한 LLM/VLM 심층 분석
@@ -218,7 +219,7 @@ Project/resource ID, 100+ Source analysis state, reusable Transcript/EditMemo/me
 ### 평가 대상
 
 - Memo-guided/Autonomous discovery의 독립적·결합 성능
-- Scene boundary, role, evidence, quality flag의 정확성과 calibration
+- Scene boundary와 observed evidence/quality signal의 정확성 및 lineage
 - candidate reduction이 유의미한 Scene을 보존하는지
 - cross-video relation/EventGroup 품질
 - cheap/expensive 분석 비용과 외부 전송 최소화
@@ -250,12 +251,14 @@ Scene을 후보 목록으로 끝내지 않고 사용자 의도, 프로젝트 요
 ### 핵심 범위와 새 capability
 
 - Scene Agent, Style Agent, Edit Planner의 책임 분리
+- Scene Agent의 evidence-backed optional semantic/role hint와 Edit Planner의 authoritative final editorial/narrative role 분리
 - workflow state/routing만 담당하는 Orchestrator
 - LangGraph 도입 검토 및 필요한 경우 persisted workflow 구현
 - sequential flow, conditional routing, user wait state와 resume
 - CurrentInstruction, ProjectStyle, UserStyleProfile, retrieved reference 우선순위를 반영한 ResolvedStyle
 - Event 기반 Narrative, target duration, 중복 제거, Opening/Ending
 - EpisodePlan, EditPlan, SceneEditPlan과 Creative Intent
+- Project/EditPlan context에서 SceneEditPlan의 scene별 최종 role 결정
 - Episode split policy: `SINGLE`, `AUTO_SPLIT`, `USER_CONFIRM_SPLIT`
 - EventGroup, 장소, 주제, Narrative boundary, target duration 기반 Episode 구성
 - 사용자 결정이 필요한 split/plan의 persisted wait state
@@ -452,7 +455,9 @@ End-to-End Full Product, Final Render와 optional Short-form workflow, productio
 | Partial Failure / Temporary Cleanup | v1 | v2 Tool, v3 workflow, v6 UX |
 | Memo-guided Discovery | v2 | v3 planning, v6 evidence UX |
 | Autonomous Discovery | v2 | Memo와 병행해 v3 planning 입력 |
-| Scene Evidence / Quality / Candidate Reduction | v2 | v3 Planner, v5 Reviewer |
+| Scene Evidence / Quality / Candidate Reduction | v2 | v3 Scene Agent/Planner, v5 Reviewer |
+| Optional candidate semantic/role hint | v3 Scene Agent | v3 Planner input, v5 targeted retry |
+| Authoritative editorial/narrative role | v3 Edit Planner / SceneEditPlan | v4~v6 Creative·Review·Render |
 | Cross-video Event Grouping | v2 | v3 Narrative/Episode planning |
 | Tool Layer / MCP | v2 | v3~v6 Agent execution |
 | Scene Agent | v3 | v5 targeted retry |
@@ -481,7 +486,7 @@ End-to-End Full Product, Final Render와 optional Short-form workflow, productio
 
 ## 12. Per-Version Detailed Plan 정책
 
-전체 Version의 구현 상세를 지금 한 번에 확정하지 않는다. v1은 완료됐으며, 다음 작업은 v1 결과를 입력으로 사용하는 v2 Detailed Plan 작성이다. 각 Version 시작 직전에 필요하면 다음 문서를 만든다.
+전체 Version의 구현 상세를 지금 한 번에 확정하지 않는다. v1은 완료됐고 v2 Detailed Plan에 따른 Structural/Foundation 구현 후 Gap Closure를 진행 중이다. 각 Version 시작 직전에 필요하면 다음 문서를 만든다.
 
 ```text
 docs/roadmap/v1-plan.md
@@ -497,7 +502,7 @@ docs/roadmap/v2-plan.md
 - 재사용 가능한 산출물과 남은 위험
 - 다음 Version의 dependency와 범위에 미치는 영향
 
-현재는 v2 Detailed Design 전환 단계이며 `docs/roadmap/v2-plan.md`는 아직 생성되지 않았다.
+현재 v2 Source of Truth는 `docs/roadmap/v2-plan.md`다. v2 완료 판정 뒤 실제 Evaluation/Failure Analysis를 입력으로 v3 Detailed Plan을 작성한다.
 
 ## 13. 의도적으로 미결정인 사항
 

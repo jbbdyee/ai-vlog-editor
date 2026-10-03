@@ -2,7 +2,7 @@
 
 ## 1. Status
 
-> Status: Detailed Plan — Implementation Not Started
+> Status: Structural/Foundation Implementation Complete — Gap Closure in progress; Version Completion not declared
 >
 > Previous version: [v1 — Project & Large Video Foundation](v1-completion.md) — Completed
 > Version sequence: [Cutory Version Roadmap](version-roadmap.md)
@@ -28,7 +28,7 @@ Project
 → EventGroup
 ```
 
-v2는 최종 브이로그 편집 Version이 아니다. 결과는 v3의 Scene Agent, Style Agent, Edit Planner와 Orchestrator가 사용할 구조화 기반이다. v2는 후보와 근거를 만들고 평가 가능한 상태로 보존하지만, 최종 narrative·timeline·creative decision을 내리지 않는다.
+v2는 최종 브이로그 편집 Version이 아니다. 결과는 v3의 Scene Agent, Style Agent, Edit Planner와 Orchestrator가 사용할 구조화 기반이다. v2는 “영상에서 무엇이 관측되었는가”를 bounded Evidence와 Candidate/Relation으로 만들고 평가 가능한 상태로 보존하지만, 최종 narrative·timeline·creative decision이나 authoritative SceneRole을 내리지 않는다.
 
 ## 3. v1에서 이어받는 기반
 
@@ -67,6 +67,7 @@ v2 범위는 다음과 같다.
 - Transcript, Audio, Visual, Shot Structure Evidence
 - proposal generation, semantic selection, deterministic validation
 - candidate merge/deduplication과 conflict preservation
+- authoritative SceneRole assignment가 아닌 관측 가능한 semantic/technical Evidence
 
 ### Cost-aware analysis
 
@@ -103,6 +104,7 @@ v2 범위는 다음과 같다.
 - RAG와 장기 Style Memory
 - production deployment 최적화
 - Agent 간 자유 대화 또는 Multi-Agent workflow
+- Project/EditPlan context에 따른 authoritative SceneRole assignment
 
 MCP를 구현한다는 사실은 Agent나 Multi-Agent를 구현한다는 뜻이 아니다. v2 MCP Client는 Scene Intelligence application 경계에서 Tool capability를 호출할 수 있으며, v3 Agent가 같은 capability contract를 재사용할 수 있게 한다.
 
@@ -111,14 +113,15 @@ MCP를 구현한다는 사실은 Agent나 Multi-Agent를 구현한다는 뜻이 
 1. **사용자 의도 우선**: Explicit User Intent인 EditMemo는 일반 heuristic score와 단순 평균하지 않는다.
 2. **Evidence ≠ Decision**: audio spike, motion, transcript hit는 근거이지 좋은 장면이라는 최종 판단이 아니다.
 3. **Candidate ≠ Final Scene**: v2는 검토 가치가 있는 후보를 발견한다. 최종 편집 선택은 후속 Version 책임이다.
-4. **Cheap → Expensive**: 전체 원본을 같은 비용으로 AI Provider에 보내지 않는다.
-5. **Proposal ID selection**: AI가 authoritative timestamp를 자유 생성하지 않는다.
-6. **Deterministic validation**: interval, resource ownership, proposal mapping과 실행은 일반 코드가 검증한다.
-7. **Capability over provider**: business logic을 Gemini, Ollama/Qwen 등 특정 Provider에 결합하지 않는다.
-8. **Structured intermediate result**: Evidence, status, version, lineage와 failure를 보존한다.
-9. **Incremental and resumable**: 유효한 결과를 재사용하고 영향받은 downstream만 재계산한다.
-10. **Local-first and minimal disclosure**: 전체 MOV/WAV의 외부 전송을 기본 금지하고 선택된 최소 context만 전송한다.
-11. **Baseline → Evaluation → Failure Analysis → Improvement**: threshold와 모델은 평가 전에 성공을 보장하는 방향으로 조정하지 않는다.
+4. **Observed Evidence ≠ Editorial Role**: reaction cue, location view, shot change와 quality signal은 관측 근거다. 최종 role은 v3 Planner의 EditPlan context에서 결정한다.
+5. **Cheap → Expensive**: 전체 원본을 같은 비용으로 AI Provider에 보내지 않는다.
+6. **Proposal ID selection**: AI가 authoritative timestamp를 자유 생성하지 않는다.
+7. **Deterministic validation**: interval, resource ownership, proposal mapping과 실행은 일반 코드가 검증한다.
+8. **Capability over provider**: business logic을 Gemini, Ollama/Qwen 등 특정 Provider에 결합하지 않는다.
+9. **Structured intermediate result**: Evidence, status, version, lineage와 failure를 보존한다.
+10. **Incremental and resumable**: 유효한 결과를 재사용하고 영향받은 downstream만 재계산한다.
+11. **Local-first and minimal disclosure**: 전체 MOV/WAV의 외부 전송을 기본 금지하고 선택된 최소 context만 전송한다.
+12. **Baseline → Evaluation → Failure Analysis → Improvement**: threshold와 모델은 평가 전에 성공을 보장하는 방향으로 조정하지 않는다.
 
 ## 7. Target Architecture
 
@@ -304,12 +307,11 @@ Autonomous Discovery ──┘
 
 Autonomous Discovery는 Memo가 없는 영상에서도 실행하며 Memo가 있는 영상에서도 독립적으로 수행한다. 목적은 최종 편집 여부 결정이 아니라 “검토할 가치가 있는 구간을 근거와 함께 발견”하는 것이다.
 
-Scene role 후보:
+### SceneRole Scope Amendment
 
-- `HIGHLIGHT`, `STORY`, `REACTION`, `ESTABLISHING`
-- `B_ROLL`, `TRANSITION`, `BEHIND`, `FILLER`, `BAD_TAKE`
+G4 Architecture Review 결과 authoritative SceneRole assignment는 v2에서 v3 Edit Planner로 이동한다. 이는 누락 기능을 삭제하거나 SceneRole capability 자체를 제거한 것이 아니다. `HIGHLIGHT`, `ESTABLISHING`, `B_ROLL`, `TRANSITION`처럼 최종 사용 역할은 Project theme, target duration, surrounding scenes, Episode와 placement에 따라 같은 Candidate에도 달라질 수 있기 때문이다.
 
-Role enum, multi-role 허용 여부와 role confidence contract는 **Evaluation으로 결정**한다.
+v2는 `REACTION` cue, dialogue, location view, action/event cue 같은 observed semantic fact와 Memo/preference match, technical quality를 분리된 Evidence로 제공한다. v3 Scene Agent는 필요할 때 evidence-backed, optional, potentially multi-label semantic/role hint를 제공할 수 있고, v3 Edit Planner가 전체 Project/EditPlan context에서 final editorial/narrative role을 결정한다. role enum, multi-label 정책과 Planner output contract는 v3 Detailed Plan에서 결정한다.
 
 Evidence channel:
 
@@ -367,6 +369,8 @@ motion은 semantic relevance와 동의어가 아니다. deterministic signal과 
 ### Quality Evidence
 
 Technical quality는 semantic value와 분리한다. 낮은 품질은 경고·ranking input이 될 수 있지만 자동 삭제 결정은 아니다.
+
+`BAD_TAKE`는 editorial role이 아니라 quality judgment 또는 exclusion/preservation reason에 가깝다. 이름만으로 자동 drop하지 않으며 Explicit User Intent가 technical issue보다 우선할 수 있다.
 
 ### Memo Evidence
 
@@ -657,7 +661,8 @@ Provider 장애와 semantic 판단 실패를 합치지 않는다.
 - Transcript/Audio/Visual/Shot/Quality cheap Evidence
 - Memo와 독립적인 Candidate 생성
 - candidate merge/deduplication과 conflict 보존
-- role/quality taxonomy Baseline 평가
+- observed semantic fact, technical quality, candidate utility Evidence의 분리 평가
+- final SceneRole assignment는 수행하지 않고 v3 Planner responsibility로 handoff
 
 ### Step 6 — Selective LLM / VLM Analysis
 
@@ -699,6 +704,7 @@ v2 완료 선언 전 최소 다음을 실제로 검증하고 근거를 남긴다
 
 - [ ] SceneCandidate / Evidence / Relation / EventGroup 영속화 가능
 - [ ] Candidate, Evidence, Quality와 Decision 의미가 혼합되지 않음
+- [ ] Observed Evidence와 Project-context editorial role이 혼합되지 않음
 - [ ] source/result/producer/config lineage가 추적 가능
 
 ### Tool
@@ -723,6 +729,7 @@ v2 완료 선언 전 최소 다음을 실제로 검증하고 근거를 남긴다
 ### Multimodal / AI
 
 - [ ] Transcript / Audio / Visual Evidence가 분리되어 보존됨
+- [ ] Shot Structure Evidence가 Visual Activity와 구분되어 생성·재사용됨
 - [ ] Quality와 semantic value가 분리됨
 - [ ] LLM/VLM이 Candidate Reduction 이후 selective하게 사용됨
 - [ ] capability와 provider가 분리됨
@@ -762,6 +769,8 @@ v2 완료 선언 전 최소 다음을 실제로 검증하고 근거를 남긴다
 | SceneUnit 영속 범위 | TBD | 재생성 비용/lineage 검토 |
 | QualityFlag 별도 entity 여부 | TBD | Step 1 |
 | final Scene entity 도입 | TBD | v2 validation 결과 |
+| authoritative SceneRole | v3 Edit Planner로 이동 | Project/EditPlan context-dependent editorial decision |
+| optional semantic/role hint | v3 Scene Agent에서 설계 | evidence-backed, non-authoritative Planner input |
 | `DUPLICATE`와 기존 `ALTERNATIVE` relation | 구현 전 확정 필요 | relation semantics/Evaluation |
 | Candidate Reduction threshold/비율 | Evaluation으로 결정 | Step 6 Baseline |
 | target accuracy 숫자 | TBD | evaluation protocol 사전 등록 |
@@ -801,8 +810,9 @@ v2는 v3에 다음 결과를 넘긴다.
 - Scene work-item Resume/Retry/Reprocess 기반
 - Memo/Autonomous/Reduction/LLM-VLM/Event Evaluation 결과
 - 비용·privacy·provider·scale Failure Analysis
+- authoritative role로 고정되지 않은 observed semantic/technical Evidence
 
-v3는 이 기반 위에서 Scene Agent, Style Agent, Edit Planner와 필요한 Orchestrator를 설계한다. v2 문서에서 v3 Agent의 prompt, LangGraph state graph, planning schema와 Multi-Agent interaction을 미리 확정하지 않는다.
+v3는 이 기반 위에서 Scene Agent, Style Agent, Edit Planner와 필요한 Orchestrator를 설계한다. Scene Agent는 필요하면 Evidence 기반 semantic/usage/role hint를 제공하지만 final authority를 갖지 않는다. Edit Planner는 Project instruction, Candidate/EventGroup, target duration, ResolvedStyle, surrounding scenes와 Episode placement를 반영해 SceneEditPlan의 authoritative editorial/narrative role을 결정한다. v2 문서에서 exact role enum, v3 Agent prompt, LangGraph state graph, planning schema와 Multi-Agent interaction을 미리 확정하지 않는다.
 
 ## References
 

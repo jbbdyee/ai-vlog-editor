@@ -13,7 +13,7 @@
 - Version Roadmap의 `v1 — Project & Large Video Foundation`은 완료됐다.
 - 완료 범위와 근거는 `docs/roadmap/v1-plan.md`, `docs/roadmap/v1-completion.md`, `evaluation/results/cutory-v1-foundation-eval-v0.1.md`를 따른다.
 - `v2 — Tool / MCP & Scene Intelligence`의 Detailed Plan이 수립됐으며 `docs/roadmap/v2-plan.md`를 현재 v2 구현의 Source of Truth로 사용한다.
-- v2 Gap Closure G4-B — Shot Structure deterministic baseline은 actual FFmpeg synthetic fixture와 PostgreSQL 17.11/Alembic 검증까지 완료됐다. FFmpeg `scdet` 기반 ShotBoundary/ShotInterval과 독립 `SHOT_EVIDENCE` Work 계약을 제공하되 Shot은 Candidate 생성·승격·boundary refinement, SceneRole 또는 Event 판단을 하지 않는다. synthetic 결과를 production accuracy로 과장하지 않으며, Distributed queue/lock, semantic Event relation, VLM, Scene Agent, LangGraph, Multi-Agent, RAG, Creative Editing, Reviewer, Final Mobile App, Short-form을 앞당기지 않는다.
+- v2는 Structural/Foundation Implementation Complete 상태이며 Gap Closure를 진행 중이다. G4-A review, G4-B Shot Structure와 G4-C SceneRole scope amendment는 완료됐고, G1 actual Text LLM evaluation은 `BLOCKED_NO_API_KEY`, G2/G3/G5는 pending이다. v2는 observed Evidence를 소유하고 SceneRole은 v3에서 Scene Agent의 optional/non-authoritative hint와 Edit Planner의 authoritative SceneEditPlan role로 분리한다. v2 전체를 Completed로 과장하거나 Distributed queue/lock, semantic Event relation, VLM, Scene Agent, LangGraph, Multi-Agent, RAG, Creative Editing, Reviewer, Final Mobile App, Short-form을 앞당기지 않는다.
 - 미결정 사항을 임의로 확정하거나 포트폴리오 목적만으로 기술을 추가하지 않는다.
 
 ## 기준 문서

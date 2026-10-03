@@ -66,9 +66,9 @@ Episode 경계는 단순 시간 slicing이 아니라 EventGroup, 장소, 주제,
 | --- | --- | --- |
 | Product/Journey | 사용자 문제, 최종 경험, 승인 경계 | [Product Vision](product-vision.md), [User Journey](user-journey.md) |
 | Ingestion/Media | 100+ 영상 점진 업로드·분석 | [Large Video Processing](../architecture/large-video-processing.md) |
-| Scene Agent | Memo+Autonomous 장면 후보와 Evidence | [Scene Agent](../agents/scene-agent.md) |
+| Scene Agent | Memo+Autonomous 장면 후보와 Evidence, 선택적 semantic/usage hint | [Scene Agent](../agents/scene-agent.md) |
 | Style Agent | Profile/Project/Instruction을 ResolvedStyle로 해석 | [Style Agent](../agents/style-agent.md) |
-| Edit Planner | Event Group을 이야기, Episode, EditPlan으로 구성 | [Edit Planner](../agents/edit-planner.md) |
+| Edit Planner | Event Group을 이야기, Episode, EditPlan으로 구성하고 최종 editorial/narrative role 결정 | [Edit Planner](../agents/edit-planner.md) |
 | Creative Agent | Caption/BGM/Color/Transition/SFX 실행 계획 | [Creative Agent](../agents/creative-agent.md) |
 | Reviewer | 문제 근거와 retry target 지정 | [Reviewer](../agents/reviewer-agent.md) |
 | Orchestrator | 상태, routing, wait, resume, bounded retry | [Orchestrator](../agents/orchestrator.md) |
@@ -94,6 +94,12 @@ Frontend → FastAPI → Project/Ingestion
 
 PostgreSQL/Memory, Vector Retrieval/RAG, File/Object Storage, Temporary Workspace는 이 흐름의 구조화 상태·검색·binary·중간 산출물을 각각 담당한다.
 
+### Observed Evidence와 Editorial Decision
+
+Scene Intelligence는 대화, reaction cue, 장소 view, visual activity, shot change와 technical quality처럼 영상에서 관측되거나 bounded analysis로 도출된 Evidence를 제공한다. Scene Agent는 필요할 때 여러 Evidence를 조합해 candidate가 `REACTION`이나 `B_ROLL`로 활용될 가능성 같은 optional semantic/role hint를 제공할 수 있지만, 이 hint는 final authority가 아니다.
+
+장면의 최종 editorial/narrative role은 Project instruction, 전체 Candidate와 EventGroup, target duration, ResolvedStyle, 주변 장면, Episode와 placement를 함께 보는 Edit Planner가 `SceneEditPlan`에서 결정한다. 같은 공항 외관도 opening에서는 `ESTABLISHING`, 대화 위 overlay에서는 `B_ROLL`, Event 사이에서는 `TRANSITION`이 될 수 있으므로 SceneRole은 SceneCandidate의 절대적이고 영구적인 속성이 아니다. Full Product에서 SceneRole capability를 삭제하는 것이 아니라 authority를 planning lineage에 둔다.
+
 ## 6. 중요 정책
 
 - 우선순위: `CurrentInstruction > ProjectStyle > UserStyleProfile > RetrievedStyleReference > SystemDefault`
@@ -109,7 +115,7 @@ Main Vlog가 기본 출력이며, 이후 Final Vlog Scene과 본편에서 사용
 
 ## 8. 현재 구현과의 경계
 
-현재 FastAPI, Streamlit, `VideoProcessingPipeline`, fixed-window Baseline, Scene/VLM Spike는 Full Product 전체가 아니다. 이들은 Full Product 구조를 결정하기 전에 검증한 Baseline, feasibility, integration history로 보존한다. 현재 Version 범위는 [Version Roadmap](../roadmap/version-roadmap.md)과 [v1 Detailed Plan](../roadmap/v1-plan.md)을 따르며, 과거 단일 영상 Baseline은 [MVP v1 Specification](../mvp-v1-spec.md), 실험 결과는 `evaluation/results/`, 실제 통합 검증은 `docs/integration-eval01-v0.1.md`와 `docs/browser-e2e-v0.1.md`에 보존한다.
+현재 FastAPI, Streamlit, `VideoProcessingPipeline`, fixed-window Baseline, Scene/VLM Spike는 Full Product 전체가 아니다. 이들은 Full Product 구조를 결정하기 전에 검증한 Baseline, feasibility, integration history로 보존한다. 현재 Version 범위는 [Version Roadmap](../roadmap/version-roadmap.md)과 [v2 Detailed Plan](../roadmap/v2-plan.md)을 따르고, 완료된 v1 범위는 [v1 Detailed Plan](../roadmap/v1-plan.md)과 [v1 Completion](../roadmap/v1-completion.md)에 보존한다. 과거 단일 영상 Baseline은 [MVP v1 Specification](../mvp-v1-spec.md), 실험 결과는 `evaluation/results/`, 실제 통합 검증은 `docs/integration-eval01-v0.1.md`와 `docs/browser-e2e-v0.1.md`에 보존한다.
 
 ## 9. 하지 않는 일
 
