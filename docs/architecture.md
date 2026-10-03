@@ -74,6 +74,14 @@ provider-independent selector 계약의 현재 구현은 명시적 rule chain만
 
 Promotion은 opaque score 없이 `REACTION_CUE_PLUS_AUDIO`, `TRANSCRIPT_STRUCTURE_PLUS_AUDIO`, `AUDIO_PLUS_VISUAL_ACTIVITY`의 interval intersection만 허용한다. 단일 modality 또는 quality-only 결과는 정상 abstention한다. exact interval Candidate가 있으면 재사용해 Evidence를 추가하고 discovery provenance를 바꾸지 않으며, high-overlap·containment·nearby는 병합하지 않는다. Transcript/Audio/Visual/Promotion WorkItem과 Attempt가 modality failure를 분리하며 일부 modality 실패 시 warning과 함께 가능한 분석을 완료한다. Candidate confidence는 null이고 Evidence payload에는 bounded measurement와 rule ID만 저장한다. 현재 schema가 Evidence를 Candidate에 종속하므로 Candidate로 승격되지 않은 quality fact는 runtime/WorkItem 집계까지만 보존한다. LLM/VLM, SceneRole, EventGroup, cross-source와 새 MCP Tool은 없다.
 
+### Shot Structure deterministic baseline
+
+Shot Structure는 Autonomous Visual Activity와 독립된 cheap observation이다. Visual Activity는 저해상도 grayscale frame difference로 motion/static interval을 측정하지만, Shot Structure는 FFmpeg `scdet`의 scene-change metadata를 이용해 촬영/편집 연속성이 끊긴 hard/jump-cut 경계를 관측한다. 큰 camera motion은 같은 shot일 수 있고 정적인 두 화면 사이에도 cut이 있을 수 있으므로 두 결과를 대체 관계로 취급하지 않는다.
+
+`ShotBoundary`와 `ShotInterval`은 runtime DTO이며 별도 Product table을 만들지 않는다. 정규화·dedupe된 경계와 source 전체를 연속적으로 덮는 interval은 bounded canonical manifest로 압축되어 `SHOT_EVIDENCE` WorkItem의 result reference가 된다. 경계가 0개인 continuous shot도 하나의 `0..duration` interval을 가진 정상 completion이다. active Candidate interval과 실제 경계가 겹칠 때만 bounded `SHOT_CHANGE` Evidence를 추가하며 전체 manifest, raw frame, path 또는 FFmpeg log는 Candidate마다 복제하지 않는다. Shot은 Candidate를 생성·승격하거나 interval을 수정하지 않고 SceneRole/Event 판단도 하지 않는다.
+
+Shot input fingerprint는 source fingerprint와 duration, config fingerprint는 detector version·threshold·minimum duration·bounded limit을 소유한다. 따라서 Shot 설정 변경은 Transcript/Audio/Visual/Promotion을 무효화하지 않고 `SHOT_EVIDENCE`만 재실행한다. source fingerprint가 바뀌거나 분석 중 snapshot이 바뀌면 Shot result는 current completion으로 commit되지 않는다. actual FFmpeg synthetic 4-fixture 평가는 hard-cut GT 4개에 precision/recall/F1 1.0과 continuous-motion false positive 0을 기록했다. 이는 synthetic baseline 결과이며 production vlog accuracy를 의미하지 않는다.
+
 ### Selective Text LLM Transcript Proposal Selection
 
 `backend/app/services/transcript_proposal_selector.py`는 Memo-guided deterministic selector가 해결하지 못한 semantic selection만 위한 provider-independent capability다. 유일한 deterministic Proposal, Proposal 0개, unsupported intent에는 AI를 호출하지 않는다. 현재 escalation reason은 `AMBIGUOUS_TRANSCRIPT_PROPOSALS`, `SEMANTIC_REFERENCE_UNRESOLVED`, `TRANSCRIPT_INSUFFICIENT`로 제한한다. Input은 bounded Memo와 기존 Proposal ID별 bounded transcript snippet뿐이며 전체 Transcript, timestamp, path, Ground Truth와 media를 포함하지 않는다.

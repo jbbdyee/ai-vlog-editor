@@ -31,6 +31,7 @@ SEMANTIC_MEMO_PROPOSAL_SELECTION = "SEMANTIC_MEMO_PROPOSAL_SELECTION"
 TRANSCRIPT_EVIDENCE = "TRANSCRIPT_EVIDENCE"
 AUDIO_EVIDENCE = "AUDIO_EVIDENCE"
 VISUAL_EVIDENCE = "VISUAL_EVIDENCE"
+SHOT_EVIDENCE = "SHOT_EVIDENCE"
 AUTONOMOUS_PROMOTION = "AUTONOMOUS_PROMOTION"
 EVENT_PAIR_FILTER = "EVENT_PAIR_FILTER"
 EVENT_GROUPING = "EVENT_GROUPING"
@@ -42,6 +43,7 @@ WORK_DEPENDENCIES: Mapping[str, tuple[str, ...]] = {
     TRANSCRIPT_EVIDENCE: (),
     AUDIO_EVIDENCE: (),
     VISUAL_EVIDENCE: (),
+    SHOT_EVIDENCE: (),
     AUTONOMOUS_PROMOTION: (
         TRANSCRIPT_EVIDENCE,
         AUDIO_EVIDENCE,
@@ -138,6 +140,10 @@ def work_result_is_valid(session: Session, work: SceneAnalysisWorkItem) -> bool:
         return payload.get("schema") == "autonomous-modality-result-v0.1" and isinstance(
             payload.get("evidences"), list
         )
+    if work.work_type == SHOT_EVIDENCE:
+        from backend.app.services.shot_structure import validate_shot_work_result
+
+        return validate_shot_work_result(work)
     if work.work_type == SEMANTIC_MEMO_PROPOSAL_SELECTION:
         try:
             payload = json.loads(work.result_reference)
