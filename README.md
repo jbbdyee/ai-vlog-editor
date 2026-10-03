@@ -77,7 +77,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 
 > Previous: **v1 — Project & Large Video Foundation: Completed**
 >
-> Current: **v2 Step 6-B — Selective Text LLM Transcript Proposal Selection**
+> Current: **v2 Step 7-B — Deterministic Pair Reduction + Conservative Event Grouping**
 >
 > 아래 목록은 Historical Baseline과 완료된 v1 구현 상태를 함께 구분해 기록한다. [Full Product Design](docs/product/full-development-plan.md) 전체가 구현됐다는 의미는 아니다.
 
@@ -118,6 +118,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [x] Cutory v2 Memo-guided Scene Discovery deterministic baseline — persisted EditMemo에서 bounded proposal, 선택/abstain, 검증, Candidate/Evidence 영속화
 - [x] Cutory v2 Autonomous Scene Discovery deterministic baseline — transcript/audio/visual/quality cheap signal, cross-modal promotion, partial failure와 Evidence 영속화
 - [x] Cutory v2 Selective Text LLM — deterministic selector가 해결하지 못한 bounded Memo Proposal만 OpenAI Structured Outputs로 선택하거나 abstain하고 Python manifest validator와 별도 semantic WorkItem/Attempt로 검증·영속화
+- [x] Cutory v2 deterministic Event Grouping baseline — explicit cheap blocking으로 Candidate pair를 축소하고 exact duplicate Relation, conservative accepted-relation grouping, unassigned와 incremental processing을 영속화
 
 Scene Data Foundation은 discovery 결과를 저장하기 위한 persistence 기반을 제공한다. 일반 `SceneUnit`, 별도 `QualityFlag`, `SceneRole`, CandidatePriority와 Final Scene table은 만들지 않았고, Autonomous Discovery·Event Grouping·Scene 전용 Resume/Retry algorithm은 아직 구현하지 않았다.
 
@@ -130,6 +131,8 @@ Memo-guided Scene Discovery는 persisted `EditMemo` 하나를 `MemoIntent → Te
 Autonomous Scene Discovery는 EditMemo와 독립적으로 persisted Transcript 구조, PCM RMS activity/silence, FFmpeg grayscale frame difference/static interval을 분석한다. 단일 speech·audio·motion·quality signal은 Candidate로 승격하지 않고 reaction+audio, transcript structure+audio 또는 audio+visual이 같은 구간에서 겹치는 명시적 rule만 사용한다. Candidate confidence는 null이며 exact interval만 재사용한다. Memo Candidate와 정확히 겹치면 기존 Candidate의 provenance를 유지한 채 Autonomous Evidence를 추가하고, high-overlap 구간은 병합하지 않는다. modality partial failure는 별도 WorkItem/Attempt에 남기고 가능한 signal로 정상 completion할 수 있다. LLM/VLM 호출은 0이며 실제 media/GT가 없어 semantic accuracy는 아직 검증되지 않았다. 결과는 `evaluation/results/autonomous-baseline-v0.1.md`에 기록한다.
 
 Selective Text LLM 경로는 기존 Memo-guided deterministic selector가 유일한 Proposal을 선택한 경우 Provider를 호출하지 않는다. Transcript Proposal이 의미적으로 경쟁하거나 `EARLIER` 의미 참조가 해결되지 않은 경우에만 bounded Memo와 Proposal snippet을 `TranscriptProposalSelector`로 전달한다. OpenAI adapter의 기본 모델은 config로 교체 가능한 `gpt-6-luna`이고, Responses API Structured Outputs 결과는 기존 Proposal ID 또는 `AMBIGUOUS`/`NO_MATCH`/`INSUFFICIENT_EVIDENCE`만 허용한다. Python validator가 ID allowlist, schema/capability와 manifest를 다시 검증하며 timestamp는 로컬 Proposal이 계속 소유한다. Provider 실패는 별도 semantic WorkItem/Attempt에만 기록되고 기존 deterministic 결과를 삭제하지 않는다. 현재 개발 환경에는 `OPENAI_API_KEY`가 없어 실제 Provider 평가는 실행하지 않았으며 synthetic contract와 PostgreSQL persistence 결과는 `evaluation/results/selective-text-llm-v0.1.md`에 기록한다. VLM과 새 MCP Tool은 추가하지 않았다.
+
+Deterministic Event Grouping baseline은 Project Candidate snapshot에서 bounded transcript token, Evidence type, source ordering과 exact source identity를 explicit blocking reason으로 사용해 likely pair만 만든다. 이 신호는 relation decision이 아니며 production에서 자동 생성하는 Relation은 같은 source fingerprint와 0.001초 정규화 interval이 모두 일치하는 canonical `DUPLICATE`뿐이다. EventGroup engine은 이미 accepted된 `SAME_EVENT`만 입력으로 받고, singleton·single bridge merge·multiple current membership을 금지한다. 근거가 부족한 Candidate는 정상 unassigned로 유지한다. 600 synthetic Candidate scale은 pair reduction 구조만 검증하며 실제 semantic grouping accuracy를 의미하지 않는다. LLM/VLM 호출과 새 MCP Tool은 없다.
 
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 

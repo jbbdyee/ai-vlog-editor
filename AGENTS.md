@@ -13,7 +13,7 @@
 - Version Roadmap의 `v1 — Project & Large Video Foundation`은 완료됐다.
 - 완료 범위와 근거는 `docs/roadmap/v1-plan.md`, `docs/roadmap/v1-completion.md`, `evaluation/results/cutory-v1-foundation-eval-v0.1.md`를 따른다.
 - `v2 — Tool / MCP & Scene Intelligence`의 Detailed Plan이 수립됐으며 `docs/roadmap/v2-plan.md`를 현재 v2 구현의 Source of Truth로 사용한다.
-- 현재 구현 단계는 v2 Step 6-B — Selective Text LLM 기반 Transcript Proposal Selection이다. Memo-guided deterministic selector가 해결하지 못한 bounded transcript Proposal만 선택적으로 의미 비교하며, LLM은 기존 Proposal ID 선택 또는 명시적 abstention만 반환한다. VLM production integration, semantic role, Event Grouping, Scene Agent, LangGraph, Multi-Agent, RAG, Creative Editing, Reviewer, Final Mobile App, Short-form을 앞당기지 않는다.
+- 현재 구현 단계는 v2 Step 7-B — Deterministic Pair Reduction + Conservative Event Grouping baseline이다. Project Candidate pair는 explicit cheap blocking으로 축소하고, production relation inference는 exact duplicate에 제한한다. EventGroup은 accepted `SAME_EVENT`만 보수적으로 소비하며 singleton·single bridge merge·multiple current membership을 허용하지 않는다. Semantic relation, VLM, Scene Agent, LangGraph, Multi-Agent, RAG, Creative Editing, Reviewer, Final Mobile App, Short-form을 앞당기지 않는다.
 - 미결정 사항을 임의로 확정하거나 포트폴리오 목적만으로 기술을 추가하지 않는다.
 
 ## 기준 문서
