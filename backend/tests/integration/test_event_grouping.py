@@ -14,6 +14,7 @@ from backend.app.models import (
     Project,
     SceneAnalysisAttempt,
     SceneAnalysisWorkItem,
+    SceneAnalysisWorkResultCandidate,
     SceneCandidate,
     SceneDiscoveryMethod,
     SceneEvidence,
@@ -56,6 +57,13 @@ class EventGroupingIntegrationTests(TestCase):
                 session.execute(delete(EventGroupMember).where(EventGroupMember.event_group_id.in_(group_ids)))
                 session.execute(delete(SceneRelation).where(SceneRelation.source_scene_candidate_id.in_(candidate_ids)))
                 session.execute(delete(SceneEvidence).where(SceneEvidence.scene_candidate_id.in_(candidate_ids)))
+                session.execute(
+                    delete(SceneAnalysisWorkResultCandidate).where(
+                        SceneAnalysisWorkResultCandidate.scene_candidate_id.in_(
+                            select(SceneCandidate.id).where(SceneCandidate.source_video_id.in_(source_ids))
+                        )
+                    )
+                )
                 session.execute(delete(SceneCandidate).where(SceneCandidate.source_video_id.in_(source_ids)))
                 session.execute(delete(SceneAnalysisAttempt).where(SceneAnalysisAttempt.work_item_id.in_(work_ids)))
                 session.execute(delete(SceneAnalysisWorkItem).where(SceneAnalysisWorkItem.project_id == project_id))

@@ -82,6 +82,12 @@ Promotion은 opaque score 없이 `REACTION_CUE_PLUS_AUDIO`, `TRANSCRIPT_STRUCTUR
 
 Semantic 호출은 별도 `SEMANTIC_MEMO_PROPOSAL_SELECTION` WorkItem/Attempt에 provider, model, prompt/schema/config와 semantic input fingerprint를 남긴다. 동일 fingerprint의 완료 결과는 재사용하고 provider/model/prompt 변경은 semantic cache만 무효화한다. Provider failure, timeout, parse/validation failure는 semantic work만 실패시키고 기존 deterministic Proposal과 결과는 보존한다. 선택 성공 시 `SceneEvidence(TRANSCRIPT, LLM_PROPOSAL_SELECTION)`에 bounded 결과만 저장하며 full prompt/response/transcript는 저장하지 않는다. 현재 환경의 API key 부재로 actual OpenAI evaluation은 미실행이고 VLM, Agent와 새 MCP Tool은 없다.
 
+### Scene Resume, Retry and Reprocess
+
+`scene_processing_state.py`는 Work type별 result contract와 dependency registry로 Scene Work의 input/config/producer/result validity를 검사한다. Candidate가 0개인 discovery, semantic abstention, retained pair 0개와 EventGroup 0개도 명시적 완료 fingerprint가 있으면 재사용한다. 동일 spec의 FAILED Work는 새 Attempt로만 retry하고, RUNNING은 caller가 제공한 cutoff로 stale recovery한 뒤에만 retry한다.
+
+`scene_analysis_work_result_candidates`는 WorkItem과 그 Candidate 결과의 최소 association이다. 과거 Candidate row는 즉시 삭제하지 않지만 Event pair snapshot은 최신 유효 Work의 result-link Candidate만 사용한다. Autonomous Transcript/Audio/Visual Work는 각자 독립 input/config/result fingerprint를 가지며 Promotion은 modality result fingerprint에 의존한다. Event grouping input에는 canonical accepted `SAME_EVENT` Relation set fingerprint가 포함된다. Source coordinator는 Candidate 결과 변화만 보고하고 caller가 그때만 Project Event coordinator의 incremental update를 명시적으로 호출한다. Source/Project parent row lock은 같은 logical work claim을 재검사하지만 distributed lock이나 background scheduler를 제공하지 않는다.
+
 ### Product Source Ingestion
 
 `backend/app/storage/source_storage.py`는 Product original binary를 위한 얇은 `SourceStorage` 경계와 Local 구현을 제공한다. Local storage는 `storage/originals/projects/<project-id>/sources/<resource-id>.<ext>` namespace를 사용하고 DB에는 절대 경로 대신 `projects/<project-id>/sources/<resource-id>.<ext>` 상대 reference를 저장한다. 기존 `video_storage`의 MOV/MP4 검증을 재사용하며 저장 스트림에서 SHA-256 fingerprint를 함께 계산한다.

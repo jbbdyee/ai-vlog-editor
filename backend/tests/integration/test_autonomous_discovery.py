@@ -10,6 +10,7 @@ from backend.app.models import (
     Project,
     SceneAnalysisAttempt,
     SceneAnalysisWorkItem,
+    SceneAnalysisWorkResultCandidate,
     SceneCandidate,
     SceneDiscoveryMethod,
     SceneEvidence,
@@ -97,6 +98,13 @@ class AutonomousDiscoveryIntegrationTests(TestCase):
                 candidate_ids = select(SceneCandidate.id).where(SceneCandidate.source_video_id.in_(source_ids))
                 work_ids = select(SceneAnalysisWorkItem.id).where(SceneAnalysisWorkItem.project_id == project_id)
                 session.execute(delete(SceneEvidence).where(SceneEvidence.scene_candidate_id.in_(candidate_ids)))
+                session.execute(
+                    delete(SceneAnalysisWorkResultCandidate).where(
+                        SceneAnalysisWorkResultCandidate.scene_candidate_id.in_(
+                            select(SceneCandidate.id).where(SceneCandidate.source_video_id.in_(source_ids))
+                        )
+                    )
+                )
                 session.execute(delete(SceneCandidate).where(SceneCandidate.source_video_id.in_(source_ids)))
                 session.execute(delete(SceneAnalysisAttempt).where(SceneAnalysisAttempt.work_item_id.in_(work_ids)))
                 session.execute(delete(SceneAnalysisWorkItem).where(SceneAnalysisWorkItem.project_id == project_id))

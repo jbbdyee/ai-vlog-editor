@@ -104,6 +104,9 @@ class SceneAnalysisWorkItem(TimestampMixin, Base):
     scene_candidates: Mapped[list[SceneCandidate]] = relationship(
         back_populates="analysis_work_item", passive_deletes=True
     )
+    result_candidates: Mapped[list[SceneAnalysisWorkResultCandidate]] = relationship(
+        back_populates="work_item", passive_deletes=True
+    )
 
 
 class SceneAnalysisAttempt(Base):
@@ -198,6 +201,35 @@ class SceneCandidate(TimestampMixin, Base):
     )
     event_group_memberships: Mapped[list[EventGroupMember]] = relationship(
         back_populates="scene_candidate", passive_deletes=True
+    )
+    result_work_items: Mapped[list[SceneAnalysisWorkResultCandidate]] = relationship(
+        back_populates="scene_candidate", passive_deletes=True
+    )
+
+
+class SceneAnalysisWorkResultCandidate(Base):
+    __tablename__ = "scene_analysis_work_result_candidates"
+    __table_args__ = (
+        Index(
+            "ix_scene_work_result_candidates_candidate_id", "scene_candidate_id"
+        ),
+    )
+
+    work_item_id: Mapped[UUID] = mapped_column(
+        ForeignKey("scene_analysis_work_items.id"), primary_key=True
+    )
+    scene_candidate_id: Mapped[UUID] = mapped_column(
+        ForeignKey("scene_candidates.id"), primary_key=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    work_item: Mapped[SceneAnalysisWorkItem] = relationship(
+        back_populates="result_candidates"
+    )
+    scene_candidate: Mapped[SceneCandidate] = relationship(
+        back_populates="result_work_items"
     )
 
 

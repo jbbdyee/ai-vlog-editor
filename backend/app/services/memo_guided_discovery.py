@@ -18,6 +18,7 @@ from backend.app.models import (
     SceneAnalysisAttempt,
     SceneAnalysisAttemptStatus,
     SceneAnalysisWorkItem,
+    SceneAnalysisWorkResultCandidate,
     SceneAnalysisWorkStatus,
     SceneCandidate,
     SceneDiscoveryMethod,
@@ -511,6 +512,14 @@ def process_memo_guided_discovery(
             session, source, memo, work_item, intent, region, selection, chosen,
             input_fingerprint, config_fingerprint,
         )
+        if candidate is not None and session.get(
+            SceneAnalysisWorkResultCandidate, (work_item.id, candidate.id)
+        ) is None:
+            session.add(
+                SceneAnalysisWorkResultCandidate(
+                    work_item_id=work_item.id, scene_candidate_id=candidate.id
+                )
+            )
         now = datetime.now(timezone.utc)
         work_item.status = SceneAnalysisWorkStatus.COMPLETED
         work_item.result_reference = (

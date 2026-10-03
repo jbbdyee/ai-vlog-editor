@@ -6,6 +6,9 @@ from enum import Enum
 import hashlib
 import json
 import math
+import base64
+import binascii
+import zlib
 from pathlib import Path
 import re
 from statistics import median
@@ -19,6 +22,7 @@ from backend.app.models import (
     SceneAnalysisAttempt,
     SceneAnalysisAttemptStatus,
     SceneAnalysisWorkItem,
+    SceneAnalysisWorkResultCandidate,
     SceneAnalysisWorkStatus,
     SceneCandidate,
     SceneDiscoveryMethod,
@@ -38,6 +42,7 @@ from backend.app.services.visual_motion_refiner import (
     extract_grayscale_frames,
     median_smooth_motion_scores,
 )
+from backend.app.services.scene_fingerprints import canonical_fingerprint, canonical_json
 
 
 VERSION = "autonomous-discovery-v0.1"
@@ -338,8 +343,87 @@ def process_autonomous_discovery(
     if source is None or source.duration_seconds is None:
         raise AutonomousDiscoveryError("Source or source duration is unavailable.")
     duration = float(source.duration_seconds)
-    config_fingerprint = _fingerprint(asdict(config))
-    input_fingerprint = _fingerprint({"source": source.fingerprint, "transcript": source.transcript.segments if source.transcript else None})
+    modality_specs = _modality_specs(source, config)
+    analyses: list[tuple[str, ModalityAnalysis | None, str | None, str, str]] = []
+    analyzers: dict[str, tuple[SignalAnalyzer | None, str]] = {
+        AUDIO_WORK: (audio_analyzer, "AUDIO_UNAVAILABLE"),
+        VISUAL_WORK: (visual_analyzer, "VISUAL_UNAVAILABLE"),
+    }
+    for work_type in (TRANSCRIPT_WORK, AUDIO_WORK, VISUAL_WORK):
+        modality_input, modality_config = modality_specs[work_type]
+        cached = _cached_modality_work(
+            session, source.id, work_type, modality_input, modality_config
+        )
+        cached_analysis = _decode_analysis(cached.result_reference) if cached else None
+        if cached is not None and cached_analysis is not None:
+            analyses.append((work_type, cached_analysis, None, modality_input, modality_config))
+            continue
+        if work_type == TRANSCRIPT_WORK:
+            if source.transcript is None:
+                analyses.append((work_type, None, "TRANSCRIPT_UNAVAILABLE", modality_input, modality_config))
+            else:
+                try:
+                    result = analyze_transcript_structure(
+                        source_video_id=source.id,
+                        segments=source.transcript.segments,
+                        duration_seconds=duration,
+                        config=config,
+                    )
+                    analyses.append((work_type, result, None, modality_input, modality_config))
+                except Exception:
+                    analyses.append((work_type, None, "TRANSCRIPT_ANALYSIS_FAILED", modality_input, modality_config))
+            continue
+        analyzer, unavailable = analyzers[work_type]
+        if analyzer is None:
+            analyses.append((work_type, None, unavailable, modality_input, modality_config))
+        else:
+            try:
+                analyses.append((work_type, analyzer(), None, modality_input, modality_config))
+            except Exception:
+                analyses.append((work_type, None, f"{work_type}_FAILED", modality_input, modality_config))
+    if all(result is None for _, result, _, _, _ in analyses):
+        raise AutonomousDiscoveryError("All autonomous modalities failed or were unavailable.")
+
+    work_items: list[SceneAnalysisWorkItem] = []
+    warnings: list[str] = []
+    facts: list[SignalEvidence] = []
+    modality_result_fingerprints: dict[str, str] = {}
+    for work_type, result, warning, modality_input, modality_config in analyses:
+        cached = _cached_modality_work(
+            session, source.id, work_type, modality_input, modality_config
+        )
+        if cached is not None and result is not None:
+            work = cached
+        else:
+            work, _ = _record_work(
+                session,
+                source,
+                work_type,
+                modality_input,
+                modality_config,
+                analysis=result,
+                warning=warning,
+            )
+        work_items.append(work)
+        modality_result_fingerprints[work_type] = work.result_fingerprint or canonical_fingerprint(
+            {"work_type": work_type, "warning": warning}
+        )
+        if result:
+            facts.extend(result.evidences)
+            warnings.extend(result.warnings)
+        if warning:
+            warnings.append(warning)
+
+    input_fingerprint = canonical_fingerprint(
+        {"modality_results": modality_result_fingerprints}
+    )
+    config_fingerprint = canonical_fingerprint(
+        {
+            "interval_precision": config.interval_precision,
+            "maximum_manifest_intervals": config.maximum_manifest_intervals,
+            "promotion_version": VERSION,
+        }
+    )
     existing = session.scalar(
         select(SceneAnalysisWorkItem).where(
             SceneAnalysisWorkItem.source_video_id == source.id,
@@ -350,58 +434,16 @@ def process_autonomous_discovery(
         )
     )
     if existing:
-        candidates = tuple(
+        candidate_ids = tuple(
             session.scalars(
-                select(SceneCandidate)
-                .join(SceneEvidence, SceneEvidence.scene_candidate_id == SceneCandidate.id)
-                .where(SceneEvidence.source_reference == f"autonomous-work:{existing.id}")
-                .distinct()
+                select(SceneAnalysisWorkResultCandidate.scene_candidate_id)
+                .where(SceneAnalysisWorkResultCandidate.work_item_id == existing.id)
+                .order_by(SceneAnalysisWorkResultCandidate.scene_candidate_id)
             )
         )
-        return AutonomousDiscoveryResult(source.id, (existing.id,), tuple(item.id for item in candidates), tuple((float(item.start_seconds), float(item.end_seconds)) for item in candidates), {}, 0, ("IDEMPOTENT_REUSE",), not candidates, len(candidates))
-
-    analyses: list[tuple[str, ModalityAnalysis | None, str | None]] = []
-    if source.transcript is None:
-        analyses.append((TRANSCRIPT_WORK, None, "TRANSCRIPT_UNAVAILABLE"))
-    else:
-        try:
-            analyses.append((TRANSCRIPT_WORK, analyze_transcript_structure(source_video_id=source.id, segments=source.transcript.segments, duration_seconds=duration, config=config), None))
-        except Exception:
-            analyses.append((TRANSCRIPT_WORK, None, "TRANSCRIPT_ANALYSIS_FAILED"))
-    for work_type, analyzer, unavailable in (
-        (AUDIO_WORK, audio_analyzer, "AUDIO_UNAVAILABLE"),
-        (VISUAL_WORK, visual_analyzer, "VISUAL_UNAVAILABLE"),
-    ):
-        if analyzer is None:
-            analyses.append((work_type, None, unavailable))
-        else:
-            try:
-                analyses.append((work_type, analyzer(), None))
-            except Exception:
-                analyses.append((work_type, None, f"{work_type}_FAILED"))
-    if all(result is None for _, result, _ in analyses):
-        raise AutonomousDiscoveryError("All autonomous modalities failed or were unavailable.")
-
-    work_items: list[SceneAnalysisWorkItem] = []
-    warnings: list[str] = []
-    facts: list[SignalEvidence] = []
-    for work_type, result, warning in analyses:
-        work, _ = _record_work(
-            session,
-            source,
-            work_type,
-            input_fingerprint,
-            config_fingerprint,
-            completed=result is not None,
-            warning=warning,
-            result_count=len(result.evidences) if result else 0,
-        )
-        work_items.append(work)
-        if result:
-            facts.extend(result.evidences)
-            warnings.extend(result.warnings)
-        if warning:
-            warnings.append(warning)
+        candidates = tuple(session.get(SceneCandidate, item) for item in candidate_ids)
+        candidates = tuple(item for item in candidates if item is not None)
+        return AutonomousDiscoveryResult(source.id, tuple(item.id for item in work_items) + (existing.id,), tuple(item.id for item in candidates), tuple((float(item.start_seconds), float(item.end_seconds)) for item in candidates), {}, 0, ("IDEMPOTENT_REUSE",), not candidates, len(candidates))
 
     promotion, promotion_attempt = _start_work(session, source, PROMOTION_WORK, input_fingerprint, config_fingerprint)
     work_items.append(promotion)
@@ -413,6 +455,14 @@ def process_autonomous_discovery(
         reused_count = 0
         for proposal in proposals:
             candidate, reused = _promote(session, source, promotion, proposal, facts, input_fingerprint, config_fingerprint)
+            if session.get(
+                SceneAnalysisWorkResultCandidate, (promotion.id, candidate.id)
+            ) is None:
+                session.add(
+                    SceneAnalysisWorkResultCandidate(
+                        work_item_id=promotion.id, scene_candidate_id=candidate.id
+                    )
+                )
             candidate_ids.append(candidate.id)
             intervals.append((float(candidate.start_seconds), float(candidate.end_seconds)))
             reused_count += int(reused)
@@ -482,13 +532,14 @@ def _promote(session, source, work, proposal, facts, input_fingerprint, config_f
     return candidate, reused
 
 
-def _record_work(session, source, work_type, input_fingerprint, config_fingerprint, *, completed, warning, result_count):
+def _record_work(session, source, work_type, input_fingerprint, config_fingerprint, *, analysis, warning):
     work, attempt = _start_work(session, source, work_type, input_fingerprint, config_fingerprint)
     now = datetime.now(timezone.utc)
-    if completed:
+    if analysis is not None:
         work.status = SceneAnalysisWorkStatus.COMPLETED
-        work.result_reference = f"evidence-count:{result_count}"
-        work.result_fingerprint = _fingerprint({"count": result_count, "warning": warning})
+        manifest = _analysis_manifest(analysis)
+        work.result_reference = _encode_analysis(manifest)
+        work.result_fingerprint = canonical_fingerprint(manifest)
         attempt.status = SceneAnalysisAttemptStatus.COMPLETED
     else:
         work.status = SceneAnalysisWorkStatus.FAILED
@@ -498,6 +549,123 @@ def _record_work(session, source, work_type, input_fingerprint, config_fingerpri
     attempt.completed_at = now
     session.flush()
     return work, attempt
+
+
+def _modality_specs(source, config):
+    transcript_result = canonical_fingerprint(source.transcript.segments) if source.transcript else "TRANSCRIPT_UNAVAILABLE"
+    return {
+        TRANSCRIPT_WORK: (
+            canonical_fingerprint({"transcript": transcript_result}),
+            canonical_fingerprint({
+                "transcript_gap_seconds": config.transcript_gap_seconds,
+                "reaction_cues": config.reaction_cues,
+                "interval_precision": config.interval_precision,
+            }),
+        ),
+        AUDIO_WORK: (
+            canonical_fingerprint({"source": source.fingerprint}),
+            canonical_fingerprint({
+                "long_silence_seconds": config.long_silence_seconds,
+                "interval_precision": config.interval_precision,
+                "audio_primitive": asdict(DEFAULT_AUDIO_BOUNDARY_CONFIG),
+            }),
+        ),
+        VISUAL_WORK: (
+            canonical_fingerprint({"source": source.fingerprint}),
+            canonical_fingerprint({
+                "static_interval_seconds": config.static_interval_seconds,
+                "interval_precision": config.interval_precision,
+                "visual_primitive": asdict(DEFAULT_VISUAL_BOUNDARY_CONFIG),
+            }),
+        ),
+    }
+
+
+def _cached_modality_work(session, source_id, work_type, input_fingerprint, config_fingerprint):
+    return session.scalar(
+        select(SceneAnalysisWorkItem)
+        .where(
+            SceneAnalysisWorkItem.source_video_id == source_id,
+            SceneAnalysisWorkItem.work_type == work_type,
+            SceneAnalysisWorkItem.input_fingerprint == input_fingerprint,
+            SceneAnalysisWorkItem.config_fingerprint == config_fingerprint,
+            SceneAnalysisWorkItem.status == SceneAnalysisWorkStatus.COMPLETED,
+            SceneAnalysisWorkItem.result_fingerprint.is_not(None),
+        )
+        .order_by(SceneAnalysisWorkItem.created_at.desc())
+    )
+
+
+def _analysis_manifest(analysis):
+    return {
+        "schema": "autonomous-modality-result-v0.1",
+        "evidences": [
+            {
+                "interval": {
+                    "source_video_id": str(fact.interval.source_video_id),
+                    "start_seconds": fact.interval.start_seconds,
+                    "end_seconds": fact.interval.end_seconds,
+                    "unit_type": fact.interval.unit_type.value,
+                    "producer": fact.interval.producer,
+                    "producer_version": fact.interval.producer_version,
+                },
+                "modality": fact.modality.value,
+                "evidence_type": fact.evidence_type,
+                "payload": fact.payload,
+            }
+            for fact in sorted(
+                analysis.evidences,
+                key=lambda item: (
+                    item.interval.start_seconds,
+                    item.interval.end_seconds,
+                    item.modality.value,
+                    item.evidence_type,
+                ),
+            )
+        ],
+        "warnings": sorted(analysis.warnings),
+    }
+
+
+def _decode_analysis(value):
+    try:
+        if value and value.startswith("zlib:"):
+            payload = json.loads(
+                zlib.decompress(base64.b64decode(value[5:])).decode("utf-8")
+            )
+        else:
+            payload = json.loads(value or "")
+        if payload.get("schema") != "autonomous-modality-result-v0.1":
+            return None
+        facts = []
+        for item in payload["evidences"]:
+            interval = item["interval"]
+            facts.append(
+                SignalEvidence(
+                    AnalysisInterval(
+                        UUID(interval["source_video_id"]),
+                        float(interval["start_seconds"]),
+                        float(interval["end_seconds"]),
+                        AnalysisUnitType(interval["unit_type"]),
+                        str(interval["producer"]),
+                        str(interval["producer_version"]),
+                    ),
+                    SceneEvidenceModality(item["modality"]),
+                    str(item["evidence_type"]),
+                    dict(item["payload"]),
+                )
+            )
+        return ModalityAnalysis(tuple(facts), tuple(payload.get("warnings", ())))
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError, zlib.error, binascii.Error):
+        return None
+
+
+def _encode_analysis(manifest):
+    raw = canonical_json(manifest).encode("utf-8")
+    encoded = "zlib:" + base64.b64encode(zlib.compress(raw, level=9)).decode("ascii")
+    if len(encoded) > 1024:
+        raise AutonomousDiscoveryError("Bounded modality result manifest is too large.")
+    return encoded
 
 
 def _start_work(session, source, work_type, input_fingerprint, config_fingerprint):

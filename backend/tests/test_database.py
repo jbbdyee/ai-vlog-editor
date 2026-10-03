@@ -102,5 +102,6 @@ class DatabaseFoundationTests(TestCase):
                 "event_group_members",
                 "scene_analysis_work_items",
                 "scene_analysis_attempts",
+                "scene_analysis_work_result_candidates",
             },
         )

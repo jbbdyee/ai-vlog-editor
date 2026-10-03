@@ -34,6 +34,7 @@ SCENE_TABLES = {
     "event_group_members",
     "scene_analysis_work_items",
     "scene_analysis_attempts",
+    "scene_analysis_work_result_candidates",
 }
 
 
@@ -41,9 +42,14 @@ class SceneModelMetadataTests(TestCase):
     def test_scene_tables_and_primary_keys_are_registered(self) -> None:
         self.assertTrue(SCENE_TABLES <= set(Base.metadata.tables))
         for table_name in SCENE_TABLES:
+            expected = (
+                ["work_item_id", "scene_candidate_id"]
+                if table_name == "scene_analysis_work_result_candidates"
+                else ["id"]
+            )
             self.assertEqual(
                 [column.name for column in Base.metadata.tables[table_name].primary_key],
-                ["id"],
+                expected,
             )
 
     def test_foreign_keys_and_required_fields_are_declared(self) -> None:
@@ -70,6 +76,10 @@ class SceneModelMetadataTests(TestCase):
             },
             "scene_analysis_attempts": {
                 ("work_item_id", "scene_analysis_work_items.id")
+            },
+            "scene_analysis_work_result_candidates": {
+                ("work_item_id", "scene_analysis_work_items.id"),
+                ("scene_candidate_id", "scene_candidates.id"),
             },
         }
         for table_name, expected_keys in expected.items():

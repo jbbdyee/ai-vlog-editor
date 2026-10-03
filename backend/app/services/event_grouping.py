@@ -9,7 +9,7 @@ import re
 from typing import Iterable, Sequence
 from uuid import UUID
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.app.models import (
@@ -18,6 +18,7 @@ from backend.app.models import (
     SceneAnalysisAttempt,
     SceneAnalysisAttemptStatus,
     SceneAnalysisWorkItem,
+    SceneAnalysisWorkResultCandidate,
     SceneAnalysisWorkStatus,
     SceneCandidate,
     SceneEvidence,
@@ -27,6 +28,7 @@ from backend.app.models import (
     SourceVideo,
     Transcript,
 )
+from backend.app.services.scene_processing_state import active_candidate_ids
 
 
 PAIR_FILTER_WORK_TYPE = "EVENT_PAIR_FILTER"
@@ -169,7 +171,19 @@ def load_candidate_snapshot(
     *,
     config: PairFilterConfig = PairFilterConfig(),
 ) -> tuple[CandidateComparisonProjection, ...]:
-    candidates = session.scalars(
+    active_ids = active_candidate_ids(session, project_id)
+    has_links = bool(
+        session.scalar(
+            select(func.count(SceneAnalysisWorkResultCandidate.work_item_id))
+            .join(
+                SceneAnalysisWorkItem,
+                SceneAnalysisWorkItem.id
+                == SceneAnalysisWorkResultCandidate.work_item_id,
+            )
+            .where(SceneAnalysisWorkItem.project_id == project_id)
+        )
+    )
+    query = (
         select(SceneCandidate)
         .join(SourceVideo, SceneCandidate.source_video_id == SourceVideo.id)
         .where(SourceVideo.project_id == project_id)
@@ -188,7 +202,12 @@ def load_candidate_snapshot(
             .load_only(Transcript.segments),
         )
         .order_by(SceneCandidate.created_at, SceneCandidate.id)
-    ).all()
+    )
+    if has_links:
+        query = query.where(
+            SceneCandidate.id.in_(active_ids or (UUID(int=0),))
+        )
+    candidates = session.scalars(query).all()
     sources = {candidate.source_video.id: candidate.source_video for candidate in candidates}
     source_ids = sorted(
         sources,
@@ -344,9 +363,22 @@ def build_conservative_group_sets(
         for first, second in same_event_pairs
         if first in candidates and second in candidates and first != second
     }
+    degrees = {
+        candidate: sum(candidate in edge for edge in edges) for candidate in candidates
+    }
     groups: list[set[UUID]] = []
     prevented_bridge_merges = 0
-    for left, right in sorted(edges, key=lambda pair: (pair[0].hex, pair[1].hex)):
+    # Prefer low-degree edges as conservative seeds. This prevents the middle
+    # bridge of a path from becoming a UUID-order-dependent seed while still
+    # allowing a fully connected clique to expand.
+    for left, right in sorted(
+        edges,
+        key=lambda pair: (
+            degrees[pair[0]] + degrees[pair[1]],
+            pair[0].hex,
+            pair[1].hex,
+        ),
+    ):
         left_groups = [group for group in groups if left in group]
         right_groups = [group for group in groups if right in group]
         if not left_groups and not right_groups:
@@ -419,10 +451,14 @@ def process_event_grouping(
         existing_relations=existing_relation_pairs,
         focus_candidate_ids=focus_candidate_ids,
     )
+    relation_set_fingerprint = accepted_relation_set_fingerprint(
+        session, project_id, active_candidate_ids={item.candidate_id for item in projections}
+    )
     grouping_input = _fingerprint(
         {
             "snapshot": manifest.candidate_snapshot_fingerprint,
             "pair_manifest": manifest.result_fingerprint,
+            "accepted_relations": relation_set_fingerprint,
             "grouping_version": GROUPING_VERSION,
         }
     )
@@ -503,6 +539,20 @@ def process_event_grouping(
     )
     session.commit()
     try:
+        current_projections = load_candidate_snapshot(session, project_id, config=config)
+        current_snapshot_fingerprint = _fingerprint(
+            [_projection_identity(item) for item in current_projections]
+        )
+        current_relation_fingerprint = accepted_relation_set_fingerprint(
+            session,
+            project_id,
+            active_candidate_ids={item.candidate_id for item in current_projections},
+        )
+        if (
+            current_snapshot_fingerprint != manifest.candidate_snapshot_fingerprint
+            or current_relation_fingerprint != relation_set_fingerprint
+        ):
+            raise EventGroupingError("INPUT_CHANGED_DURING_EXECUTION")
         same_event_pairs = session.execute(
             select(
                 SceneRelation.source_scene_candidate_id,
@@ -611,6 +661,42 @@ def persist_relation(
     session.add(relation)
     session.flush()
     return relation, True
+
+
+def accepted_relation_set_fingerprint(
+    session: Session,
+    project_id: UUID,
+    *,
+    active_candidate_ids: set[UUID] | None = None,
+) -> str:
+    rows = session.execute(
+        select(
+            SceneRelation.source_scene_candidate_id,
+            SceneRelation.target_scene_candidate_id,
+            SceneRelation.relation_type,
+            SceneRelation.producer,
+            SceneRelation.producer_version,
+        )
+        .join(
+            SceneCandidate,
+            SceneRelation.source_scene_candidate_id == SceneCandidate.id,
+        )
+        .join(SourceVideo, SceneCandidate.source_video_id == SourceVideo.id)
+        .where(
+            SourceVideo.project_id == project_id,
+            SceneRelation.relation_type == SceneRelationType.SAME_EVENT,
+        )
+    ).all()
+    active = active_candidate_ids
+    canonical = []
+    for source_id, target_id, relation_type, producer, producer_version in rows:
+        if active is not None and (source_id not in active or target_id not in active):
+            continue
+        left, right = canonical_candidate_pair(source_id, target_id)
+        canonical.append(
+            (left.hex, right.hex, relation_type.value, producer, producer_version)
+        )
+    return _fingerprint(sorted(canonical))
 
 
 def _project_candidate(

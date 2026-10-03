@@ -17,6 +17,7 @@ from backend.app.models import (
     SceneAnalysisAttempt,
     SceneAnalysisAttemptStatus,
     SceneAnalysisWorkItem,
+    SceneAnalysisWorkResultCandidate,
     SceneAnalysisWorkStatus,
     SceneCandidate,
     SceneDiscoveryMethod,
@@ -37,6 +38,7 @@ SCENE_TABLES = {
     "event_group_members",
     "scene_analysis_work_items",
     "scene_analysis_attempts",
+    "scene_analysis_work_result_candidates",
 }
 
 
@@ -75,6 +77,11 @@ class SceneSchemaIntegrationTests(TestCase):
                 session.execute(
                     delete(EventGroupMember).where(
                         EventGroupMember.event_group_id.in_(group_ids)
+                    )
+                )
+                session.execute(
+                    delete(SceneAnalysisWorkResultCandidate).where(
+                        SceneAnalysisWorkResultCandidate.work_item_id.in_(work_ids)
                     )
                 )
                 session.execute(
@@ -129,6 +136,15 @@ class SceneSchemaIntegrationTests(TestCase):
             {
                 (("source_scene_candidate_id",), "scene_candidates"),
                 (("target_scene_candidate_id",), "scene_candidates"),
+            },
+        )
+        self.assertEqual(
+            _foreign_key_targets(
+                inspector, "scene_analysis_work_result_candidates"
+            ),
+            {
+                (("work_item_id",), "scene_analysis_work_items"),
+                (("scene_candidate_id",), "scene_candidates"),
             },
         )
 

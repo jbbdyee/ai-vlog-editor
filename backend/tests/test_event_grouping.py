@@ -33,6 +33,7 @@ from backend.app.services.event_grouping import (
     PairFilterConfig,
     build_conservative_group_sets,
     build_pair_manifest,
+    accepted_relation_set_fingerprint,
     canonical_candidate_pair,
     persist_relation,
     process_event_grouping,
@@ -253,6 +254,21 @@ class EventGroupingPersistenceTests(TestCase):
             changed = process_event_grouping(session, project.id)
             self.assertNotEqual(first.grouping_work_item_id, changed.grouping_work_item_id)
             self.assertEqual(session.scalar(select(func.count(EventGroup.id))), 1)
+
+    def test_accepted_relation_set_change_invalidates_grouping_cache(self) -> None:
+        with Session(self.engine, expire_on_commit=False) as session:
+            project, candidates = _database_graph(session, duplicate=False, count=2)
+            before = accepted_relation_set_fingerprint(session, project.id)
+            first = process_event_grouping(session, project.id)
+            persist_relation(
+                session, project.id, candidates[0].id, candidates[1].id,
+                SceneRelationType.SAME_EVENT, producer="synthetic-fixture", producer_version="v1",
+            )
+            session.commit()
+            after = accepted_relation_set_fingerprint(session, project.id)
+            second = process_event_grouping(session, project.id)
+            self.assertNotEqual(before, after)
+            self.assertNotEqual(first.grouping_work_item_id, second.grouping_work_item_id)
 
 
 def _projection(

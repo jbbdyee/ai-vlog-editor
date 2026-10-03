@@ -193,6 +193,29 @@ class AutonomousPersistenceTests(TestCase):
             self.assertEqual(first.candidate_ids, second.candidate_ids)
             self.assertEqual(counts, (session.query(SceneAnalysisWorkItem).count(), session.query(SceneAnalysisAttempt).count(), session.query(SceneCandidate).count(), session.query(SceneEvidence).count()))
 
+    def test_audio_config_change_reuses_transcript_and_visual_work(self) -> None:
+        with Session(self.engine, expire_on_commit=False) as session:
+            source = _graph(session)
+            calls = {"audio": 0, "visual": 0}
+            def audio():
+                calls["audio"] += 1
+                return ModalityAnalysis((_fact(source.id, 16, 20, SceneEvidenceModality.AUDIO, "AUDIO_ACTIVITY"),))
+            def visual():
+                calls["visual"] += 1
+                return ModalityAnalysis(())
+            process_autonomous_discovery(session, source.id, audio_analyzer=audio, visual_analyzer=visual)
+            first_work_count = session.query(SceneAnalysisWorkItem).count()
+            process_autonomous_discovery(
+                session,
+                source.id,
+                audio_analyzer=audio,
+                visual_analyzer=visual,
+                config=AutonomousConfig(long_silence_seconds=7.0),
+            )
+            self.assertEqual(calls, {"audio": 2, "visual": 1})
+            new_works = session.query(SceneAnalysisWorkItem).count() - first_work_count
+            self.assertEqual(new_works, 1)  # unchanged Audio result reuses Promotion
+
 
 def _segment(start, end, text):
     return {"start_seconds": start, "end_seconds": end, "text": text, "words": []}
