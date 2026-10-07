@@ -2,6 +2,20 @@
 
 This guide is for a person watching the controlled recordings. Ground Truth (GT) means the answer recorded **before** viewing model output. It describes the intended scene, observed facts, or real-world Event. It is not a preferred output invented after a model run.
 
+## 촬영·정답 기록 빠른 안내
+
+GT는 사람이 영상을 보고 **모델을 실행하기 전에** 적어 두는 정답이다. G5-B1에는 아직 실제 영상이나 정답이 없다. 촬영 전에 다음 장면에서 무엇을 보여줄지 간단히 적고, 촬영 뒤 원본을 보며 실제 시간을 기록한다. 모델이 고른 결과를 본 후 시간을 옮겨 적지 않는다.
+
+1. 영상마다 `EXAMPLE-SOURCE` 같은 개인 정보가 없는 ID를 붙인다. 파일명에 “정답 장면” 같은 답을 넣지 않는다.
+2. 해당 장면의 시작과 끝을 원본 영상의 초 단위로 적는다. 예를 들어 물건을 집어 들기 시작한 4.2초부터 내려놓은 6.8초까지라면 `4.2–6.8`이다. 경계가 애매하면 이유를 함께 적는다.
+3. 메모 평가에서는 메모가 가리킨 장면이 하나인지, 둘 이상 모두 합당한지, 정말 구별할 수 없는지, 근거가 부족한지, 아예 없는지 구분한다. 둘 이상 모두 합당하면 여러 Proposal을 허용한다. 구별 자체가 불가능하면 `AMBIGUOUS`다.
+4. 메모 없이 찾는 장면은 “검토할 후보로 남겨야 하는가”를 적는다. 최종 영상에서의 `B_ROLL`·`STORY` 같은 역할은 적지 않는다.
+5. 시각 평가에서는 전체 영상을 알고 있더라도, 모델에 보낼 제한된 3-frame contact sheet만 보고 판단 가능한지 따로 적는다.
+6. 여러 파일이 같은 실제 활동을 보여주는지 적는다. 같은 장소에서 다음 날 찍은 영상은 별도 Event일 수 있다. 반응 관계는 반드시 **반응 장면 → 원인 장면** 순서로 기록한다.
+7. Project 하나를 촬영하고 정답을 고정할 수 있다. 다만 세 Project 모두 고정되기 전에는 실제 semantic Provider를 실행하지 않는다.
+
+정답이 불명확할 때 억지로 한 장면을 선택하지 않는다. `AMBIGUOUS`는 여러 후보를 구별할 수 없음, `NO_MATCH`는 해당 장면이 없음, `INSUFFICIENT_EVIDENCE`는 현재 제한된 정보로 판단할 수 없음을 뜻한다. Provider 오류는 이 세 정답 중 어느 것도 아니다. 원본 영상은 로컬 `evaluation/data/`에만 보관하고 Git에 추가하지 않는다. 얼굴이 담긴 frame은 v0.1 외부 VLM에 보내지 않는다.
+
 ## Order of work
 
 1. Register the scenario intent in a G5-B2 manifest before filming.
