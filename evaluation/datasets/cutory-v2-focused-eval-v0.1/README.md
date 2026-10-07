@@ -1,6 +1,6 @@
 # Cutory v2 focused evaluation dataset v0.1
 
-Status: **G5-B1 schema and annotation guide only**. There is no recorded media, frozen GT case, provider result, or semantic accuracy result in this dataset yet. The v2 version completion gate remains open.
+Status: **G5-B1 schema/guide and G5-B2 recording scenarios preregistered**. There is no recorded media, frozen GT case, provider result, or semantic accuracy result in this dataset yet. The v2 version completion gate remains open.
 
 This focused dataset will measure four distinct questions against controlled local vlog media:
 
@@ -27,6 +27,9 @@ evaluation/datasets/cutory-v2-focused-eval-v0.1/
     event.schema.json
   manifests/
     README.md
+    recording-scenarios.json
+    COVERAGE.md
+    RECORDING_CHECKLIST.md
   annotations/
     README.md
 evaluation/data/                  # ignored local raw media; never commit
@@ -45,4 +48,4 @@ Schemas use JSON Schema Draft 2020-12. G5-B1 only checks that JSON parses and co
 
 For Dataset B, a GT target is recalled only if **target coverage ≥ 0.70 AND tIoU ≥ 0.30**. Both thresholds are fixed before v0.1 evaluation. They prevent a very long Candidate from earning recall solely by covering a short target. Do not tune them after viewing v0.1 results. Report reduction rate together with GT recall.
 
-See [ANNOTATION_GUIDE.md](ANNOTATION_GUIDE.md) for recording, relation, ambiguity, privacy, and leakage rules. G5-B2 will add a preregistered scenario manifest; G5-B3/B4 will record and annotate actual media. G1 is `BLOCKED_NO_API_KEY`; G2/G3 remain pending.
+See [ANNOTATION_GUIDE.md](ANNOTATION_GUIDE.md) for recording, relation, ambiguity, privacy, and leakage rules. G5-B2 preregistered the [recording manifest](manifests/recording-scenarios.json), [coverage](manifests/COVERAGE.md), and [filming checklist](manifests/RECORDING_CHECKLIST.md). G5-B3/B4 will record and annotate actual media; G5-B5 will validate it. G1 is `BLOCKED_NO_API_KEY`; G2/G3 remain pending.
