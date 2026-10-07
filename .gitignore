@@ -227,6 +227,16 @@ __marimo__/
 # 테스트 영상 데이터와 파생 미디어
 evaluation/data/*
 !evaluation/data/.gitkeep
+evaluation/datasets/**/*.mov
+evaluation/datasets/**/*.MOV
+evaluation/datasets/**/*.mp4
+evaluation/datasets/**/*.MP4
+evaluation/datasets/**/*.wav
+evaluation/datasets/**/*.WAV
+evaluation/datasets/**/*.jpg
+evaluation/datasets/**/*.jpeg
+evaluation/datasets/**/*.png
+evaluation/datasets/**/*.webp
 uploads/
 outputs/
 /storage/

@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "autonomous.schema.json",
+  "title": "Autonomous candidate and evidence annotation v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source", "target_intervals"],
+  "properties": {
+    "source": {"$ref": "common.schema.json"},
+    "target_intervals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["start_seconds", "end_seconds", "should_consider", "should_exclude", "semantic_event_present", "reaction_present", "explicit_user_value", "technical_issues", "expected_observations", "ambiguity", "rationale_code"],
+        "properties": {
+          "start_seconds": {"type": "number", "minimum": 0},
+          "end_seconds": {"type": "number", "exclusiveMinimum": 0},
+          "should_consider": {"type": "boolean"},
+          "should_exclude": {"type": "boolean"},
+          "semantic_event_present": {"type": "boolean"},
+          "reaction_present": {"type": "boolean"},
+          "explicit_user_value": {"type": "boolean"},
+          "technical_issues": {"type": "array", "uniqueItems": true, "items": {"enum": ["LONG_SILENCE", "STATIC_INTERVAL"]}},
+          "expected_observations": {
+            "type": "array", "uniqueItems": true,
+            "items": {
+              "type": "object", "additionalProperties": false, "required": ["modality", "evidence_type"],
+              "properties": {
+                "modality": {"enum": ["TRANSCRIPT", "AUDIO", "VISUAL", "SHOT", "QUALITY"]},
+                "evidence_type": {"enum": ["TRANSCRIPT_STRUCTURE", "TRANSCRIPT_REACTION_CUE", "AUDIO_ACTIVITY", "SILENCE", "LONG_SILENCE", "VISUAL_ACTIVITY", "STATIC_INTERVAL", "SHOT_CHANGE"]}
+              },
+              "allOf": [
+                {"if": {"properties": {"evidence_type": {"const": "SHOT_CHANGE"}}}, "then": {"properties": {"modality": {"const": "SHOT"}}}},
+                {"if": {"properties": {"evidence_type": {"enum": ["TRANSCRIPT_STRUCTURE", "TRANSCRIPT_REACTION_CUE"]}}}, "then": {"properties": {"modality": {"const": "TRANSCRIPT"}}}},
+                {"if": {"properties": {"evidence_type": {"enum": ["AUDIO_ACTIVITY", "SILENCE"]}}}, "then": {"properties": {"modality": {"const": "AUDIO"}}}},
+                {"if": {"properties": {"evidence_type": {"const": "LONG_SILENCE"}}}, "then": {"properties": {"modality": {"const": "QUALITY"}}}},
+                {"if": {"properties": {"evidence_type": {"const": "VISUAL_ACTIVITY"}}}, "then": {"properties": {"modality": {"const": "VISUAL"}}}},
+                {"if": {"properties": {"evidence_type": {"const": "STATIC_INTERVAL"}}}, "then": {"properties": {"modality": {"const": "QUALITY"}}}}
+              ]
+            }
+          },
+          "ambiguity": {"$ref": "common.schema.json#/$defs/ambiguity"},
+          "rationale_code": {"type": "string", "minLength": 1}
+        },
+        "not": {"properties": {"should_consider": {"const": true}, "should_exclude": {"const": true}}, "required": ["should_consider", "should_exclude"]}
+      }
+    }
+  },
+  "examples": [{"target_intervals": [{"start_seconds": 2.0, "end_seconds": 4.0, "should_consider": true, "should_exclude": false, "semantic_event_present": true, "reaction_present": false, "explicit_user_value": false, "technical_issues": [], "expected_observations": [{"modality": "SHOT", "evidence_type": "SHOT_CHANGE"}], "ambiguity": "NONE", "rationale_code": "EXAMPLE_VISIBLE_ACTION"}]}]
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "event.schema.json",
+  "title": "Cross-video relation and grouping annotation v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["dataset_version", "annotation_revision", "project_id", "scenario_id", "annotated_before_model_run", "annotator", "annotation_time", "privacy_class", "sources", "candidates", "relations", "event_groups", "acceptable_unassigned", "must_not_merge", "ambiguous_memberships"],
+  "properties": {
+    "dataset_version": {"const": "cutory-v2-focused-eval-v0.1"},
+    "annotation_revision": {"type": "integer", "minimum": 1},
+    "revision_reason": {"type": "string", "minLength": 1},
+    "project_id": {"$ref": "common.schema.json#/$defs/opaque_id"},
+    "scenario_id": {"$ref": "common.schema.json#/$defs/opaque_id"},
+    "annotated_before_model_run": {"type": "boolean"},
+    "annotator": {"$ref": "common.schema.json#/$defs/opaque_id"},
+    "annotation_time": {"type": "string", "format": "date-time"},
+    "privacy_class": {"const": "PRIVATE_LOCAL"},
+    "sources": {"type": "array", "minItems": 2, "items": {"$ref": "common.schema.json"}},
+    "candidates": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["candidate_id", "source_id", "interval"], "properties": {"candidate_id": {"$ref": "common.schema.json#/$defs/opaque_id"}, "source_id": {"$ref": "common.schema.json#/$defs/opaque_id"}, "interval": {"$ref": "common.schema.json#/$defs/interval"}}}},
+    "relations": {
+      "type": "array", "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["source_candidate_id", "target_candidate_id", "relation_type", "directional", "rationale_code", "ambiguity"],
+        "properties": {
+          "source_candidate_id": {"$ref": "common.schema.json#/$defs/opaque_id"},
+          "target_candidate_id": {"$ref": "common.schema.json#/$defs/opaque_id"},
+          "relation_type": {"enum": ["SAME_EVENT", "CONTINUATION", "REACTION_TO", "DUPLICATE", "UNRELATED", "AMBIGUOUS", "INSUFFICIENT_EVIDENCE"]},
+          "directional": {"type": "boolean"},
+          "rationale_code": {"type": "string", "minLength": 1},
+          "ambiguity": {"$ref": "common.schema.json#/$defs/ambiguity"}
+        },
+        "allOf": [
+          {"if": {"properties": {"relation_type": {"enum": ["CONTINUATION", "REACTION_TO"]}}}, "then": {"properties": {"directional": {"const": true}}}},
+          {"if": {"properties": {"relation_type": {"enum": ["SAME_EVENT", "DUPLICATE", "UNRELATED", "AMBIGUOUS", "INSUFFICIENT_EVIDENCE"]}}}, "then": {"properties": {"directional": {"const": false}}}}
+        ]
+      }
+    },
+    "event_groups": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["gt_event_id", "candidate_ids"], "properties": {"gt_event_id": {"$ref": "common.schema.json#/$defs/opaque_id"}, "candidate_ids": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/opaque_id"}}}}},
+    "acceptable_unassigned": {"type": "array", "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/opaque_id"}},
+    "must_not_merge": {"type": "array", "items": {"type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/opaque_id"}}},
+    "ambiguous_memberships": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["candidate_id", "acceptable"], "properties": {"candidate_id": {"$ref": "common.schema.json#/$defs/opaque_id"}, "acceptable": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/opaque_id"}, "description": "GT Event IDs and/or UNASSIGNED."}}}}
+  },
+  "allOf": [{"if": {"properties": {"annotation_revision": {"minimum": 2}}}, "then": {"required": ["revision_reason"]}}],
+  "$comment": "REACTION_TO direction: source_candidate_id is the reaction; target_candidate_id is its trigger. G5-B5 validates candidate ownership, self-pairs, group references, and canonical symmetric order.",
+  "examples": [{"project_id": "EXAMPLE-PROJECT", "scenario_id": "EXAMPLE-SCENARIO", "candidates": [{"candidate_id": "EXAMPLE-REACTION", "source_id": "EXAMPLE-SOURCE-1", "interval": {"start_seconds": 4.0, "end_seconds": 6.0}}, {"candidate_id": "EXAMPLE-TRIGGER", "source_id": "EXAMPLE-SOURCE-2", "interval": {"start_seconds": 2.0, "end_seconds": 4.0}}], "relations": [{"source_candidate_id": "EXAMPLE-REACTION", "target_candidate_id": "EXAMPLE-TRIGGER", "relation_type": "REACTION_TO", "directional": true, "rationale_code": "EXAMPLE_REACTION_TO_TRIGGER", "ambiguity": "NONE"}], "event_groups": [{"gt_event_id": "EXAMPLE-EVENT-1", "candidate_ids": ["EXAMPLE-REACTION", "EXAMPLE-TRIGGER"]}], "acceptable_unassigned": [], "must_not_merge": [], "ambiguous_memberships": []}]
+}

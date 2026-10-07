@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "common.schema.json",
+  "title": "Cutory v2 focused evaluation source envelope v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["dataset_version", "annotation_revision", "project_id", "scenario_id", "source_id", "media_sha256", "duration_seconds", "annotated_before_model_run", "annotator", "annotation_time", "privacy_class"],
+  "properties": {
+    "dataset_version": {"const": "cutory-v2-focused-eval-v0.1"},
+    "annotation_revision": {"type": "integer", "minimum": 1},
+    "revision_reason": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "scenario_id": {"type": "string", "minLength": 1},
+    "source_id": {"type": "string", "minLength": 1},
+    "media_sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+    "duration_seconds": {"type": "number", "exclusiveMinimum": 0},
+    "annotated_before_model_run": {"type": "boolean"},
+    "annotator": {"type": "string", "minLength": 1},
+    "annotation_time": {"type": "string", "format": "date-time"},
+    "privacy_class": {"const": "PRIVATE_LOCAL"}
+  },
+  "allOf": [{"if": {"properties": {"annotation_revision": {"minimum": 2}}}, "then": {"required": ["revision_reason"]}}],
+  "$defs": {
+    "interval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start_seconds", "end_seconds"],
+      "properties": {
+        "start_seconds": {"type": "number", "minimum": 0},
+        "end_seconds": {"type": "number", "exclusiveMinimum": 0}
+      },
+      "description": "Validator G5-B5 checks start < end <= source duration; JSON Schema cannot compare sibling numeric values portably."
+    },
+    "ambiguity": {"enum": ["NONE", "MULTIPLE_ACCEPTABLE", "INSUFFICIENT_CONTEXT"]},
+    "opaque_id": {"type": "string", "minLength": 1}
+  },
+  "examples": [{"dataset_version": "cutory-v2-focused-eval-v0.1", "annotation_revision": 1, "project_id": "EXAMPLE-PROJECT", "scenario_id": "EXAMPLE-SCENARIO", "source_id": "EXAMPLE-SOURCE", "annotated_before_model_run": true, "privacy_class": "PRIVATE_LOCAL"}]
+}

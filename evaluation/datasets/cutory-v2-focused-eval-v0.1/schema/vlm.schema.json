@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "vlm.schema.json",
+  "title": "Selective visual proposal annotation v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source", "representation", "annotations"],
+  "properties": {
+    "source": {"$ref": "common.schema.json"},
+    "representation": {"const": "proposal-contact-sheet-v0.2"},
+    "annotations": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["annotation_id", "expected_outcome", "acceptable_proposal_ids", "visual_evidence_sufficiency", "target_intervals", "required_visual_fact", "ambiguity", "rationale_code"],
+        "properties": {
+          "annotation_id": {"$ref": "common.schema.json#/$defs/opaque_id"},
+          "expected_outcome": {"enum": ["SELECTED", "AMBIGUOUS", "NO_MATCH", "INSUFFICIENT_VISUAL_EVIDENCE"]},
+          "acceptable_proposal_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/opaque_id"}},
+          "proposal_manifest_fingerprint": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+          "visual_evidence_sufficiency": {"enum": ["SUFFICIENT", "INSUFFICIENT", "AMBIGUOUS"]},
+          "target_intervals": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/interval"}},
+          "required_visual_fact": {"type": "string", "minLength": 1},
+          "ambiguity": {"$ref": "common.schema.json#/$defs/ambiguity"},
+          "rationale_code": {"type": "string", "minLength": 1}
+        },
+        "allOf": [
+          {"if": {"properties": {"expected_outcome": {"const": "SELECTED"}}}, "then": {"properties": {"acceptable_proposal_ids": {"minItems": 1}, "visual_evidence_sufficiency": {"const": "SUFFICIENT"}}, "required": ["proposal_manifest_fingerprint"]}},
+          {"if": {"properties": {"expected_outcome": {"enum": ["AMBIGUOUS", "NO_MATCH", "INSUFFICIENT_VISUAL_EVIDENCE"]}}}, "then": {"properties": {"acceptable_proposal_ids": {"maxItems": 0}}}}
+        ]
+      }
+    }
+  },
+  "examples": [{"representation": "proposal-contact-sheet-v0.2", "annotations": [{"annotation_id": "EXAMPLE-VISUAL-QUESTION", "expected_outcome": "INSUFFICIENT_VISUAL_EVIDENCE", "acceptable_proposal_ids": [], "visual_evidence_sufficiency": "INSUFFICIENT", "target_intervals": [], "required_visual_fact": "EXAMPLE-ACTION-NOT-VISIBLE-IN-BOUNDED-FRAMES", "ambiguity": "INSUFFICIENT_CONTEXT", "rationale_code": "EXAMPLE_SPARSE_FRAMES"}]}]
+}
