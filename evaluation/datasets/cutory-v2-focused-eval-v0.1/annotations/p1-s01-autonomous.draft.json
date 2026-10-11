@@ -1,0 +1,33 @@
+{
+  "source": {
+    "dataset_version": "cutory-v2-focused-eval-v0.1",
+    "annotation_revision": 1,
+    "project_id": "P1",
+    "scenario_id": "P1-S01",
+    "source_id": "P1-S01-take01",
+    "media_sha256": "205e4143822520183d446c154fc314f607b3c948ec2e264b37195933d89a01d2",
+    "duration_seconds": 13.498333,
+    "annotated_before_model_run": true,
+    "annotator": "codex-assisted-unreviewed-draft",
+    "annotation_time": "2026-10-11T12:50:55Z",
+    "privacy_class": "PRIVATE_LOCAL"
+  },
+  "target_intervals": [
+    {
+      "start_seconds": 4.0,
+      "end_seconds": 6.22,
+      "should_consider": true,
+      "should_exclude": false,
+      "semantic_event_present": true,
+      "reaction_present": true,
+      "explicit_user_value": true,
+      "technical_issues": [],
+      "expected_observations": [
+        {"modality": "VISUAL", "evidence_type": "VISUAL_ACTIVITY"},
+        {"modality": "TRANSCRIPT", "evidence_type": "TRANSCRIPT_REACTION_CUE"}
+      ],
+      "ambiguity": "NONE",
+      "rationale_code": "OBJECT_DROP_AND_SPOKEN_REACTION"
+    }
+  ]
+}

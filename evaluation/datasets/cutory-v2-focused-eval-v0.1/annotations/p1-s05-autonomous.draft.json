@@ -1,0 +1,30 @@
+{
+  "source": {
+    "dataset_version": "cutory-v2-focused-eval-v0.1",
+    "annotation_revision": 1,
+    "project_id": "P1",
+    "scenario_id": "P1-S05",
+    "source_id": "P1-S05-take01",
+    "media_sha256": "a32ac2b77943e705f4c3ee0873650d29b1608ebfcaa50c2014c78d2ae11f5034",
+    "duration_seconds": 22.13,
+    "annotated_before_model_run": true,
+    "annotator": "codex-assisted-unreviewed-draft",
+    "annotation_time": "2026-10-11T12:50:55Z",
+    "privacy_class": "PRIVATE_LOCAL"
+  },
+  "target_intervals": [
+    {
+      "start_seconds": 6.25,
+      "end_seconds": 11.0,
+      "should_consider": true,
+      "should_exclude": false,
+      "semantic_event_present": true,
+      "reaction_present": false,
+      "explicit_user_value": true,
+      "technical_issues": [],
+      "expected_observations": [{"modality": "VISUAL", "evidence_type": "VISUAL_ACTIVITY"}],
+      "ambiguity": "NONE",
+      "rationale_code": "CUP_MOVEMENT_PRECEDES_UNTRUSTED_SPOKEN_INSTRUCTION"
+    }
+  ]
+}

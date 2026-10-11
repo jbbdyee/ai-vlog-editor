@@ -1,0 +1,43 @@
+{
+  "source": {
+    "dataset_version": "cutory-v2-focused-eval-v0.1",
+    "annotation_revision": 1,
+    "project_id": "P1",
+    "scenario_id": "P1-S06",
+    "source_id": "P1-S06-take01",
+    "media_sha256": "fc8ae4ae9c6eb5dbf57d14e452359ff1f42ee76482b10e387aaec143fef52639",
+    "duration_seconds": 31.93,
+    "annotated_before_model_run": true,
+    "annotator": "codex-assisted-unreviewed-draft",
+    "annotation_time": "2026-10-11T12:50:55Z",
+    "privacy_class": "PRIVATE_LOCAL"
+  },
+  "target_intervals": [
+    {
+      "start_seconds": 6.0,
+      "end_seconds": 10.0,
+      "should_consider": true,
+      "should_exclude": false,
+      "semantic_event_present": true,
+      "reaction_present": false,
+      "explicit_user_value": true,
+      "technical_issues": [],
+      "expected_observations": [{"modality": "VISUAL", "evidence_type": "VISUAL_ACTIVITY"}],
+      "ambiguity": "NONE",
+      "rationale_code": "SILENT_GIFT_UNBOXING_MEMO_TARGET"
+    },
+    {
+      "start_seconds": 15.0,
+      "end_seconds": 20.0,
+      "should_consider": true,
+      "should_exclude": false,
+      "semantic_event_present": true,
+      "reaction_present": true,
+      "explicit_user_value": false,
+      "technical_issues": [],
+      "expected_observations": [{"modality": "VISUAL", "evidence_type": "VISUAL_ACTIVITY"}],
+      "ambiguity": "NONE",
+      "rationale_code": "SEPARATE_TAPPING_AND_THUMBS_UP_REACTION"
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "source": {
+    "dataset_version": "cutory-v2-focused-eval-v0.1",
+    "annotation_revision": 1,
+    "project_id": "P1",
+    "scenario_id": "P1-S03",
+    "source_id": "P1-S03-take02",
+    "media_sha256": "ae9511b2167c632d0e80534221ff441b90d6ad0e2963ea697e81a28332c74313",
+    "duration_seconds": 62.91,
+    "annotated_before_model_run": true,
+    "annotator": "codex-assisted-unreviewed-draft",
+    "annotation_time": "2026-10-11T12:50:55Z",
+    "privacy_class": "PRIVATE_LOCAL"
+  },
+  "annotations": [
+    {
+      "memo_id": "P1-S03-memo-01",
+      "memo_interval": {"start_seconds": 57.8, "end_seconds": 60.28},
+      "temporal_reference": "EARLIER",
+      "expected_outcome": "AMBIGUOUS",
+      "acceptable_proposal_ids": [],
+      "target_intervals": [
+        {"start_seconds": 5.12, "end_seconds": 7.11},
+        {"start_seconds": 36.24, "end_seconds": 38.13}
+      ],
+      "rationale_code": "TWO_SIMILAR_ACTIONS_WITHOUT_UNIQUE_REFERENCE",
+      "ambiguity": "MULTIPLE_ACCEPTABLE"
+    }
+  ]
+}

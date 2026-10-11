@@ -1,0 +1,16 @@
+{
+  "source": {
+    "dataset_version": "cutory-v2-focused-eval-v0.1",
+    "annotation_revision": 1,
+    "project_id": "P1",
+    "scenario_id": "P1-S04",
+    "source_id": "P1-S04-take01",
+    "media_sha256": "c9508e46897bae6477a2159fb0404333839a2bb69f10e7d5b4f282f74b403450",
+    "duration_seconds": 30.365,
+    "annotated_before_model_run": true,
+    "annotator": "codex-assisted-unreviewed-draft",
+    "annotation_time": "2026-10-11T12:50:55Z",
+    "privacy_class": "PRIVATE_LOCAL"
+  },
+  "target_intervals": []
+}
