@@ -1,6 +1,6 @@
 # Cutory v2 focused evaluation dataset v0.1
 
-Status: **G5-B1 schema/guide and G5-B2 recording scenarios preregistered**. There is no recorded media, frozen GT case, provider result, or semantic accuracy result in this dataset yet. The v2 version completion gate remains open.
+Status: **G5-B1/B2 contracts and G5-B5 media-free Validator implemented**. Eight unfrozen P1 GT drafts are present; P2/P3 GT and selected Memo/VLM/Event references remain incomplete. This Windows checkout has no controlled media. There is no frozen GT case, provider result, or semantic accuracy result yet. The v2 version completion gate remains open.
 
 This focused dataset will measure four distinct questions against controlled local vlog media:
 
@@ -36,7 +36,7 @@ evaluation/data/                  # ignored local raw media; never commit
 evaluation/tmp/                   # ignored runtime payloads; never commit
 ```
 
-Schemas use JSON Schema Draft 2020-12. G5-B1 only checks that JSON parses and contracts are internally consistent. G5-B5 will implement full validation, including cross-field interval bounds, candidate ownership, symmetric pair order, and referenced IDs. Schema `examples` contain deliberately incomplete **annotation fragments** with `EXAMPLE-*` IDs. They are illustrations, not real cases or valid complete source records. No dummy media hash is supplied.
+Schemas use JSON Schema Draft 2020-12. The [G5-B5 Validator](../../validate_focused_gt.py) combines schema checks with cross-field interval bounds, candidate ownership, symmetric pair order, and referenced IDs. It supports `draft` and `freeze-ready` without media; see [annotations/README.md](annotations/README.md). It cannot establish semantic truth, visual sufficiency, hash-to-media equality, or human freeze approval. Schema `examples` contain deliberately incomplete **annotation fragments** with `EXAMPLE-*` IDs. They are illustrations, not real cases or valid complete source records. No dummy media hash is supplied.
 
 ## Versions and freeze
 
@@ -48,4 +48,4 @@ Schemas use JSON Schema Draft 2020-12. G5-B1 only checks that JSON parses and co
 
 For Dataset B, a GT target is recalled only if **target coverage ≥ 0.70 AND tIoU ≥ 0.30**. Both thresholds are fixed before v0.1 evaluation. They prevent a very long Candidate from earning recall solely by covering a short target. Do not tune them after viewing v0.1 results. Report reduction rate together with GT recall.
 
-See [ANNOTATION_GUIDE.md](ANNOTATION_GUIDE.md) for recording, relation, ambiguity, privacy, and leakage rules. G5-B2 preregistered the [recording manifest](manifests/recording-scenarios.json), [coverage](manifests/COVERAGE.md), and [filming checklist](manifests/RECORDING_CHECKLIST.md). G5-B3/B4 will record and annotate actual media; G5-B5 will validate it. G1 is `BLOCKED_NO_API_KEY`; G2/G3 remain pending.
+See [ANNOTATION_GUIDE.md](ANNOTATION_GUIDE.md) for recording, relation, ambiguity, privacy, and leakage rules. G5-B2 preregistered the [recording manifest](manifests/recording-scenarios.json), [coverage](manifests/COVERAGE.md), and [filming checklist](manifests/RECORDING_CHECKLIST.md). G5-B3/B4 controlled recording and GT annotation are only partial; eight P1 drafts are unfrozen. G1 is `BLOCKED_NO_API_KEY`; G2/G3 remain pending.
