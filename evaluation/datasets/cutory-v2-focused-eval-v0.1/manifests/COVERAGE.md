@@ -20,7 +20,7 @@
 | Autonomous case | 상태 | 계획 Source | 조건 |
 |---|---|---|---|
 | B1 transcript + audio reaction | CONDITIONAL | P1-S01, P2-S04 | 실제 transcript/audio cue 확인 |
-| B2 meaningful dialogue | COVERED | P3-S01 | 포장 설명 |
+| B2 meaningful dialogue | COVERED | P3-S01 | 가방에 소지품을 챙기는 자연스러운 설명 |
 | B3 visual-only important | COVERED | P1-S06 | 행동 중 말 없음 |
 | B4 quiet important | COVERED | P1-S06 | 조용한 행동 |
 | B5 audio reaction, irrelevant visual | COVERED | P2-S04 | 빈 공간 + off-camera 웃음의 별도 구간 |
@@ -54,10 +54,10 @@
 | D5 same location, different Event | COVERED | P2-S01↔S05 | ARRIVAL-01 vs DEPARTURE-02 |
 | D6 same people, different Event | CONDITIONAL | P2-S02↔S05, P3-S01↔S04 | 동일 인물이 실제 등장·확인될 경우; 얼굴은 촬영하지 않음 |
 | D7 similar transcript, different Event | CONDITIONAL | P3-S01↔S04 | 실제 STT 유사성 확인 |
-| D8 different transcript, same Event | CONDITIONAL | P3-S01↔S02 | 다른 발화·무발화와 동일 포장 활동 확인 |
+| D8 different transcript, same Event | CONDITIONAL | P3-S01↔S02 | S01 발화·S02 무발화와 동일한 실제 외출 준비 확인 |
 | D9 adjacent but unrelated | COVERED | P2-S04↔S05 | 파일 순서만 인접 |
-| D10 visually similar, unrelated | COVERED | P3-S02↔S04 | 다른 포장 Event |
+| D10 visually similar, unrelated | COVERED | P3-S02↔S04 | 비슷한 구도의 서로 다른 외출 준비 Event |
 | D11 legitimately unassigned | COVERED | P3-S05 | Event에 억지 배정 금지 |
-| D12 bridge overmerge | CONDITIONAL | P3-S01/S02 vs P3-S04 | 실제 retained bridge가 생긴 경우만; PACKING-01/02 must-not-merge는 항상 유지 |
+| D12 bridge overmerge | CONDITIONAL | P3-S01/S02 vs P3-S04 | 실제 retained bridge가 생긴 경우만; OUTING-PREP-01/02 must-not-merge는 항상 유지 |
 
-현재는 실제 media·Candidate·Proposal이 없으므로 `COVERED`도 정확도 보증이 아니다. Relation GT와 EventGroup GT는 G5-B4에서 별도 주석으로 만든다. 같은 Event identity만으로 `SAME_EVENT` Relation을 모든 pair에 자동 부여하지 않는다.
+`COVERED`도 실제 media·Candidate·Proposal 근거가 해당 Scenario에서 확인되기 전에는 정확도 보증이 아니다. Relation GT와 EventGroup GT는 별도 주석으로 만든다. 같은 Event identity만으로 `SAME_EVENT` Relation을 모든 pair에 자동 부여하지 않는다.
