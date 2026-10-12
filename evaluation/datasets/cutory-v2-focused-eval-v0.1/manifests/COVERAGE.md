@@ -23,7 +23,7 @@
 | B2 meaningful dialogue | COVERED | P3-S01 | 가방에 소지품을 챙기는 자연스러운 설명 |
 | B3 visual-only important | COVERED | P1-S06 | 행동 중 말 없음 |
 | B4 quiet important | COVERED | P1-S06 | 조용한 행동 |
-| B5 audio reaction, irrelevant visual | COVERED | P2-S04 | 빈 공간 + off-camera 웃음의 별도 구간 |
+| B5 audio reaction, irrelevant visual | COVERED | P2-S04 | 브이로거의 도착 반응과 분리된 빈 공간 화면 + 도착에 무관한 소리; 실제 분리 근거가 없으면 `NOT_COVERED` |
 | B6 meaningless visual activity | COVERED | P2-S06 | 사건 없는 pan |
 | B7 meaningful long silence | CONDITIONAL | P1-S06 | 실제 자연스러운 침묵이 analyzer 기준 충족 시만 |
 | B8 meaningful static | CONDITIONAL | P2-S01 | 실제 정적 구도와 의미 여부 확인 |
@@ -36,7 +36,7 @@
 |---|---|---|---|
 | C1 visual important, little speech | COVERED | P1-S06 | 얼굴 없는 선물 행동 |
 | C2 same transcript, different visual relevance | CONDITIONAL | P1-S02, P1-S06 | 동일 bounded transcript 의미의 두 Proposal이 실제 생성될 경우 |
-| C3 visible nonverbal reaction | COVERED | P2-S04 | 손짓·몸짓, 얼굴 없음 |
+| C3 visible nonverbal reaction | COVERED | P2-S04 | 브이로거 본인의 손짓 등 비언어적 반응이 실제 화면에 보여야 함; 없으면 `NOT_COVERED` |
 | C4 quiet meaningful action | COVERED | P1-S06 | 선물 열기 |
 | C5 meaningless motion | COVERED | P2-S06 | pan |
 | C6 similar-looking proposals | CONDITIONAL | P3-S02, P3-S04 | bounded proposal와 frame 구성이 실제 유사할 때 |
@@ -47,9 +47,9 @@
 
 | Event case | 상태 | 계획 Source / pair | 조건 |
 |---|---|---|---|
-| D1 same Event across Sources | COVERED | P2-S01↔S02 | 실제 동일 도착 활동이어야 함 |
+| D1 same Event across Sources | COVERED | P2-S01↔S02 | 아이폰 한 대의 서로 다른 연속 POV Source이며 실제 동일 도착 활동이어야 함; 동시 멀티카메라 촬영 아님 |
 | D2 chronological continuation | COVERED | P2-S02→S03 | earlier→later |
-| D3 reaction in separate Source | COVERED | P2-S04→S02 | reaction→trigger |
+| D3 reaction in separate Source | COVERED | P2-S04→S02 | 브이로거 본인의 실제 reaction→도착 trigger; 직접 반응 근거가 없으면 `NOT_COVERED` |
 | D4 exact duplicate | CONDITIONAL | P3-S02↔S03 | byte-equal source fingerprint와 exact normalized Candidate interval 모두 필요 |
 | D5 same location, different Event | COVERED | P2-S01↔S05 | ARRIVAL-01 vs DEPARTURE-02 |
 | D6 same people, different Event | CONDITIONAL | P2-S02↔S05, P3-S01↔S04 | 동일 인물이 실제 등장·확인될 경우; 얼굴은 촬영하지 않음 |
