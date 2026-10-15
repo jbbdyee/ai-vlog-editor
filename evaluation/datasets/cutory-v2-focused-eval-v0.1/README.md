@@ -38,6 +38,8 @@ evaluation/tmp/                   # ignored runtime payloads; never commit
 
 Schemas use JSON Schema Draft 2020-12. The [G5-B5 Validator](../../validate_focused_gt.py) combines schema checks with cross-field interval bounds, candidate ownership, symmetric pair order, and referenced IDs. It supports `draft` and `freeze-ready` without media; see [annotations/README.md](annotations/README.md). It cannot establish semantic truth, visual sufficiency, hash-to-media equality, or human freeze approval. Schema `examples` contain deliberately incomplete **annotation fragments** with `EXAMPLE-*` IDs. They are illustrations, not real cases or valid complete source records. No dummy media hash is supplied.
 
+The separate [G5-B6 preregistration checker](../../validate_focused_manifest.py) validates the recording manifest, Coverage references, relation direction structure, and manifest-version history before GT exists. It does not change G5-B5 draft/freeze-ready results or judge whether planned scenarios were actually recorded successfully.
+
 ## Versions and freeze
 
 - Dataset ID: `cutory-v2-focused-eval-v0.1`.

@@ -4,6 +4,8 @@ G5-B2 preregisters 3 Projects and 18 planned Source registrations in [recording-
 
 Use [RECORDING_CHECKLIST.md](RECORDING_CHECKLIST.md) during filming and [COVERAGE.md](COVERAGE.md) to distinguish planned coverage from conditional/optional cases. Actual media and annotation are later G5-B3/B4 tasks. Do not feed these files to a production Provider.
 
+G5-B6의 독립 사전 등록 검사기는 `python evaluation/validate_focused_manifest.py`로 실행한다(저장소 루트와 기존 Python 환경 기준). `projects`/`scenarios` ID, Coverage case/Scenario 참조, 기존 방향 관계 구조와 manifest version 이력 연쇄만 검사한다. Coverage 표의 계획 Source는 관계의 맥락 Source를 포함하며 모든 `task_coverage`의 역색인은 아니다. `COVERED` case는 표에 나열된 Scenario 중 최소 하나가 소유해야 하지만 `CONDITIONAL`/`OPTIONAL`을 필수 촬영 성공이나 GT로 취급하지 않는다. 영상의 실제 Event·반응·시각적 충분성은 판단하지 않는다. GT JSON/interval/Proposal 검사는 별도 `evaluation/validate_focused_gt.py`가 계속 담당한다.
+
 ## 사전 등록 변경 이력
 
 | 대상 | 시점 | 변경 전 발화 | 변경 후 발화 | 이유 및 영향 |
