@@ -22,6 +22,13 @@ from backend.app.models import (
     SourceVideo,
     SourceVideoStatus,
     Transcript,
+    SceneAnalysisWorkItem,
+    SceneAnalysisWorkResultCandidate,
+    SceneAnalysisWorkStatus,
+    SceneCandidate,
+    SceneDiscoveryMethod,
+    SceneEvidence,
+    SceneEvidenceModality,
 )
 from backend.app.services.project_execution import ProjectRunRegistry
 from backend.app.storage.processing_workspace import LocalProcessingWorkspace
@@ -78,6 +85,50 @@ class ProjectAPITests(TestCase):
     def tearDown(self) -> None:
         self.engine.dispose()
         self.temporary_directory.cleanup()
+
+    def test_scene_candidates_empty_missing_and_database_failure(self) -> None:
+        project_id = self._create_project().json()["project_id"]
+        response = self.client.get(f"/projects/{project_id}/scene-candidates")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"project_id": project_id, "candidates": []})
+        self.assertEqual(self.client.get(f"/projects/{uuid4()}/scene-candidates").status_code, 404)
+        with patch("backend.app.routers.projects._list_active_candidates_sync", side_effect=RuntimeError("secret db error")):
+            failed = self.client.get(f"/projects/{project_id}/scene-candidates")
+        self.assertEqual(failed.status_code, 500)
+        self.assertEqual(failed.json()["detail"]["code"], "SCENE_CANDIDATE_READ_FAILED")
+        self.assertNotIn("secret db error", failed.text)
+
+    def test_scene_candidates_only_current_project_results_and_bounded_evidence(self) -> None:
+        project_id = UUID(self._create_project().json()["project_id"])
+        other_project_id = UUID(self._create_project().json()["project_id"])
+        with self.factory() as session:
+            source = SourceVideo(project_id=project_id, original_filename="a.mov", storage_reference="private/a.mov")
+            other_source = SourceVideo(project_id=other_project_id, original_filename="b.mov", storage_reference="private/b.mov")
+            session.add_all([source, other_source])
+            session.flush()
+            old_work = SceneAnalysisWorkItem(project_id=project_id, source_video_id=source.id, work_type="AUTONOMOUS_PROMOTION", status=SceneAnalysisWorkStatus.COMPLETED, input_fingerprint="old", config_fingerprint="c", producer="test", producer_version="1", result_reference="autonomous:candidates:1", result_fingerprint="old")
+            new_work = SceneAnalysisWorkItem(project_id=project_id, source_video_id=source.id, work_type="AUTONOMOUS_PROMOTION", status=SceneAnalysisWorkStatus.COMPLETED, input_fingerprint="new", config_fingerprint="c", producer="test", producer_version="1", result_reference="autonomous:candidates:2", result_fingerprint="new")
+            other_work = SceneAnalysisWorkItem(project_id=other_project_id, source_video_id=other_source.id, work_type="AUTONOMOUS_PROMOTION", status=SceneAnalysisWorkStatus.COMPLETED, input_fingerprint="other", config_fingerprint="c", producer="test", producer_version="1", result_reference="autonomous:candidates:1", result_fingerprint="other")
+            session.add_all([old_work, new_work, other_work])
+            session.flush()
+            rows = []
+            for source_id, work, start in ((source.id, old_work, 1), (source.id, new_work, 10), (source.id, new_work, 3), (other_source.id, other_work, 5)):
+                candidate = SceneCandidate(source_video_id=source_id, analysis_work_item_id=work.id, start_seconds=start, end_seconds=start + 1, discovery_method=SceneDiscoveryMethod.AUTONOMOUS, input_fingerprint="input")
+                session.add(candidate)
+                session.flush()
+                session.add(SceneAnalysisWorkResultCandidate(work_item_id=work.id, scene_candidate_id=candidate.id))
+                session.add(SceneEvidence(scene_candidate_id=candidate.id, modality=SceneEvidenceModality.AUDIO, evidence_type="AUDIO_ACTIVITY", payload={"private": "secret"}, producer="test", producer_version="1", source_reference="private/path"))
+                rows.append(candidate)
+            old_work.created_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+            session.commit()
+        response = self.client.get(f"/projects/{project_id}/scene-candidates")
+        self.assertEqual(response.status_code, 200)
+        items = response.json()["candidates"]
+        self.assertEqual([item["start_seconds"] for item in items], [3.0, 10.0])
+        self.assertEqual({item["candidate_id"] for item in items}, {str(rows[1].id), str(rows[2].id)})
+        self.assertEqual(items[0]["evidence"], [{"modality": "AUDIO", "evidence_type": "AUDIO_ACTIVITY", "count": 1}])
+        self.assertNotIn("private", response.text)
+        self.assertEqual(self.client.get(f"/projects/{project_id}/scene-candidates").json()["candidates"], items)
 
     def test_create_and_get_project_use_explicit_safe_dto(self) -> None:
         response = self._create_project()

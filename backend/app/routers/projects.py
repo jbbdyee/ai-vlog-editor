@@ -17,6 +17,10 @@ from backend.app.models import (
     SourceVideoStatus,
 )
 from backend.app.services.project_processing import process_project
+from backend.app.services.project_scene_candidates import (
+    SceneProjectNotFoundError,
+    list_active_project_candidates,
+)
 from backend.app.services.project_service import (
     ProcessingSummary,
     ProjectNotFoundError,
@@ -104,7 +108,67 @@ class ProjectProcessingAcceptedResponse(BaseModel):
     status_url: str
 
 
+class CandidateEvidenceSummaryResponse(BaseModel):
+    modality: str
+    evidence_type: str
+    count: int
+
+
+class ActiveSceneCandidateResponse(BaseModel):
+    candidate_id: UUID
+    source_video_id: UUID
+    start_seconds: float
+    end_seconds: float
+    evidence: list[CandidateEvidenceSummaryResponse]
+
+
+class ProjectSceneCandidatesResponse(BaseModel):
+    project_id: UUID
+    candidates: list[ActiveSceneCandidateResponse]
+
+
 router = APIRouter(prefix="/projects", tags=["projects"])
+
+
+@router.get(
+    "/{project_id}/scene-candidates", response_model=ProjectSceneCandidatesResponse
+)
+async def get_project_scene_candidates(
+    request: Request, project_id: UUID
+) -> ProjectSceneCandidatesResponse:
+    factory = _session_factory(request)
+    try:
+        candidates = await run_in_threadpool(
+            _list_active_candidates_sync, factory, project_id
+        )
+    except SceneProjectNotFoundError as error:
+        raise _project_not_found() from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "code": "SCENE_CANDIDATE_READ_FAILED",
+                "message": "Scene candidates could not be loaded.",
+            },
+        ) from error
+    return ProjectSceneCandidatesResponse(
+        project_id=project_id,
+        candidates=[
+            ActiveSceneCandidateResponse(
+                candidate_id=item.candidate_id,
+                source_video_id=item.source_video_id,
+                start_seconds=float(item.start_seconds),
+                end_seconds=float(item.end_seconds),
+                evidence=[CandidateEvidenceSummaryResponse(**row.__dict__) for row in item.evidence],
+            )
+            for item in candidates
+        ],
+    )
+
+
+def _list_active_candidates_sync(factory, project_id):
+    with factory() as session:
+        return list_active_project_candidates(session, project_id)
 
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)

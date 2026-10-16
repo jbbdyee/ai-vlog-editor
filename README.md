@@ -146,6 +146,8 @@ Deterministic Event Grouping baseline은 Project Candidate snapshot에서 bounde
 
 Scene Resume/Reprocess 통합은 `scene_analysis_work_result_candidates`로 WorkItem의 현재 Candidate 결과를 명시한다. Transcript/Audio/Visual Work는 독립 fingerprint를 사용하고 Promotion은 modality result fingerprint에 의존하므로 변경되지 않은 modality와 동일한 downstream 결과를 재사용한다. FAILED retry와 stale RUNNING recovery는 명시적 호출만 허용하고, Source/Project parent row lock과 commit 전 input revalidation을 위한 경계를 제공한다. Event grouping validity에는 accepted Relation set이 포함되며 Candidate 변화가 있을 때만 caller가 incremental Event update를 요청한다. 이는 distributed queue, scheduler 또는 immutable history가 아니다.
 
+MVP-01의 `GET /projects/{project_id}/scene-candidates`는 기존 active-result 계약으로 현재 유효한 후보만 조회한다. 후보 ID·Source ID·구간과 Evidence 유형별 개수만 반환하며 payload·원본 경로·fingerprint는 공개하지 않는다. 후보가 없으면 빈 목록이다. 이 API는 후보를 생성하거나 사용자 선택·순서 조정·최종 MP4를 제공하지 않는다. 현재 Project API 전체에는 인증과 사용자별 소유권 검증이 없으므로, 프로젝트 ID를 아는 다른 사용자로부터의 접근을 막는 제품 수준 권한 경계는 별도 구현이 필요하다.
+
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 
 ### MVP Backend Integration
