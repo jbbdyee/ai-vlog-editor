@@ -124,12 +124,15 @@ class ScenePresentationTests(TestCase):
             def get_project_scene_candidates(self, _):
                 calls.append("candidates")
                 return {"project_id": PROJECT, "candidates": []}
+            def get_project_scene_edit_plan(self, _):
+                calls.append("plan")
+                return {"project_id": PROJECT, "candidate_ids": [], "invalid_candidate_ids": []}
         state = {}
         with (patch("frontend.app.st.session_state", state),
               patch("frontend.app.st.button", side_effect=[False, True]),
               patch("frontend.app._render_project_scene_status")):
             _render_project_scene_controls(Client(), True, PROJECT)
-        self.assertEqual(calls, ["status", "candidates"])
+        self.assertEqual(calls, ["status", "candidates", "plan"])
         self.assertEqual(state["scene_candidates_result"]["candidates"], [])
 
     def test_start_stores_queued_without_duplicate_call(self):

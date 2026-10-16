@@ -27,8 +27,11 @@ from backend.app.models.scene import (
     SceneRelation,
     SceneRelationType,
 )
+from backend.app.models.edit_plan import ProjectSceneEditPlan, ProjectSceneEditPlanItem
 
 __all__ = [
+    "ProjectSceneEditPlan",
+    "ProjectSceneEditPlanItem",
     "EditMemo",
     "EpisodeSplitPolicy",
     "ProcessingStage",

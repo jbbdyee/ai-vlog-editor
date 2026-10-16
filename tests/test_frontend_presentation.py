@@ -22,6 +22,8 @@ class FrontendPresentationTests(TestCase):
             patch("frontend.app.st.button", return_value=True),
             patch("frontend.app.st.spinner"),
             patch("frontend.app._render_project_scene_controls"),
+            patch("frontend.app._load_project_edit_plan"),
+            patch("frontend.app._render_project_edit_plan_section"),
             patch("frontend.app._render_project_candidate_results") as render,
         ):
             _render_project_candidates_section(SuccessfulClient(), True)
@@ -40,6 +42,8 @@ class FrontendPresentationTests(TestCase):
             patch("frontend.app.st.button", return_value=True),
             patch("frontend.app.st.spinner") as spinner,
             patch("frontend.app._render_project_scene_controls"),
+            patch("frontend.app._load_project_edit_plan"),
+            patch("frontend.app._render_project_edit_plan_section"),
             patch("frontend.app.st.error") as error,
             patch("frontend.app.st.info") as info,
         ):

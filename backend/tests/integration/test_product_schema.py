@@ -36,6 +36,8 @@ EXPECTED_PRODUCT_TABLES = {
     "event_group_members",
     "scene_analysis_work_items",
     "scene_analysis_attempts",
+    "project_scene_edit_plans",
+    "project_scene_edit_plan_items",
 }
 
 

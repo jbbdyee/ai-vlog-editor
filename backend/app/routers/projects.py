@@ -26,6 +26,12 @@ from backend.app.services.project_scene_candidates import (
     SceneProjectNotFoundError,
     list_active_project_candidates,
 )
+from backend.app.services.project_scene_edit_plan import (
+    SceneEditPlanInvalidSelectionError,
+    SceneEditPlanSnapshot,
+    get_scene_edit_plan,
+    save_scene_edit_plan,
+)
 from backend.app.services.project_service import (
     ProcessingSummary,
     ProjectNotFoundError,
@@ -132,6 +138,16 @@ class ProjectSceneCandidatesResponse(BaseModel):
     candidates: list[ActiveSceneCandidateResponse]
 
 
+class SceneEditPlanSaveRequest(BaseModel):
+    candidate_ids: Annotated[list[UUID], Field(max_length=10000)]
+
+
+class SceneEditPlanResponse(BaseModel):
+    project_id: UUID
+    candidate_ids: list[UUID]
+    invalid_candidate_ids: list[UUID]
+
+
 class ProjectSceneProcessingAcceptedResponse(BaseModel):
     project_id: UUID
     accepted: bool
@@ -202,6 +218,52 @@ async def get_project_scene_candidates(
 def _list_active_candidates_sync(factory, project_id):
     with factory() as session:
         return list_active_project_candidates(session, project_id)
+
+
+@router.get("/{project_id}/scene-edit-plan", response_model=SceneEditPlanResponse)
+async def read_project_scene_edit_plan(request: Request, project_id: UUID) -> SceneEditPlanResponse:
+    try:
+        snapshot = await run_in_threadpool(_read_scene_edit_plan_sync, _session_factory(request), project_id)
+    except SceneProjectNotFoundError as error:
+        raise _project_not_found() from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail={"code": "SCENE_EDIT_PLAN_READ_FAILED", "message": "Scene edit plan could not be loaded."}) from error
+    return _scene_edit_plan_response(snapshot)
+
+
+@router.put("/{project_id}/scene-edit-plan", response_model=SceneEditPlanResponse)
+async def update_project_scene_edit_plan(
+    request: Request, project_id: UUID, payload: SceneEditPlanSaveRequest
+) -> SceneEditPlanResponse:
+    try:
+        snapshot = await run_in_threadpool(
+            _save_scene_edit_plan_sync, _session_factory(request), project_id, tuple(payload.candidate_ids)
+        )
+    except SceneProjectNotFoundError as error:
+        raise _project_not_found() from error
+    except SceneEditPlanInvalidSelectionError as error:
+        raise HTTPException(status_code=409, detail={"code": "SCENE_EDIT_PLAN_CANDIDATE_CONFLICT", "message": "Selected scenes are no longer valid or contain duplicates. Refresh candidates and resolve the selection."}) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail={"code": "SCENE_EDIT_PLAN_SAVE_FAILED", "message": "Scene edit plan could not be saved."}) from error
+    return _scene_edit_plan_response(snapshot)
+
+
+def _read_scene_edit_plan_sync(factory, project_id):
+    with factory() as session:
+        return get_scene_edit_plan(session, project_id)
+
+
+def _save_scene_edit_plan_sync(factory, project_id, candidate_ids):
+    with factory() as session:
+        return save_scene_edit_plan(session, project_id, candidate_ids)
+
+
+def _scene_edit_plan_response(snapshot: SceneEditPlanSnapshot) -> SceneEditPlanResponse:
+    return SceneEditPlanResponse(
+        project_id=snapshot.project_id,
+        candidate_ids=list(snapshot.candidate_ids),
+        invalid_candidate_ids=list(snapshot.invalid_candidate_ids),
+    )
 
 
 @router.post(

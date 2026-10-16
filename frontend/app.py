@@ -89,6 +89,7 @@ def _render_project_candidates_section(
                 with st.spinner("장면 후보를 조회하는 중입니다..."):
                     result = client.get_project_scene_candidates(project_id)
                 st.session_state["scene_candidates_result"] = result
+                _load_project_edit_plan(client, result)
             except BackendApiError as error:
                 st.error(str(error))
 
@@ -100,6 +101,7 @@ def _render_project_candidates_section(
             current_project_id = None
         if result.get("project_id") == current_project_id:
             _render_project_candidate_results(result)
+            _render_project_edit_plan_section(client, result, backend_available)
 
 
 def _render_project_scene_controls(
@@ -136,11 +138,94 @@ def _render_project_scene_controls(
                 if current["run_status"] in {"COMPLETED", "COMPLETED_WITH_WARNINGS", "FAILED"}:
                     # A terminal run can contain successful Sources even when another Source failed.
                     st.session_state["scene_candidates_result"] = client.get_project_scene_candidates(normalized_id)
+                    _load_project_edit_plan(client, st.session_state["scene_candidates_result"])
             except BackendApiError as error:
                 st.error(str(error))
 
     if current is not None:
         _render_project_scene_status(current)
+
+
+def _load_project_edit_plan(client: VideoEditorApiClient, candidates: dict) -> None:
+    project_id = candidates["project_id"]
+    st.session_state.pop("scene_edit_plan", None)
+    try:
+        plan = client.get_project_scene_edit_plan(project_id)
+    except BackendApiError as error:
+        st.error(str(error))
+        return
+    st.session_state["scene_edit_plan"] = plan
+    active = {item["candidate_id"] for item in candidates["candidates"]}
+    st.session_state[f"scene_selected_{project_id}"] = [
+        value for value in plan["candidate_ids"] if value in active
+    ]
+    st.session_state[f"scene_order_{project_id}"] = list(st.session_state[f"scene_selected_{project_id}"])
+
+
+def _reconcile_selection_order(order: list[str], selected: list[str]) -> list[str]:
+    chosen = set(selected)
+    return [value for value in order if value in chosen] + [
+        value for value in selected if value not in order
+    ]
+
+
+def _render_project_edit_plan_section(
+    client: VideoEditorApiClient, candidates: dict, backend_available: bool
+) -> None:
+    project_id = candidates["project_id"]
+    plan = st.session_state.get("scene_edit_plan")
+    if not isinstance(plan, dict) or plan.get("project_id") != project_id:
+        st.info("편집 계획을 불러온 뒤 장면을 선택할 수 있습니다.")
+        return
+    st.subheader("사용할 장면과 순서")
+    st.caption("AI 추천 후보 중 사용자가 사용할 장면을 선택합니다. 아직 영상 편집·결합은 하지 않습니다.")
+    invalid = plan["invalid_candidate_ids"]
+    conflict_confirmed = True
+    if invalid:
+        st.warning("AI 재분석으로 현재 유효하지 않은 장면이 편집 계획에 있습니다. 아래 목록을 검토하고 저장해 충돌을 해결해 주세요: " + ", ".join(invalid))
+        conflict_confirmed = st.checkbox("무효 후보를 제외하고 편집 계획을 다시 저장하겠습니다.")
+    rows = {item["candidate_id"]: item for item in candidates["candidates"]}
+    selected_key = f"scene_selected_{project_id}"
+    order_key = f"scene_order_{project_id}"
+    if selected_key not in st.session_state:
+        st.session_state[selected_key] = [value for value in plan["candidate_ids"] if value in rows]
+    if order_key not in st.session_state:
+        st.session_state[order_key] = list(st.session_state[selected_key])
+    selected = st.multiselect(
+        "사용할 장면", options=list(rows), key=selected_key,
+        format_func=lambda value: _scene_option_label(rows[value]),
+    )
+    ordered = _reconcile_selection_order(st.session_state[order_key], selected)
+    st.session_state[order_key] = ordered
+    if ordered:
+        chosen = st.selectbox("순서를 바꿀 장면", ordered, format_func=lambda value: _scene_option_label(rows[value]))
+        if st.button("위로 이동", disabled=ordered.index(chosen) == 0):
+            index = ordered.index(chosen)
+            ordered[index - 1], ordered[index] = ordered[index], ordered[index - 1]
+            st.session_state[order_key] = ordered
+            st.rerun()
+        if st.button("아래로 이동", disabled=ordered.index(chosen) == len(ordered) - 1):
+            index = ordered.index(chosen)
+            ordered[index + 1], ordered[index] = ordered[index], ordered[index + 1]
+            st.session_state[order_key] = ordered
+            st.rerun()
+        st.write("저장할 순서: " + " → ".join(_scene_option_label(rows[value]) for value in ordered))
+    else:
+        st.info("선택한 장면이 없습니다. 빈 편집 계획도 저장할 수 있습니다.")
+    if st.button("편집 계획 저장", disabled=not backend_available or not conflict_confirmed):
+        try:
+            saved = client.save_project_scene_edit_plan(project_id, ordered)
+        except BackendApiError as error:
+            st.error(str(error))
+        else:
+            st.session_state["scene_edit_plan"] = saved
+            st.success("편집 계획을 저장했습니다.")
+
+
+def _scene_option_label(row: dict) -> str:
+    return (f"{row['source_video_id'][:8]} · "
+            f"{_seconds(row['start_seconds'])}~{_seconds(row['end_seconds'])} "
+            f"({row['candidate_id'][:8]})")
 
 
 def _render_project_scene_status(status: dict) -> None:

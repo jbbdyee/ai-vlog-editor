@@ -156,6 +156,8 @@ MVP-03B는 v1 전용 `POST /projects/{project_id}/process`를 변경하지 않�
 
 MVP-03C Streamlit 프로젝트 화면은 Scene 분석 접수 버튼과 수동 상태 새로고침을 제공한다. 실행 중 중복 클릭을 막고 Source별 완료·정상 기권·실패·차단·건너뜀을 구분하며, terminal 상태 조회 후 기존 유효 후보 목록을 다시 읽는다. 서버 재시작 뒤 `NOT_STARTED`를 성공/실패로 해석하지 않는다. 이 UI는 로컬 개발용이며 Scene 선택·편집·MP4 결합이나 인증은 제공하지 않는다.
 
+MVP-04는 현재 유효한 후보 중 사용자가 사용할 장면을 선택·제외하고 순서를 정해 프로젝트별 편집 계획으로 DB에 저장한다. `GET/PUT /projects/{project_id}/scene-edit-plan`이 순서가 있는 후보 ID 목록을 조회·교체하며, 저장 시 기존 active-result 계약으로 프로젝트 소속과 유효성을 검증한다. 재분석으로 무효화된 ID는 조회 응답의 `invalid_candidate_ids`와 Streamlit 경고에 남고, 사용자가 명시적으로 해결할 때까지 다른 후보로 대체하지 않는다. 이는 사용자 선택 목록이지 v3 Edit Planner의 완성된 EditPlan이 아니다. SceneCandidate/Evidence, v1 `/process`, Scene 분석 API는 그대로이며 실제 자르기·결합·자막·최종 MP4는 아직 없다. 기존 DB에는 새 Alembic migration 적용이 필요하다. 인증/사용자별 권한 검증과 실제 영상 End-to-End 검증도 아직 없다.
+
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 
 ### MVP Backend Integration

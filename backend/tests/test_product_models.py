@@ -33,6 +33,8 @@ EXPECTED_TABLES = {
     "scene_analysis_work_items",
     "scene_analysis_attempts",
     "scene_analysis_work_result_candidates",
+    "project_scene_edit_plans",
+    "project_scene_edit_plan_items",
 }
 
 
@@ -41,11 +43,11 @@ class ProductModelMetadataTests(TestCase):
         self.assertEqual(set(Base.metadata.tables), EXPECTED_TABLES)
         for table_name in EXPECTED_TABLES:
             table = Base.metadata.tables[table_name]
-            expected_pk = (
-                ["work_item_id", "scene_candidate_id"]
-                if table_name == "scene_analysis_work_result_candidates"
-                else ["id"]
-            )
+            expected_pk = {
+                "scene_analysis_work_result_candidates": ["work_item_id", "scene_candidate_id"],
+                "project_scene_edit_plans": ["project_id"],
+                "project_scene_edit_plan_items": ["project_id", "position"],
+            }.get(table_name, ["id"])
             self.assertEqual([column.name for column in table.primary_key], expected_pk)
 
     def test_required_foreign_keys_and_nullability(self) -> None:
