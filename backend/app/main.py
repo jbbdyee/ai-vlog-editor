@@ -11,6 +11,7 @@ from backend.app.database import create_database_engine, create_session_factory
 from backend.app.routers.projects import router as project_router
 from backend.app.routers.videos import router as video_router
 from backend.app.services.project_execution import ProjectRunRegistry
+from backend.app.services.project_scene_execution import ProjectSceneRunRegistry
 from backend.app.services.stt_service import load_model
 from backend.app.storage.processing_workspace import LocalProcessingWorkspace
 from backend.app.storage.source_storage import LocalSourceStorage
@@ -29,10 +30,14 @@ async def lifespan(application: FastAPI):
     application.state.processing_workspace = LocalProcessingWorkspace(
         PRODUCT_TEMPORARY_DIRECTORY
     )
+    application.state.scene_processing_workspace = LocalProcessingWorkspace(
+        PRODUCT_TEMPORARY_DIRECTORY / "scene"
+    )
     project_executor = ThreadPoolExecutor(
         max_workers=1, thread_name_prefix="cutory-project"
     )
     application.state.project_run_registry = ProjectRunRegistry(project_executor)
+    application.state.project_scene_run_registry = ProjectSceneRunRegistry(project_executor)
 
     load_environment()
     database_engine = None

@@ -17,6 +17,11 @@ from backend.app.models import (
     SourceVideoStatus,
 )
 from backend.app.services.project_processing import process_project
+from backend.app.services.project_scene_execution import SceneRunStatus
+from backend.app.services.project_scene_processing import (
+    SceneSourceOutcome,
+    process_project_scenes,
+)
 from backend.app.services.project_scene_candidates import (
     SceneProjectNotFoundError,
     list_active_project_candidates,
@@ -127,6 +132,34 @@ class ProjectSceneCandidatesResponse(BaseModel):
     candidates: list[ActiveSceneCandidateResponse]
 
 
+class ProjectSceneProcessingAcceptedResponse(BaseModel):
+    project_id: UUID
+    accepted: bool
+    status_url: str
+
+
+class SceneSourceStatusResponse(BaseModel):
+    source_video_id: UUID
+    status: SceneSourceOutcome
+    candidate_count: int
+    safe_error_code: str | None
+    warnings: list[str]
+
+
+class ProjectSceneProcessingStatusResponse(BaseModel):
+    project_id: UUID
+    run_status: SceneRunStatus
+    total_sources: int
+    processed_count: int
+    completed_count: int
+    abstained_count: int
+    failed_count: int
+    blocked_count: int
+    skipped_count: int
+    safe_error_code: str | None
+    sources: list[SceneSourceStatusResponse]
+
+
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
@@ -169,6 +202,86 @@ async def get_project_scene_candidates(
 def _list_active_candidates_sync(factory, project_id):
     with factory() as session:
         return list_active_project_candidates(session, project_id)
+
+
+@router.post(
+    "/{project_id}/scene-process",
+    response_model=ProjectSceneProcessingAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def start_project_scene_processing(
+    request: Request, project_id: UUID
+) -> ProjectSceneProcessingAcceptedResponse:
+    await _snapshot_or_404(request, project_id)
+    factory = _session_factory(request)
+    registry = request.app.state.project_scene_run_registry
+
+    def operation(on_source_result):
+        return process_project_scenes(
+            session_factory=factory,
+            storage=request.app.state.source_storage,
+            scene_workspace=request.app.state.scene_processing_workspace,
+            project_id=project_id,
+            on_source_result=on_source_result,
+        )
+
+    try:
+        accepted = registry.start(project_id, operation)
+    except Exception as error:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "code": "PROJECT_SCENE_PROCESSING_START_FAILED",
+                "message": "Scene processing could not be started.",
+            },
+        ) from error
+    if not accepted:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "PROJECT_SCENE_PROCESSING_ALREADY_ACTIVE",
+                "message": "Scene processing is already active for this Project in this process.",
+            },
+        )
+    return ProjectSceneProcessingAcceptedResponse(
+        project_id=project_id,
+        accepted=True,
+        status_url=f"/projects/{project_id}/scene-processing",
+    )
+
+
+@router.get(
+    "/{project_id}/scene-processing",
+    response_model=ProjectSceneProcessingStatusResponse,
+)
+async def get_project_scene_processing_status(
+    request: Request, project_id: UUID
+) -> ProjectSceneProcessingStatusResponse:
+    project = await _snapshot_or_404(request, project_id)
+    snapshot = request.app.state.project_scene_run_registry.snapshot(project_id)
+    sources = snapshot.sources
+    return ProjectSceneProcessingStatusResponse(
+        project_id=project_id,
+        run_status=snapshot.run_status,
+        total_sources=len(project.sources),
+        processed_count=len(sources),
+        completed_count=sum(item.outcome is SceneSourceOutcome.COMPLETED for item in sources),
+        abstained_count=sum(item.outcome is SceneSourceOutcome.ABSTAINED for item in sources),
+        failed_count=sum(item.outcome is SceneSourceOutcome.FAILED for item in sources),
+        blocked_count=sum(item.outcome is SceneSourceOutcome.BLOCKED for item in sources),
+        skipped_count=sum(item.outcome is SceneSourceOutcome.SKIPPED_V1_INCOMPLETE for item in sources),
+        safe_error_code=snapshot.safe_error_code,
+        sources=[
+            SceneSourceStatusResponse(
+                source_video_id=item.source_video_id,
+                status=item.outcome,
+                candidate_count=item.candidate_count,
+                safe_error_code=item.safe_error_code,
+                warnings=list(item.warnings),
+            )
+            for item in sources
+        ],
+    )
 
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
