@@ -77,6 +77,7 @@ def _render_project_candidates_section(
     st.subheader("프로젝트 장면 후보")
     st.caption("현재 유효한 후보와 관측 근거만 표시합니다. 장면의 중요도나 편집 순위는 판단하지 않습니다.")
     project_id = st.text_input("프로젝트 ID", key="scene_project_id").strip()
+    _render_project_scene_controls(client, backend_available, project_id)
     if st.button("장면 후보 조회"):
         st.session_state.pop("scene_candidates_result", None)
         if not project_id:
@@ -99,6 +100,76 @@ def _render_project_candidates_section(
             current_project_id = None
         if result.get("project_id") == current_project_id:
             _render_project_candidate_results(result)
+
+
+def _render_project_scene_controls(
+    client: VideoEditorApiClient, backend_available: bool, project_id: str
+) -> None:
+    try:
+        normalized_id = str(UUID(project_id))
+    except (ValueError, AttributeError):
+        normalized_id = None
+    status = st.session_state.get("scene_processing_status")
+    current = status if isinstance(status, dict) and status.get("project_id") == normalized_id else None
+    active = current is not None and current.get("run_status") in {"QUEUED", "RUNNING"}
+
+    if st.button("AI 장면 분석 실행", disabled=active or not backend_available):
+        if not normalized_id:
+            st.info("올바른 프로젝트 ID를 입력해 주세요.")
+        else:
+            try:
+                client.start_project_scene_processing(normalized_id)
+                current = {"project_id": normalized_id, "run_status": "QUEUED", "sources": []}
+                st.session_state["scene_processing_status"] = current
+                st.session_state.pop("scene_candidates_result", None)
+                st.success("AI 장면 분석이 접수되었습니다. 상태 새로고침으로 진행 상황을 확인해 주세요.")
+            except BackendApiError as error:
+                st.error(str(error))
+
+    if st.button("장면 분석 상태 새로고침", disabled=not backend_available):
+        if not normalized_id:
+            st.info("올바른 프로젝트 ID를 입력해 주세요.")
+        else:
+            try:
+                current = client.get_project_scene_processing_status(normalized_id)
+                st.session_state["scene_processing_status"] = current
+                if current["run_status"] in {"COMPLETED", "COMPLETED_WITH_WARNINGS", "FAILED"}:
+                    # A terminal run can contain successful Sources even when another Source failed.
+                    st.session_state["scene_candidates_result"] = client.get_project_scene_candidates(normalized_id)
+            except BackendApiError as error:
+                st.error(str(error))
+
+    if current is not None:
+        _render_project_scene_status(current)
+
+
+def _render_project_scene_status(status: dict) -> None:
+    run_status = status["run_status"]
+    if run_status == "NOT_STARTED":
+        st.info("현재 서버 프로세스에 장면 분석 실행 기록이 없습니다. 서버 재시작으로 상태가 유실됐을 수 있습니다. 기존 후보는 별도로 조회할 수 있습니다.")
+        return
+    if run_status in {"QUEUED", "RUNNING"}:
+        st.info("AI 장면 분석 실행 중입니다. 상태 새로고침으로 확인해 주세요.")
+    elif run_status == "FAILED":
+        st.error("AI 장면 분석 실행이 실패했습니다.")
+    elif run_status == "COMPLETED_WITH_WARNINGS":
+        st.warning("AI 장면 분석이 종료됐지만 일부 Source가 실패·차단·건너뜀 상태입니다.")
+    else:
+        st.success("AI 장면 분석이 완료되었습니다.")
+    if "total_sources" in status:
+        st.caption(f"처리 {status['processed_count']} / {status['total_sources']} Source · "
+                   f"완료 {status['completed_count']} · 후보 없음 {status['abstained_count']} · "
+                   f"실패 {status['failed_count']} · 차단 {status['blocked_count']} · "
+                   f"건너뜀 {status['skipped_count']}")
+    labels = {"COMPLETED": "완료", "ABSTAINED": "후보 없음(정상 기권)",
+              "FAILED": "실패", "BLOCKED": "실행 차단",
+              "SKIPPED_V1_INCOMPLETE": "건너뜀(v1 미완료)"}
+    sources = status.get("sources", [])
+    if sources:
+        st.dataframe([{"Source ID": item["source_video_id"],
+                       "상태": labels[item["status"]], "후보 수": item["candidate_count"],
+                       "오류 코드": item.get("safe_error_code") or "-"}
+                      for item in sources], width="stretch", hide_index=True)
 
 
 def _render_project_candidate_results(result: dict) -> None:

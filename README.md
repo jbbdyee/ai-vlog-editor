@@ -152,7 +152,9 @@ MVP-02 Streamlit 화면은 프로젝트 ID를 입력받아 이 읽기 전용 API
 
 MVP-03A는 v1 분석을 완료한 SourceVideo 한 건에 대해 Autonomous Discovery를 실행하는 별도 application adapter를 추가했다. 저장된 Transcript/길이를 재사용하고 원본은 SourceStorage 경유로만 열며, Scene 전용 임시 WAV를 정리한다. 결과는 기존 Scene Work/Candidate/Evidence에 저장되어 MVP-01 조회 계약을 따른다. Scene 성공·기권·실패는 v1 완료 상태와 별개다. 실제 촬영 영상에 대한 동작·정확도 검증은 아직 하지 않았다.
 
-MVP-03B는 v1 전용 `POST /projects/{project_id}/process`를 변경하지 않고, `POST /projects/{project_id}/scene-process`로 별도 Scene 분석을 접수한다. 반환된 `status_url` (`GET /projects/{project_id}/scene-processing`)에서 접수·진행·Source별 성공/기권/실패/차단/건너뜀을 확인한 뒤, 기존 `GET /projects/{project_id}/scene-candidates`에서 유효 후보를 조회할 수 있다. v1 미완료 Source는 Scene 분석을 건너뛰며, 한 Source의 실패가 다른 Source의 결과나 v1 완료 상태를 변경하지 않는다. Scene Work/Candidate/Evidence는 DB에 남지만 프로젝트 Scene 실행 진행률·마지막 실행 결과는 **단일 프로세스 메모리에만** 있으므로 서버 재시작 뒤 `NOT_STARTED`는 이 프로세스에서 추적 중인 실행이 없다는 뜻이다. v1과 Scene 실행은 같은 단일-worker executor를 사용하며 영속 큐·분산 잠금·자동 재시도는 없다. 인증/사용자별 권한 검증, 실제 촬영 영상 정확도 검증, Streamlit에서 Scene 실행 버튼은 아직 없다.
+MVP-03B는 v1 전용 `POST /projects/{project_id}/process`를 변경하지 않고, `POST /projects/{project_id}/scene-process`로 별도 Scene 분석을 접수한다. 반환된 `status_url` (`GET /projects/{project_id}/scene-processing`)에서 접수·진행·Source별 성공/기권/실패/차단/건너뜀을 확인한 뒤, 기존 `GET /projects/{project_id}/scene-candidates`에서 유효 후보를 조회할 수 있다. v1 미완료 Source는 Scene 분석을 건너뛰며, 한 Source의 실패가 다른 Source의 결과나 v1 완료 상태를 변경하지 않는다. Scene Work/Candidate/Evidence는 DB에 남지만 프로젝트 Scene 실행 진행률·마지막 실행 결과는 **단일 프로세스 메모리에만** 있으므로 서버 재시작 뒤 `NOT_STARTED`는 이 프로세스에서 추적 중인 실행이 없다는 뜻이다. v1과 Scene 실행은 같은 단일-worker executor를 사용하며 영속 큐·분산 잠금·자동 재시도는 없다. 인증/사용자별 권한 검증과 실제 촬영 영상 정확도 검증은 아직 없다.
+
+MVP-03C Streamlit 프로젝트 화면은 Scene 분석 접수 버튼과 수동 상태 새로고침을 제공한다. 실행 중 중복 클릭을 막고 Source별 완료·정상 기권·실패·차단·건너뜀을 구분하며, terminal 상태 조회 후 기존 유효 후보 목록을 다시 읽는다. 서버 재시작 뒤 `NOT_STARTED`를 성공/실패로 해석하지 않는다. 이 UI는 로컬 개발용이며 Scene 선택·편집·MP4 결합이나 인증은 제공하지 않는다.
 
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 

@@ -13,6 +13,8 @@ HEALTH_TIMEOUT_SECONDS = 5.0
 PROCESS_TIMEOUT_SECONDS = 300.0
 DOWNLOAD_TIMEOUT_SECONDS = 120.0
 PROJECT_READ_TIMEOUT_SECONDS = 15.0
+SCENE_RUN_STATUSES = frozenset({"NOT_STARTED", "QUEUED", "RUNNING", "COMPLETED", "COMPLETED_WITH_WARNINGS", "FAILED"})
+SCENE_SOURCE_STATUSES = frozenset({"COMPLETED", "ABSTAINED", "FAILED", "BLOCKED", "SKIPPED_V1_INCOMPLETE"})
 _RESOURCE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
 
@@ -65,10 +67,7 @@ class VideoEditorApiClient:
             return False
 
     def get_project_scene_candidates(self, project_id: str) -> dict[str, Any]:
-        try:
-            normalized_id = str(UUID(project_id))
-        except (TypeError, ValueError, AttributeError) as error:
-            raise BackendApiError("프로젝트 ID가 올바르지 않습니다.") from error
+        normalized_id = _project_id(project_id)
         try:
             response = self._http_client.get(
                 f"{self.backend_url}/projects/{normalized_id}/scene-candidates",
@@ -86,6 +85,51 @@ class VideoEditorApiClient:
         except ValueError as error:
             raise BackendApiError("장면 후보 응답을 읽을 수 없습니다.") from error
         return _safe_scene_candidates_payload(payload, normalized_id)
+
+    def start_project_scene_processing(self, project_id: str) -> dict[str, Any]:
+        normalized_id = _project_id(project_id)
+        try:
+            response = self._http_client.post(
+                f"{self.backend_url}/projects/{normalized_id}/scene-process",
+                timeout=PROJECT_READ_TIMEOUT_SECONDS,
+            )
+        except httpx.TimeoutException as error:
+            raise BackendTimeoutError("장면 분석 접수 확인 시간이 초과되었습니다. 상태를 조회해 주세요.") from error
+        except httpx.RequestError as error:
+            raise BackendConnectionError("백엔드 서버에 연결할 수 없습니다.") from error
+        if response.status_code == 404:
+            raise BackendApiError("프로젝트를 찾을 수 없습니다.", status_code=404)
+        if response.status_code == 409:
+            raise BackendApiError("이미 장면 분석이 실행 중입니다. 상태를 조회해 주세요.", status_code=409)
+        self._raise_for_error(response)
+        try:
+            payload = response.json()
+        except ValueError as error:
+            raise BackendApiError("장면 분석 접수 응답을 읽을 수 없습니다.") from error
+        if (response.status_code != 202 or not isinstance(payload, dict)
+            or payload.get("project_id") != normalized_id or payload.get("accepted") is not True
+            or payload.get("status_url") != f"/projects/{normalized_id}/scene-processing"):
+            raise BackendApiError("장면 분석 접수 응답 형식이 올바르지 않습니다.")
+        return {"project_id": normalized_id, "accepted": True, "status_url": payload["status_url"]}
+
+    def get_project_scene_processing_status(self, project_id: str) -> dict[str, Any]:
+        normalized_id = _project_id(project_id)
+        try:
+            response = self._http_client.get(
+                f"{self.backend_url}/projects/{normalized_id}/scene-processing",
+                timeout=PROJECT_READ_TIMEOUT_SECONDS,
+            )
+        except httpx.TimeoutException as error:
+            raise BackendTimeoutError("장면 분석 상태 조회 시간이 초과되었습니다.") from error
+        except httpx.RequestError as error:
+            raise BackendConnectionError("백엔드 서버에 연결할 수 없습니다.") from error
+        if response.status_code == 404:
+            raise BackendApiError("프로젝트를 찾을 수 없습니다.", status_code=404)
+        self._raise_for_error(response)
+        try:
+            return _safe_scene_status_payload(response.json(), normalized_id)
+        except ValueError as error:
+            raise BackendApiError("장면 분석 상태 응답을 읽을 수 없습니다.") from error
 
     def process_video(
         self,
@@ -176,6 +220,49 @@ def _validate_download_url(download_url: str) -> str:
     ):
         raise BackendApiError("클립 다운로드 주소가 올바르지 않습니다.")
     return parsed.path
+
+
+def _project_id(value: str) -> str:
+    try:
+        return str(UUID(value))
+    except (TypeError, ValueError, AttributeError) as error:
+        raise BackendApiError("프로젝트 ID가 올바르지 않습니다.") from error
+
+
+def _safe_scene_status_payload(payload: Any, project_id: str) -> dict[str, Any]:
+    message = "장면 분석 상태 응답 형식이 올바르지 않습니다."
+    counts = ("total_sources", "processed_count", "completed_count", "abstained_count",
+              "failed_count", "blocked_count", "skipped_count")
+    if (not isinstance(payload, dict) or payload.get("project_id") != project_id
+        or not isinstance(payload.get("run_status"), str)
+        or payload["run_status"] not in SCENE_RUN_STATUSES
+        or not isinstance(payload.get("sources"), list)):
+        raise BackendApiError(message)
+    if any(type(payload.get(key)) is not int or payload[key] < 0 for key in counts):
+        raise BackendApiError(message)
+    sources = []
+    for source in payload["sources"]:
+        if not isinstance(source, dict):
+            raise BackendApiError(message)
+        try:
+            source_id = str(UUID(source["source_video_id"]))
+            if (not isinstance(source["status"], str)
+                or source["status"] not in SCENE_SOURCE_STATUSES
+                or type(source["candidate_count"]) is not int or source["candidate_count"] < 0):
+                raise ValueError
+        except (KeyError, ValueError, TypeError, AttributeError) as error:
+            raise BackendApiError(message) from error
+        sources.append({"source_video_id": source_id, "status": source["status"],
+                        "candidate_count": source["candidate_count"],
+                        "safe_error_code": _safe_error_code(source.get("safe_error_code"))})
+    return {"project_id": project_id, "run_status": payload["run_status"],
+            **{key: payload[key] for key in counts},
+            "safe_error_code": _safe_error_code(payload.get("safe_error_code")),
+            "sources": sources}
+
+
+def _safe_error_code(value: Any) -> str | None:
+    return value if isinstance(value, str) and re.fullmatch(r"[A-Z0-9_]{1,80}", value) else None
 
 
 def _pick(source: Any, fields: tuple[str, ...]) -> dict[str, Any]:
