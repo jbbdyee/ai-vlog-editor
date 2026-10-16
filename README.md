@@ -150,6 +150,8 @@ MVP-01의 `GET /projects/{project_id}/scene-candidates`는 기존 active-result 
 
 MVP-02 Streamlit 화면은 프로젝트 ID를 입력받아 이 읽기 전용 API의 후보 순서·구간 길이·Evidence 유형/개수를 표시한다. 후보 0개는 정상 빈 상태이며 원본 미리보기, 후보 선택/정렬, 중요도 점수 또는 최종 MP4는 제공하지 않는다. 인증이 없으므로 로컬 개발용 화면이다.
 
+MVP-03A는 v1 분석을 완료한 SourceVideo 한 건에 대해 Autonomous Discovery를 실행하는 별도 application adapter를 추가했다. 저장된 Transcript/길이를 재사용하고 원본은 SourceStorage 경유로만 열며, Scene 전용 임시 WAV를 정리한다. 결과는 기존 Scene Work/Candidate/Evidence에 저장되어 MVP-01 조회 계약을 따른다. Scene 성공·기권·실패는 v1 완료 상태와 별개다. 현재 프로젝트 처리 API 및 Streamlit 실행 흐름에는 아직 연결되지 않았으며, 실제 촬영 영상에 대한 동작·정확도 검증도 하지 않았다.
+
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 
 ### MVP Backend Integration

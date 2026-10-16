@@ -381,9 +381,6 @@ def process_autonomous_discovery(
                 analyses.append((work_type, analyzer(), None, modality_input, modality_config))
             except Exception:
                 analyses.append((work_type, None, f"{work_type}_FAILED", modality_input, modality_config))
-    if all(result is None for _, result, _, _, _ in analyses):
-        raise AutonomousDiscoveryError("All autonomous modalities failed or were unavailable.")
-
     work_items: list[SceneAnalysisWorkItem] = []
     warnings: list[str] = []
     facts: list[SignalEvidence] = []
@@ -413,6 +410,11 @@ def process_autonomous_discovery(
             warnings.extend(result.warnings)
         if warning:
             warnings.append(warning)
+
+    if all(result is None for _, result, _, _, _ in analyses):
+        # Keep modality failure attempts durable without creating a candidate.
+        session.commit()
+        raise AutonomousDiscoveryError("All autonomous modalities failed or were unavailable.")
 
     input_fingerprint = canonical_fingerprint(
         {"modality_results": modality_result_fingerprints}
