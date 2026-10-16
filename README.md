@@ -148,6 +148,8 @@ Scene Resume/Reprocess 통합은 `scene_analysis_work_result_candidates`로 Work
 
 MVP-01의 `GET /projects/{project_id}/scene-candidates`는 기존 active-result 계약으로 현재 유효한 후보만 조회한다. 후보 ID·Source ID·구간과 Evidence 유형별 개수만 반환하며 payload·원본 경로·fingerprint는 공개하지 않는다. 후보가 없으면 빈 목록이다. 이 API는 후보를 생성하거나 사용자 선택·순서 조정·최종 MP4를 제공하지 않는다. 현재 Project API 전체에는 인증과 사용자별 소유권 검증이 없으므로, 프로젝트 ID를 아는 다른 사용자로부터의 접근을 막는 제품 수준 권한 경계는 별도 구현이 필요하다.
 
+MVP-02 Streamlit 화면은 프로젝트 ID를 입력받아 이 읽기 전용 API의 후보 순서·구간 길이·Evidence 유형/개수를 표시한다. 후보 0개는 정상 빈 상태이며 원본 미리보기, 후보 선택/정렬, 중요도 점수 또는 최종 MP4는 제공하지 않는다. 인증이 없으므로 로컬 개발용 화면이다.
+
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 
 ### MVP Backend Integration

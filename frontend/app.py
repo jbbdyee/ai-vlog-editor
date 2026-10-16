@@ -1,3 +1,5 @@
+from uuid import UUID
+
 import streamlit as st
 
 from frontend.api_client import BackendApiError, VideoEditorApiClient
@@ -25,6 +27,9 @@ def main() -> None:
         st.caption("백엔드 서버에 연결되었습니다.")
     else:
         st.warning("백엔드 서버에 연결할 수 없습니다.")
+
+    _render_project_candidates_section(client, backend_available)
+    st.divider()
 
     uploaded_file = st.file_uploader("MOV 또는 MP4 영상", type=("mov", "mp4"))
     window_seconds = st.selectbox(
@@ -64,6 +69,61 @@ def main() -> None:
             st.session_state.get("processed_file_name", result.get("stored_filename", "-")),
             st.session_state.get("processed_window_seconds", window_seconds),
         )
+
+
+def _render_project_candidates_section(
+    client: VideoEditorApiClient, backend_available: bool
+) -> None:
+    st.subheader("프로젝트 장면 후보")
+    st.caption("현재 유효한 후보와 관측 근거만 표시합니다. 장면의 중요도나 편집 순위는 판단하지 않습니다.")
+    project_id = st.text_input("프로젝트 ID", key="scene_project_id").strip()
+    if st.button("장면 후보 조회"):
+        st.session_state.pop("scene_candidates_result", None)
+        if not project_id:
+            st.info("프로젝트 ID를 입력해 주세요.")
+        elif not backend_available:
+            st.error("백엔드 서버에 연결할 수 없습니다.")
+        else:
+            try:
+                with st.spinner("장면 후보를 조회하는 중입니다..."):
+                    result = client.get_project_scene_candidates(project_id)
+                st.session_state["scene_candidates_result"] = result
+            except BackendApiError as error:
+                st.error(str(error))
+
+    result = st.session_state.get("scene_candidates_result")
+    if isinstance(result, dict) and project_id:
+        try:
+            current_project_id = str(UUID(project_id))
+        except ValueError:
+            current_project_id = None
+        if result.get("project_id") == current_project_id:
+            _render_project_candidate_results(result)
+
+
+def _render_project_candidate_results(result: dict) -> None:
+    candidates = result["candidates"]
+    if not candidates:
+        st.info("현재 조회할 수 있는 장면 후보가 없습니다.")
+        return
+    st.dataframe(
+        [
+            {
+                "후보 ID": item["candidate_id"],
+                "원본 영상 ID": item["source_video_id"],
+                "시작": _seconds(item["start_seconds"]),
+                "종료": _seconds(item["end_seconds"]),
+                "길이": _seconds(item["end_seconds"] - item["start_seconds"]),
+                "Evidence": ", ".join(
+                    f"{row['modality']}/{row['evidence_type']} ({row['count']})"
+                    for row in item["evidence"]
+                ) or "없음",
+            }
+            for item in candidates
+        ],
+        width="stretch",
+        hide_index=True,
+    )
 
 
 def _render_result(

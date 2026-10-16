@@ -1,7 +1,9 @@
 import os
 import re
+from math import isfinite
 from typing import Any
 from urllib.parse import urlsplit
+from uuid import UUID
 
 import httpx
 
@@ -10,6 +12,7 @@ DEFAULT_BACKEND_URL = "http://127.0.0.1:8000"
 HEALTH_TIMEOUT_SECONDS = 5.0
 PROCESS_TIMEOUT_SECONDS = 300.0
 DOWNLOAD_TIMEOUT_SECONDS = 120.0
+PROJECT_READ_TIMEOUT_SECONDS = 15.0
 _RESOURCE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
 
@@ -60,6 +63,29 @@ class VideoEditorApiClient:
             return response.status_code == 200 and response.json().get("status") == "ok"
         except (httpx.RequestError, ValueError, AttributeError):
             return False
+
+    def get_project_scene_candidates(self, project_id: str) -> dict[str, Any]:
+        try:
+            normalized_id = str(UUID(project_id))
+        except (TypeError, ValueError, AttributeError) as error:
+            raise BackendApiError("프로젝트 ID가 올바르지 않습니다.") from error
+        try:
+            response = self._http_client.get(
+                f"{self.backend_url}/projects/{normalized_id}/scene-candidates",
+                timeout=PROJECT_READ_TIMEOUT_SECONDS,
+            )
+        except httpx.TimeoutException as error:
+            raise BackendTimeoutError("장면 후보 조회 시간이 초과되었습니다.") from error
+        except httpx.RequestError as error:
+            raise BackendConnectionError("백엔드 서버에 연결할 수 없습니다.") from error
+        if response.status_code == 404:
+            raise BackendApiError("프로젝트를 찾을 수 없습니다.", status_code=404)
+        self._raise_for_error(response)
+        try:
+            payload = response.json()
+        except ValueError as error:
+            raise BackendApiError("장면 후보 응답을 읽을 수 없습니다.") from error
+        return _safe_scene_candidates_payload(payload, normalized_id)
 
     def process_video(
         self,
@@ -241,3 +267,55 @@ def _safe_process_payload(payload: dict[str, Any]) -> dict[str, Any]:
             warning for warning in payload.get("warnings", []) if isinstance(warning, str)
         ],
     }
+
+
+def _safe_scene_candidates_payload(payload: Any, project_id: str) -> dict[str, Any]:
+    if not isinstance(payload, dict) or payload.get("project_id") != project_id:
+        raise BackendApiError("장면 후보 응답 형식이 올바르지 않습니다.")
+    raw_candidates = payload.get("candidates")
+    if not isinstance(raw_candidates, list):
+        raise BackendApiError("장면 후보 응답 형식이 올바르지 않습니다.")
+    candidates = []
+    for item in raw_candidates:
+        if not isinstance(item, dict):
+            raise BackendApiError("장면 후보 응답 형식이 올바르지 않습니다.")
+        try:
+            candidate_id = str(UUID(item["candidate_id"]))
+            source_id = str(UUID(item["source_video_id"]))
+            start = item["start_seconds"]
+            end = item["end_seconds"]
+            if (
+                isinstance(start, bool) or not isinstance(start, (int, float))
+                or isinstance(end, bool) or not isinstance(end, (int, float))
+                or not isfinite(start) or not isfinite(end)
+                or start < 0 or end <= start
+            ):
+                raise ValueError
+            raw_evidence = item["evidence"]
+            if not isinstance(raw_evidence, list):
+                raise ValueError
+            evidence = []
+            for row in raw_evidence:
+                if not isinstance(row, dict):
+                    raise ValueError
+                modality = row["modality"]
+                evidence_type = row["evidence_type"]
+                count = row["count"]
+                if (
+                    not isinstance(modality, str) or not modality or len(modality) > 32
+                    or not isinstance(evidence_type, str) or not evidence_type
+                    or len(evidence_type) > 64 or not isinstance(count, int)
+                    or isinstance(count, bool) or count < 1
+                ):
+                    raise ValueError
+                evidence.append({"modality": modality, "evidence_type": evidence_type, "count": count})
+        except (KeyError, TypeError, ValueError, AttributeError) as error:
+            raise BackendApiError("장면 후보 응답 형식이 올바르지 않습니다.") from error
+        candidates.append({
+            "candidate_id": candidate_id,
+            "source_video_id": source_id,
+            "start_seconds": float(start),
+            "end_seconds": float(end),
+            "evidence": evidence,
+        })
+    return {"project_id": project_id, "candidates": candidates}

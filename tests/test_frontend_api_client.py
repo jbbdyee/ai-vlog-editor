@@ -17,9 +17,53 @@ from frontend.api_client import (
 RUN_ID = "a" * 32
 CLIP_ID = "b" * 32
 DOWNLOAD_URL = f"/videos/clips/{RUN_ID}/{CLIP_ID}"
+PROJECT_ID = "11111111-1111-1111-1111-111111111111"
+SOURCE_ID = "22222222-2222-2222-2222-222222222222"
+CANDIDATE_ID = "33333333-3333-3333-3333-333333333333"
 
 
 class FrontendApiClientTests(TestCase):
+    def test_project_candidates_preserve_api_order_and_strip_unknown_fields(self) -> None:
+        first = {"candidate_id": CANDIDATE_ID, "source_video_id": SOURCE_ID, "start_seconds": 10.0, "end_seconds": 12.0, "evidence": [{"modality": "AUDIO", "evidence_type": "AUDIO_ACTIVITY", "count": 2, "payload": "private"}], "secret": "private"}
+        second = {**first, "candidate_id": "44444444-4444-4444-4444-444444444444", "start_seconds": 1.0, "end_seconds": 2.0}
+        client, calls = self._client(lambda request: httpx.Response(200, json={"project_id": PROJECT_ID, "candidates": [first, second], "internal": "private"}))
+        result = client.get_project_scene_candidates(PROJECT_ID)
+        self.assertEqual([item["candidate_id"] for item in result["candidates"]], [CANDIDATE_ID, second["candidate_id"]])
+        self.assertEqual(result["candidates"][0]["evidence"], [{"modality": "AUDIO", "evidence_type": "AUDIO_ACTIVITY", "count": 2}])
+        self.assertNotIn("private", repr(result))
+        self.assertEqual(calls, [f"GET /projects/{PROJECT_ID}/scene-candidates"])
+
+    def test_project_candidates_empty_and_not_found(self) -> None:
+        client, _ = self._client(lambda request: httpx.Response(200, json={"project_id": PROJECT_ID, "candidates": []}))
+        self.assertEqual(client.get_project_scene_candidates(PROJECT_ID)["candidates"], [])
+        missing, _ = self._client(lambda request: httpx.Response(404, json={"detail": {"code": "PROJECT_NOT_FOUND"}}))
+        with self.assertRaisesRegex(BackendApiError, "프로젝트를 찾을 수 없습니다"):
+            missing.get_project_scene_candidates(PROJECT_ID)
+
+    def test_project_candidates_reject_invalid_responses_and_id(self) -> None:
+        client, calls = self._client(lambda request: httpx.Response(200, json={"project_id": PROJECT_ID, "candidates": "wrong"}))
+        with self.assertRaises(BackendApiError):
+            client.get_project_scene_candidates(PROJECT_ID)
+        with self.assertRaises(BackendApiError):
+            client.get_project_scene_candidates("../private")
+        self.assertEqual(len(calls), 1)
+        wrong_project, _ = self._client(lambda request: httpx.Response(200, json={"project_id": SOURCE_ID, "candidates": []}))
+        with self.assertRaises(BackendApiError):
+            wrong_project.get_project_scene_candidates(PROJECT_ID)
+        malformed, _ = self._client(lambda request: httpx.Response(200, json={"project_id": PROJECT_ID, "candidates": [{"candidate_id": CANDIDATE_ID, "source_video_id": SOURCE_ID, "start_seconds": 4.0, "end_seconds": 3.0, "evidence": []}]}))
+        with self.assertRaises(BackendApiError):
+            malformed.get_project_scene_candidates(PROJECT_ID)
+
+    def test_project_candidates_connection_error_and_server_error(self) -> None:
+        def disconnected(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("private host", request=request)
+        client, _ = self._client(disconnected)
+        with self.assertRaisesRegex(BackendConnectionError, "백엔드 서버에 연결할 수 없습니다"):
+            client.get_project_scene_candidates(PROJECT_ID)
+        server, _ = self._client(lambda request: httpx.Response(500, json={"detail": {"code": "SCENE_CANDIDATE_READ_FAILED", "message": "장면 후보 조회에 실패했습니다."}}))
+        with self.assertRaisesRegex(BackendApiError, "장면 후보 조회에 실패했습니다"):
+            server.get_project_scene_candidates(PROJECT_ID)
+
     def test_backend_url_uses_environment_and_single_normalization_point(self) -> None:
         with patch.dict(os.environ, {"BACKEND_URL": "http://backend:9000/"}):
             client = VideoEditorApiClient(http_client=httpx.Client())
