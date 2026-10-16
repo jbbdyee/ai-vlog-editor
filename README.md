@@ -160,6 +160,8 @@ MVP-04는 현재 유효한 후보 중 사용자가 사용할 장면을 선택·�
 
 MVP-05A는 저장된 장면 순서를 다시 검증한 뒤 `SourceStorage.resolve()`로 원본을 읽어 기존 개별 `render_clip()`을 재사용하고, 해상도·프레임레이트·오디오 유무를 정규화해 하나의 H.264/AAC MP4로 결합하는 백엔드 엔진이다. 임시 구간 파일은 정리하고 성공한 최종 MP4만 별도 출력 경로에 남긴다. 재분석으로 무효화된 후보, 비어 있는 계획, 원본 누락 또는 FFmpeg 실패는 명시적 오류이며 다른 후보로 대체하지 않는다. 합성 미디어로 결합을 검증했지만 실제 촬영 영상의 장시간 렌더링·품질은 아직 검증하지 않았다. 사용자용 렌더 API·Streamlit 연결·자막·인증은 MVP-05A에 없다.
 
+MVP-05B는 `POST /projects/{project_id}/render` (202 접수), `GET /projects/{project_id}/rendering` (상태), `GET /projects/{project_id}/renders/{render_id}/download` (완료 MP4)를 추가했다. 기존 단일 worker에서 비동기로 실행하고 프로젝트별 중복 렌더를 막는다. 빈/무효 편집 계획은 접수 전에 오류로 응답하며 실행 시에도 재검증한다. 결과는 `outputs/projects/` 아래에 보존되고 임시 구간은 MVP-05A가 정리한다. 다운로드는 같은 프로세스에서 완료를 확인한 렌더 ID와 안전한 출력 경로에만 허용한다. 실행 상태·완료 ID 목록은 **프로세스 메모리 전용**이므로 서버 재시작 뒤 파일이 남아도 성공으로 간주하거나 다운로드하지 않는다. 실제 진행률 퍼센트는 없고, 사용자 권한·Streamlit 연결·장시간 실제 촬영 영상 검증도 아직 없다.
+
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 
 ### MVP Backend Integration

@@ -167,6 +167,17 @@ def render_project_edit_plan(
                 pass
 
 
+def validate_project_render_request(
+    session_factory: sessionmaker[Session], project_id: UUID
+) -> tuple[UUID, ...]:
+    """Fast read-only preflight for the API; the engine revalidates when it runs."""
+    try:
+        with session_factory() as session:
+            return tuple(segment.candidate_id for segment in _load_segments(session, project_id))
+    except SceneProjectNotFoundError as error:
+        raise ProjectRenderError("PROJECT_NOT_FOUND", "Project was not found.") from error
+
+
 def _load_segments(session: Session, project_id: UUID) -> tuple[_Segment, ...]:
     plan = get_scene_edit_plan(session, project_id)
     if not plan.candidate_ids:

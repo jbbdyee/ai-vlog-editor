@@ -12,6 +12,7 @@ from backend.app.routers.projects import router as project_router
 from backend.app.routers.videos import router as video_router
 from backend.app.services.project_execution import ProjectRunRegistry
 from backend.app.services.project_scene_execution import ProjectSceneRunRegistry
+from backend.app.services.project_render_execution import ProjectRenderRunRegistry
 from backend.app.services.stt_service import load_model
 from backend.app.storage.processing_workspace import LocalProcessingWorkspace
 from backend.app.storage.source_storage import LocalSourceStorage
@@ -20,6 +21,7 @@ from backend.app.storage.source_storage import LocalSourceStorage
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PRODUCT_SOURCE_DIRECTORY = PROJECT_ROOT / "storage" / "originals"
 PRODUCT_TEMPORARY_DIRECTORY = PROJECT_ROOT / "temporary"
+PROJECT_RENDER_OUTPUT_DIRECTORY = PROJECT_ROOT / "outputs" / "projects"
 
 
 @asynccontextmanager
@@ -38,6 +40,8 @@ async def lifespan(application: FastAPI):
     )
     application.state.project_run_registry = ProjectRunRegistry(project_executor)
     application.state.project_scene_run_registry = ProjectSceneRunRegistry(project_executor)
+    application.state.project_render_run_registry = ProjectRenderRunRegistry(project_executor)
+    application.state.project_render_output_root = PROJECT_RENDER_OUTPUT_DIRECTORY
 
     load_environment()
     database_engine = None

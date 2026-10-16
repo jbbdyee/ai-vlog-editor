@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
+import re
 from typing import Annotated
 from uuid import UUID
 
@@ -8,6 +10,7 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.concurrency import run_in_threadpool
+from starlette.responses import FileResponse
 
 from backend.app.models import (
     EpisodeSplitPolicy,
@@ -31,6 +34,13 @@ from backend.app.services.project_scene_edit_plan import (
     SceneEditPlanSnapshot,
     get_scene_edit_plan,
     save_scene_edit_plan,
+)
+from backend.app.services.project_render_execution import RenderRunStatus
+from backend.app.services.project_rendering import (
+    ProjectRenderError,
+    ProjectRenderResult,
+    render_project_edit_plan,
+    validate_project_render_request,
 )
 from backend.app.services.project_service import (
     ProcessingSummary,
@@ -148,6 +158,33 @@ class SceneEditPlanResponse(BaseModel):
     invalid_candidate_ids: list[UUID]
 
 
+class ProjectRenderAcceptedResponse(BaseModel):
+    project_id: UUID
+    accepted: bool
+    status_url: str
+
+
+class ProjectRenderFileResponse(BaseModel):
+    filename: str
+    duration_seconds: float
+    video_codec: str | None
+    audio_codec: str | None
+    file_size_bytes: int
+    download_url: str | None
+
+
+class ProjectRenderingStatusResponse(BaseModel):
+    project_id: UUID
+    status: RenderRunStatus
+    render_id: UUID | None
+    is_active: bool
+    succeeded: bool
+    failed: bool
+    safe_error_code: str | None
+    download_available: bool
+    output: ProjectRenderFileResponse | None
+
+
 class ProjectSceneProcessingAcceptedResponse(BaseModel):
     project_id: UUID
     accepted: bool
@@ -177,6 +214,7 @@ class ProjectSceneProcessingStatusResponse(BaseModel):
 
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+_RENDER_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
 
 @router.get(
@@ -264,6 +302,115 @@ def _scene_edit_plan_response(snapshot: SceneEditPlanSnapshot) -> SceneEditPlanR
         candidate_ids=list(snapshot.candidate_ids),
         invalid_candidate_ids=list(snapshot.invalid_candidate_ids),
     )
+
+
+@router.post("/{project_id}/render", response_model=ProjectRenderAcceptedResponse, status_code=202)
+async def start_project_render(request: Request, project_id: UUID) -> ProjectRenderAcceptedResponse:
+    await _snapshot_or_404(request, project_id)
+    registry = request.app.state.project_render_run_registry
+    if registry.is_active(project_id):
+        raise _render_already_active()
+    factory = _session_factory(request)
+    try:
+        await run_in_threadpool(validate_project_render_request, factory, project_id)
+    except ProjectRenderError as error:
+        raise _render_preflight_error(error) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail={"code": "RENDER_PREFLIGHT_FAILED", "message": "Render request could not be validated."}) from error
+
+    def operation() -> ProjectRenderResult:
+        return render_project_edit_plan(
+            session_factory=factory,
+            source_storage=request.app.state.source_storage,
+            project_id=project_id,
+            output_root=request.app.state.project_render_output_root,
+        )
+
+    try:
+        accepted = registry.start(project_id, operation)
+    except Exception as error:
+        raise HTTPException(status_code=500, detail={"code": "RENDER_START_FAILED", "message": "Render could not be started."}) from error
+    if not accepted:
+        raise _render_already_active()
+    return ProjectRenderAcceptedResponse(
+        project_id=project_id, accepted=True, status_url=f"/projects/{project_id}/rendering"
+    )
+
+
+@router.get("/{project_id}/rendering", response_model=ProjectRenderingStatusResponse)
+async def get_project_rendering(request: Request, project_id: UUID) -> ProjectRenderingStatusResponse:
+    await _snapshot_or_404(request, project_id)
+    snapshot = request.app.state.project_render_run_registry.snapshot(project_id)
+    result = snapshot.result
+    available = result is not None and _completed_render_file(request, project_id, result) is not None
+    output = None
+    if result is not None:
+        output = ProjectRenderFileResponse(
+            filename="final.mp4", duration_seconds=result.duration_seconds,
+            video_codec=result.video_codec, audio_codec=result.audio_codec,
+            file_size_bytes=result.file_size_bytes,
+            download_url=(f"/projects/{project_id}/renders/{result.render_id.hex}/download" if available else None),
+        )
+    return ProjectRenderingStatusResponse(
+        project_id=project_id, status=snapshot.status,
+        render_id=result.render_id if result else None,
+        is_active=snapshot.status in {RenderRunStatus.QUEUED, RenderRunStatus.RUNNING},
+        succeeded=snapshot.status is RenderRunStatus.COMPLETED,
+        failed=snapshot.status is RenderRunStatus.FAILED,
+        safe_error_code=snapshot.safe_error_code,
+        download_available=available, output=output,
+    )
+
+
+@router.get("/{project_id}/renders/{render_id:path}/download", response_class=FileResponse)
+async def download_project_render(request: Request, project_id: UUID, render_id: str) -> FileResponse:
+    if _RENDER_ID_PATTERN.fullmatch(render_id) is None:
+        raise HTTPException(status_code=422, detail={"code": "INVALID_RENDER_ID", "message": "Render ID must be a lowercase 32-character hex value."})
+    await _snapshot_or_404(request, project_id)
+    registry = request.app.state.project_render_run_registry
+    result = registry.completed_result(project_id, UUID(hex=render_id))
+    if result is None:
+        snapshot = registry.snapshot(project_id)
+        if snapshot.status in {RenderRunStatus.QUEUED, RenderRunStatus.RUNNING, RenderRunStatus.FAILED}:
+            raise HTTPException(status_code=409, detail={"code": "RENDER_NOT_COMPLETED", "message": "Render is not completed."})
+        raise _render_not_found()
+    path = _completed_render_file(request, project_id, result)
+    if path is None:
+        raise _render_not_found()
+    return FileResponse(
+        path=path, media_type="video/mp4", filename=f"{render_id}.mp4",
+        content_disposition_type="inline",
+    )
+
+
+def _completed_render_file(request: Request, project_id: UUID, result: ProjectRenderResult) -> Path | None:
+    try:
+        root = Path(request.app.state.project_render_output_root).resolve()
+        expected = root / "projects" / project_id.hex / "renders" / result.render_id.hex / "final.mp4"
+        actual = expected.resolve()
+        if (result.project_id != project_id or expected.is_symlink()
+            or not actual.is_relative_to(root) or result.output_path.resolve() != actual
+            or not actual.is_file() or actual.stat().st_size != result.file_size_bytes
+            or result.file_size_bytes <= 0):
+            return None
+    except OSError:
+        return None
+    return actual
+
+
+def _render_already_active() -> HTTPException:
+    return HTTPException(status_code=409, detail={"code": "RENDER_ALREADY_ACTIVE", "message": "A render is already active for this Project in this process."})
+
+
+def _render_not_found() -> HTTPException:
+    return HTTPException(status_code=404, detail={"code": "RENDER_NOT_FOUND", "message": "Completed render was not found."})
+
+
+def _render_preflight_error(error: ProjectRenderError) -> HTTPException:
+    status_code = 409 if error.code == "PLAN_CANDIDATE_CONFLICT" else 422
+    if error.code == "PROJECT_NOT_FOUND":
+        return _project_not_found()
+    return HTTPException(status_code=status_code, detail={"code": error.code, "message": str(error)})
 
 
 @router.post(
