@@ -4,53 +4,33 @@
 >
 > 사용자의 편집 의도는 남기고, 반복적인 영상 편집 노동은 AI에게 맡깁니다.
 
-AI Vlog Editor는 촬영 중 남긴 음성 편집 메모를 이용해 긴 브이로그 원본에서 필요한 장면을 찾고, 실제 영상 결과물로 만드는 프로젝트입니다.
+Cutory는 여러 촬영 영상에서 장면과 사건을 찾고, 사용자 의도·취향·현재 요청을 반영해 한 편의 브이로그를 만드는 **멀티 에이전트 AI 편집기**를 목표로 합니다. 사용자는 창작 방향과 결과를 확인하고, AI는 반복적인 탐색·구성·편집 작업을 돕습니다.
 
-사용자의 창작 판단을 AI가 대신하는 것보다, 사용자가 이미 내린 판단을 탐색·구조화·실행하는 데 집중합니다.
+## 제품 목표
 
-## Core Idea
+- 음성 메모가 없어도 영상에서 의미 있는 장면을 찾고, 메모가 있으면 편집 의도의 단서로 활용합니다.
+- 장면을 이야기 흐름에 맞게 구성하고 자막·음악·색감 등의 편집안을 계획합니다.
+- 미리보기와 사용자 검토를 거쳐 완성 영상을 만드는 흐름을 지향합니다.
 
-촬영하면서 다음과 같이 편집 의도를 남깁니다.
+이는 [최종 제품 기획](docs/product/full-development-plan.md)의 방향이며, 아래의 현재 구현 범위와 구분됩니다.
 
-> “AI야 방금 장면 꼭 살려줘.”
+## 현재 구현 범위
 
-시스템은 업로드된 영상에서 해당 발화와 타임스탬프를 찾고, “방금”이 가리키는 장면 후보를 선택해 실제 MP4 클립으로 추출합니다.
+- **v1 완료:** 여러 원본 영상의 등록·처리 상태 저장, 재개와 부분 실패 처리를 위한 기반을 만들었습니다.
+- **v2 진행 중:** 장면 후보 분석과 편집 계획, 선택한 장면을 MP4로 결합하는 백엔드 기능을 단계적으로 구현했습니다. 실제 영상 평가와 사용자 화면 연결 등은 계속 진행 중입니다.
+- **아직 개발 중:** AI가 스토리·스타일을 계획하는 멀티 에이전트 편집과 최종 사용자 경험은 완성되지 않았습니다.
 
-## MVP v1
+자세한 완료 범위와 한계는 아래 [Current Repository Status](#current-repository-status) 및 [Version Roadmap](docs/roadmap/version-roadmap.md)을 참고해 주세요.
+
+## 초기 실험: 음성 편집 메모
+
+초기 Baseline에서는 촬영 중 남긴 “AI야 방금 장면 꼭 살려줘” 같은 말을 찾고, 해당 시점 주변의 장면을 후보로 골라 MP4 클립으로 추출했습니다. 음성 메모는 최종 제품의 **선택 기능**이며, 이 실험이 제품 전체를 뜻하지는 않습니다.
 
 ```text
 Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → Evaluation → FFmpeg → MP4
 ```
 
-초기에는 복잡한 LLM/VLM 판단 대신 메모 이전 5·10·15·30초를 선택하는 규칙 기반 Baseline을 비교합니다. Ground Truth와의 IoU를 측정하고 실패 사례가 다음 기술의 필요성을 결정합니다.
-
-## Roadmap
-
-1. **MVP Baseline** — 음성 메모 탐지와 실제 장면 추출
-2. **Scene Retrieval Improvement** — 장면 경계와 의미 검색 개선
-3. **Conversational Editing** — 자연어 수정 요청을 편집 작업으로 변환
-4. **Personalization** — 사용자 편집 선호 반영
-5. **Narrative Editing** — 여러 장면을 하나의 이야기로 구성
-6. **Multi-platform Short-form** — Shorts/Reels용 편집안과 실제 영상 생성
-7. **Agent Workflow Review** — 동적 재계획 필요성이 확인된 뒤 검토
-
-## Technology Strategy
-
-### MVP v1
-
-- Python
-- FastAPI
-- FFmpeg
-- STT — faster-whisper `small` Baseline
-
-### 필요성이 검증된 이후
-
-- Embedding / Semantic Search
-- LLM / VLM
-- 데이터베이스와 Object Storage
-- Tool Calling / Agent Workflow
-
-기술을 먼저 선택하지 않고 `Baseline → Evaluation → Failure Analysis → Improvement` 순서로 도입합니다.
+기능은 `Baseline → Evaluation → Failure Analysis → Improvement` 순서로 검증하며 확장합니다.
 
 ## Documentation
 
@@ -73,7 +53,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 
 ## Current Repository Status
 
-2026-09-29 현재 저장소에서 확인된 상태입니다.
+아래는 구현 단계별 기록입니다. 각 기능의 검증 범위와 남은 한계는 해당 설명을 기준으로 확인해 주세요.
 
 > Previous: **v1 — Project & Large Video Foundation: Completed**
 >
