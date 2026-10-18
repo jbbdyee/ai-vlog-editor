@@ -4,7 +4,7 @@ from unittest.mock import patch
 import httpx
 
 from frontend.api_client import BackendApiError, BackendConnectionError, VideoEditorApiClient
-from frontend.app import _render_project_scene_controls, _render_project_scene_status
+from frontend.app import _render_project_scene_controls, _render_project_scene_diagnostics, _render_project_scene_status
 
 
 PROJECT = "11111111-1111-1111-1111-111111111111"
@@ -85,8 +85,57 @@ class SceneApiClientTests(TestCase):
         with self.assertRaises(BackendApiError):
             client.get_project_scene_processing_status(PROJECT)
 
+    def test_diagnostics_request_sanitizes_untrusted_fields_and_no_retry(self):
+        response = {"project_id": PROJECT, "sources": [{
+            "source_video_id": SOURCE, "status": "ABSTAINED", "has_record": True,
+            "candidate_count": 0, "abstain_reason": "SINGLE_MODALITY",
+            "evidence_counts": {"TRANSCRIPT": 1, "AUDIO": 0, "VISUAL": 0, "QUALITY": 0},
+            "evidence_type_counts": {"TRANSCRIPT_STRUCTURE": 1},
+            "evidence_intervals": [{"modality": "TRANSCRIPT", "evidence_type": "TRANSCRIPT_STRUCTURE",
+                                    "start_seconds": 4, "end_seconds": 8, "path": "/Users/private"}],
+            "warnings": ["AUDIO_UNAVAILABLE", "/Users/private"], "path": "/Users/private",
+        }]}
+        client, calls = self.client(lambda _: httpx.Response(200, json=response))
+        result = client.get_project_scene_diagnostics(PROJECT)
+        self.assertEqual(calls, [f"GET /projects/{PROJECT}/scene-diagnostics"])
+        self.assertEqual(result["sources"][0]["abstain_reason"], "SINGLE_MODALITY")
+        self.assertNotIn("/Users/", str(result))
+
+    def test_diagnostics_missing_project_connection_and_invalid_payload(self):
+        client, _ = self.client(lambda _: httpx.Response(404))
+        with self.assertRaises(BackendApiError):
+            client.get_project_scene_diagnostics(PROJECT)
+        client, _ = self.client(lambda _: httpx.Response(200, json={"project_id": PROJECT, "sources": [{"path": "/home/private"}]}))
+        with self.assertRaises(BackendApiError):
+            client.get_project_scene_diagnostics(PROJECT)
+        calls = []
+        def fail(request):
+            calls.append(request)
+            raise httpx.ConnectError("private", request=request)
+        client, _ = self.client(fail)
+        with self.assertRaises(BackendConnectionError):
+            client.get_project_scene_diagnostics(PROJECT)
+        self.assertEqual(len(calls), 1)
+
 
 class ScenePresentationTests(TestCase):
+    def test_diagnostics_summary_and_detail_are_separate(self):
+        result = {"project_id": PROJECT, "sources": [{
+            "source_video_id": SOURCE, "status": "ABSTAINED", "has_record": True,
+            "candidate_count": 0, "abstain_reason": "NO_TEMPORAL_OVERLAP",
+            "evidence_counts": {"TRANSCRIPT": 1, "AUDIO": 1, "VISUAL": 0, "QUALITY": 0},
+            "evidence_type_counts": {"AUDIO_ACTIVITY": 1, "TRANSCRIPT_STRUCTURE": 1},
+            "evidence_intervals": [{"modality": "AUDIO", "evidence_type": "AUDIO_ACTIVITY",
+                                    "start_seconds": 10, "end_seconds": 12}], "warnings": [],
+        }]}
+        with (patch("frontend.app.st.session_state", {"scene_diagnostics_result": result}),
+              patch("frontend.app.st.button", return_value=False), patch("frontend.app.st.write") as write,
+              patch("frontend.app.st.info") as info, patch("frontend.app.st.expander"),
+              patch("frontend.app.st.dataframe") as table):
+            _render_project_scene_diagnostics(None, True, PROJECT)
+        self.assertIn("겹치지", info.call_args.args[0])
+        self.assertTrue(any("근거 2개" in str(call) for call in write.call_args_list))
+        self.assertEqual(table.call_args.args[0][0]["시작"], "10.00초")
     def test_source_outcomes_distinct_from_run_state(self):
         rows = [{"source_video_id": SOURCE, "status": code, "candidate_count": 0,
                  "safe_error_code": None} for code in

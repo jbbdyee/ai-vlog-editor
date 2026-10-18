@@ -29,6 +29,10 @@ from backend.app.services.project_scene_candidates import (
     SceneProjectNotFoundError,
     list_active_project_candidates,
 )
+from backend.app.services.project_scene_diagnostics import (
+    SceneDiagnosticsProjectNotFoundError,
+    list_project_scene_diagnostics,
+)
 from backend.app.services.project_scene_edit_plan import (
     SceneEditPlanInvalidSelectionError,
     SceneEditPlanSnapshot,
@@ -148,6 +152,30 @@ class ProjectSceneCandidatesResponse(BaseModel):
     candidates: list[ActiveSceneCandidateResponse]
 
 
+class SceneEvidenceIntervalResponse(BaseModel):
+    modality: str
+    evidence_type: str
+    start_seconds: float
+    end_seconds: float
+
+
+class SceneSourceDiagnosticResponse(BaseModel):
+    source_video_id: UUID
+    status: str
+    has_record: bool
+    candidate_count: int | None
+    abstain_reason: str | None
+    evidence_counts: dict[str, int | None]
+    evidence_type_counts: dict[str, int]
+    evidence_intervals: list[SceneEvidenceIntervalResponse]
+    warnings: list[str]
+
+
+class ProjectSceneDiagnosticsResponse(BaseModel):
+    project_id: UUID
+    sources: list[SceneSourceDiagnosticResponse]
+
+
 class SceneEditPlanSaveRequest(BaseModel):
     candidate_ids: Annotated[list[UUID], Field(max_length=10000)]
 
@@ -256,6 +284,33 @@ async def get_project_scene_candidates(
 def _list_active_candidates_sync(factory, project_id):
     with factory() as session:
         return list_active_project_candidates(session, project_id)
+
+
+@router.get("/{project_id}/scene-diagnostics", response_model=ProjectSceneDiagnosticsResponse)
+async def get_project_scene_diagnostics(request: Request, project_id: UUID) -> ProjectSceneDiagnosticsResponse:
+    try:
+        sources = await run_in_threadpool(_list_scene_diagnostics_sync, _session_factory(request), project_id)
+    except SceneDiagnosticsProjectNotFoundError as error:
+        raise _project_not_found() from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail={"code": "SCENE_DIAGNOSTICS_READ_FAILED",
+                                                      "message": "Scene diagnostics could not be loaded."}) from error
+    return ProjectSceneDiagnosticsResponse(
+        project_id=project_id,
+        sources=[SceneSourceDiagnosticResponse(
+            source_video_id=item.source_video_id, status=item.status,
+            has_record=item.has_record, candidate_count=item.candidate_count,
+            abstain_reason=item.abstain_reason, evidence_counts=item.evidence_counts,
+            evidence_type_counts=item.evidence_type_counts,
+            evidence_intervals=[SceneEvidenceIntervalResponse(**row.__dict__) for row in item.evidence_intervals],
+            warnings=list(item.warnings),
+        ) for item in sources],
+    )
+
+
+def _list_scene_diagnostics_sync(factory, project_id):
+    with factory() as session:
+        return list_project_scene_diagnostics(session, project_id)
 
 
 @router.get("/{project_id}/scene-edit-plan", response_model=SceneEditPlanResponse)

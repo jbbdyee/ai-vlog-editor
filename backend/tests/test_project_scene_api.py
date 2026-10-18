@@ -34,6 +34,7 @@ from backend.app.services.autonomous_discovery import (
     AnalysisUnitType,
     ModalityAnalysis,
     SignalEvidence,
+    process_autonomous_discovery,
 )
 from backend.app.services.project_scene_execution import ProjectSceneRunRegistry
 from backend.app.services.project_scene_processing import (
@@ -226,6 +227,119 @@ class ProjectSceneAPITests(TestCase):
         self.assertEqual((status["run_status"], status["abstained_count"]), ("COMPLETED", 1))
         self.assertEqual(status["sources"][0]["candidate_count"], 0)
         self.assertEqual(self.client.get(f"/projects/{self.project_id}/scene-candidates").json()["candidates"], [])
+
+    def _diagnostics(self, project_id=None):
+        return self.client.get(f"/projects/{project_id or self.project_id}/scene-diagnostics")
+
+    def _controlled_diagnosis(self, *, transcript=True, audio=(), visual=(), audio_fails=False):
+        source_id = self._source(text="ordinary speech")
+        if not transcript:
+            with self.factory() as session:
+                source = session.get(SourceVideo, source_id)
+                source.transcript.segments = []
+                session.commit()
+
+        def facts(modality, intervals):
+            unit = AnalysisUnitType.AUDIO_ACTIVITY if modality is SceneEvidenceModality.AUDIO else AnalysisUnitType.VISUAL_ACTIVITY
+            return ModalityAnalysis(tuple(SignalEvidence(
+                AnalysisInterval(source_id, start, end, unit, "fake", "1"),
+                modality=modality,
+                evidence_type="AUDIO_ACTIVITY" if modality is SceneEvidenceModality.AUDIO else "VISUAL_ACTIVITY",
+                payload={},
+            ) for start, end in intervals))
+
+        def audio_analyzer():
+            if audio_fails:
+                raise RuntimeError("private analyzer error")
+            return facts(SceneEvidenceModality.AUDIO, audio)
+
+        with self.factory() as session:
+            process_autonomous_discovery(
+                session, source_id, audio_analyzer=audio_analyzer,
+                visual_analyzer=lambda: facts(SceneEvidenceModality.VISUAL, visual),
+            )
+        response = self._diagnostics()
+        self.assertEqual(response.status_code, 200)
+        row = next(item for item in response.json()["sources"] if item["source_video_id"] == str(source_id))
+        self.assertNotIn("private", str(row))
+        return source_id, row
+
+    def test_diagnostics_zero_and_single_modality(self):
+        for transcript, audio, visual, expected in (
+            (False, (), (), "NO_EVIDENCE"),
+            (True, (), (), "SINGLE_MODALITY"),
+            (False, ((4, 8),), (), "SINGLE_MODALITY"),
+            (False, (), ((4, 8),), "SINGLE_MODALITY"),
+        ):
+            with self.subTest(reason=expected, transcript=transcript, audio=audio, visual=visual):
+                _, row = self._controlled_diagnosis(transcript=transcript, audio=audio, visual=visual)
+                self.assertEqual((row["status"], row["candidate_count"], row["abstain_reason"]),
+                                 ("ABSTAINED", 0, expected))
+
+    def test_diagnostics_unsupported_nonoverlap_candidate_and_partial_failure(self):
+        _, unsupported = self._controlled_diagnosis(visual=((4, 8),))
+        self.assertEqual(unsupported["abstain_reason"], "UNSUPPORTED_COMBINATION")
+        _, nonoverlap = self._controlled_diagnosis(audio=((10, 12),))
+        self.assertEqual(nonoverlap["abstain_reason"], "NO_TEMPORAL_OVERLAP")
+        source_id, created = self._controlled_diagnosis(audio=((4, 8),))
+        self.assertEqual((created["status"], created["candidate_count"], created["abstain_reason"]),
+                         ("COMPLETED", 1, None))
+        self.assertEqual(created["evidence_counts"]["TRANSCRIPT"], 1)
+        self.assertEqual(created["evidence_counts"]["AUDIO"], 1)
+        self.assertEqual(created["evidence_intervals"][0]["start_seconds"], 4)
+        self.assertIn(str(source_id), str(self.client.get(f"/projects/{self.project_id}/scene-candidates").json()))
+        _, visual_pair = self._controlled_diagnosis(transcript=False, audio=((4, 8),), visual=((5, 7),))
+        self.assertEqual((visual_pair["status"], visual_pair["candidate_count"]), ("COMPLETED", 1))
+        _, partial = self._controlled_diagnosis(audio_fails=True)
+        self.assertEqual(partial["abstain_reason"], "PARTIAL_ANALYZER_FAILURE")
+        self.assertIsNone(partial["evidence_counts"]["AUDIO"])
+        self.assertTrue(partial["warnings"])
+
+    def test_diagnostics_missing_record_project_isolation_and_restart(self):
+        source_id = self._source()
+        other_project = self._other_project()
+        other_source = self._source(other_project)
+        response = self._diagnostics()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["sources"][0]["source_video_id"], str(source_id))
+        self.assertEqual(response.json()["sources"][0]["status"], "NOT_ANALYZED")
+        self.assertIsNone(response.json()["sources"][0]["candidate_count"])
+        self.assertNotIn(str(other_source), str(response.json()))
+        self.assertEqual(self._diagnostics(uuid4()).status_code, 404)
+        self.assertEqual(self._diagnostics(other_project).json()["sources"][0]["source_video_id"], str(other_source))
+        diagnosed_source, row = self._controlled_diagnosis(audio=((4, 8),))
+        app.state.project_scene_run_registry = ProjectSceneRunRegistry(_ManualExecutor())
+        self.assertEqual(self._status().json()["run_status"], "NOT_STARTED")
+        persisted = next(item for item in self._diagnostics().json()["sources"]
+                         if item["source_video_id"] == str(diagnosed_source))
+        self.assertEqual(persisted["candidate_count"], row["candidate_count"])
+
+    def test_diagnostics_incomplete_history_is_unknown_and_candidate_api_unchanged(self):
+        source_id, _ = self._controlled_diagnosis(audio=((4, 8),))
+        before = self.client.get(f"/projects/{self.project_id}/scene-candidates").json()
+        with self.factory() as session:
+            audio_work = session.scalar(select(SceneAnalysisWorkItem).where(
+                SceneAnalysisWorkItem.source_video_id == source_id,
+                SceneAnalysisWorkItem.work_type == "AUDIO_EVIDENCE",
+            ))
+            audio_work.result_reference = "legacy:evidence-count:1"
+            session.commit()
+        diagnostic = next(item for item in self._diagnostics().json()["sources"]
+                          if item["source_video_id"] == str(source_id))
+        self.assertEqual(diagnostic["abstain_reason"], None)  # Candidate exists; no abstention diagnosis.
+        self.assertIsNone(diagnostic["evidence_counts"]["AUDIO"])
+        self.assertEqual(self.client.get(f"/projects/{self.project_id}/scene-candidates").json(), before)
+        abstained_source, _ = self._controlled_diagnosis()
+        with self.factory() as session:
+            audio_work = session.scalar(select(SceneAnalysisWorkItem).where(
+                SceneAnalysisWorkItem.source_video_id == abstained_source,
+                SceneAnalysisWorkItem.work_type == "AUDIO_EVIDENCE",
+            ))
+            audio_work.result_reference = "legacy:evidence-count:0"
+            session.commit()
+        incomplete = next(item for item in self._diagnostics().json()["sources"]
+                          if item["source_video_id"] == str(abstained_source))
+        self.assertEqual(incomplete["abstain_reason"], "UNKNOWN")
 
     def test_one_source_failure_does_not_remove_other_candidates(self):
         good = self._source()

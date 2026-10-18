@@ -78,6 +78,7 @@ def _render_project_candidates_section(
     st.caption("현재 유효한 후보와 관측 근거만 표시합니다. 장면의 중요도나 편집 순위는 판단하지 않습니다.")
     project_id = st.text_input("프로젝트 ID", key="scene_project_id").strip()
     _render_project_scene_controls(client, backend_available, project_id)
+    _render_project_scene_diagnostics(client, backend_available, project_id)
     if st.button("장면 후보 조회"):
         st.session_state.pop("scene_candidates_result", None)
         if not project_id:
@@ -145,6 +146,64 @@ def _render_project_scene_controls(
 
     if current is not None:
         _render_project_scene_status(current)
+
+
+def _render_project_scene_diagnostics(
+    client: VideoEditorApiClient, backend_available: bool, project_id: str
+) -> None:
+    try:
+        normalized_id = str(UUID(project_id))
+    except (ValueError, AttributeError):
+        normalized_id = None
+    if st.button("AI 장면 분석 진단 보기", disabled=not backend_available):
+        if not normalized_id:
+            st.info("올바른 프로젝트 ID를 입력해 주세요.")
+        else:
+            try:
+                st.session_state["scene_diagnostics_result"] = client.get_project_scene_diagnostics(normalized_id)
+            except BackendApiError as error:
+                st.session_state.pop("scene_diagnostics_result", None)
+                st.error(str(error))
+    result = st.session_state.get("scene_diagnostics_result")
+    if not isinstance(result, dict) or result.get("project_id") != normalized_id:
+        return
+    labels = {
+        "NO_EVIDENCE": "분석된 근거가 없습니다.",
+        "SINGLE_MODALITY": "한 종류의 근거만 있어 장면 후보를 만들지 않았습니다.",
+        "UNSUPPORTED_COMBINATION": "서로 다른 근거가 있지만 현재 허용된 조합은 아닙니다.",
+        "NO_TEMPORAL_OVERLAP": "허용된 근거 조합의 시간 구간이 겹치지 않았습니다.",
+        "PARTIAL_ANALYZER_FAILURE": "일부 분석기가 실패해 후보가 생성되지 않았습니다.",
+        "OTHER_RULE_ABSTAIN": "근거가 있었지만 현재 생성 규칙에서 후보가 나오지 않았습니다.",
+        "UNKNOWN": "저장된 기록만으로 정확한 원인을 확인할 수 없습니다.",
+    }
+    sources = result["sources"]
+    if not sources:
+        st.info("프로젝트에 원본 영상이 없습니다.")
+        return
+    for item in sources:
+        count = item["candidate_count"]
+        known_evidence = sum(value for value in item["evidence_counts"].values() if value is not None)
+        evidence_label = (f"확인분 {known_evidence}개 (일부 미확인)"
+                          if any(value is None for value in item["evidence_counts"].values())
+                          else f"{known_evidence}개")
+        st.write(f"원본 영상 {item['source_video_id']} · 근거 "
+                 f"{evidence_label} · "
+                 f"후보 {count if count is not None else '미확인'}개")
+        if item["status"] == "NOT_ANALYZED":
+            st.info("저장된 장면 분석 진단 기록이 없습니다.")
+        elif item["status"] == "RUNNING":
+            st.info("DB에 실행 중 기록이 남아 있습니다. 현재 실행 여부는 장면 분석 상태 조회에서 확인해 주세요.")
+        elif item["abstain_reason"]:
+            st.info(labels[item["abstain_reason"]])
+        for warning in item["warnings"]:
+            st.warning(f"분석 경고: {warning}")
+        with st.expander(f"진단 상세 · {item['source_video_id']}"):
+            st.write(f"저장된 분석 상태: {item['status']} (실행 중 상태는 별도 조회)")
+            st.write("Modality별 근거:", item["evidence_counts"])
+            st.write("유형별 근거:", item["evidence_type_counts"])
+            st.dataframe([{"Modality": row["modality"], "유형": row["evidence_type"],
+                           "시작": _seconds(row["start_seconds"]), "종료": _seconds(row["end_seconds"])}
+                          for row in item["evidence_intervals"]], width="stretch", hide_index=True)
 
 
 def _load_project_edit_plan(client: VideoEditorApiClient, candidates: dict) -> None:

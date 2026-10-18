@@ -134,6 +134,8 @@ MVP-03A는 v1 분석을 완료한 SourceVideo 한 건에 대해 Autonomous Disco
 
 MVP-03B는 v1 전용 `POST /projects/{project_id}/process`를 변경하지 않고, `POST /projects/{project_id}/scene-process`로 별도 Scene 분석을 접수한다. 반환된 `status_url` (`GET /projects/{project_id}/scene-processing`)에서 접수·진행·Source별 성공/기권/실패/차단/건너뜀을 확인한 뒤, 기존 `GET /projects/{project_id}/scene-candidates`에서 유효 후보를 조회할 수 있다. v1 미완료 Source는 Scene 분석을 건너뛰며, 한 Source의 실패가 다른 Source의 결과나 v1 완료 상태를 변경하지 않는다. Scene Work/Candidate/Evidence는 DB에 남지만 프로젝트 Scene 실행 진행률·마지막 실행 결과는 **단일 프로세스 메모리에만** 있으므로 서버 재시작 뒤 `NOT_STARTED`는 이 프로세스에서 추적 중인 실행이 없다는 뜻이다. v1과 Scene 실행은 같은 단일-worker executor를 사용하며 영속 큐·분산 잠금·자동 재시도는 없다. 인증/사용자별 권한 검증과 실제 촬영 영상 정확도 검증은 아직 없다.
 
+MVP-05F는 읽기 전용 `GET /projects/{project_id}/scene-diagnostics`와 Streamlit의 진단 보기를 추가한다. 저장된 Scene modality Work 결과에서 Source별 Evidence 개수·유형·구간, 후보 수, 안전한 경고 코드와 관측 가능한 기권 이유를 보여준다. 근거 기록이 없거나 실행 간 대응이 불명확하면 `UNKNOWN`으로 표시한다. 이 진단은 DB에 남은 분석 사실이며, 메모리 전용 실시간 실행 상태(`scene-processing`)를 대체하지 않는다. 추천 규칙·후보 조회 계약·인증 한계는 그대로다.
+
 MVP-03C Streamlit 프로젝트 화면은 Scene 분석 접수 버튼과 수동 상태 새로고침을 제공한다. 실행 중 중복 클릭을 막고 Source별 완료·정상 기권·실패·차단·건너뜀을 구분하며, terminal 상태 조회 후 기존 유효 후보 목록을 다시 읽는다. 서버 재시작 뒤 `NOT_STARTED`를 성공/실패로 해석하지 않는다. 이 UI는 로컬 개발용이며 Scene 선택·편집·MP4 결합이나 인증은 제공하지 않는다.
 
 MVP-04는 현재 유효한 후보 중 사용자가 사용할 장면을 선택·제외하고 순서를 정해 프로젝트별 편집 계획으로 DB에 저장한다. `GET/PUT /projects/{project_id}/scene-edit-plan`이 순서가 있는 후보 ID 목록을 조회·교체하며, 저장 시 기존 active-result 계약으로 프로젝트 소속과 유효성을 검증한다. 재분석으로 무효화된 ID는 조회 응답의 `invalid_candidate_ids`와 Streamlit 경고에 남고, 사용자가 명시적으로 해결할 때까지 다른 후보로 대체하지 않는다. 이는 사용자 선택 목록이지 v3 Edit Planner의 완성된 EditPlan이 아니다. SceneCandidate/Evidence, v1 `/process`, Scene 분석 API는 그대로이며 실제 자르기·결합·자막·최종 MP4는 아직 없다. 기존 DB에는 새 Alembic migration 적용이 필요하다. 인증/사용자별 권한 검증과 실제 영상 End-to-End 검증도 아직 없다.

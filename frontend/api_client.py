@@ -15,6 +15,8 @@ DOWNLOAD_TIMEOUT_SECONDS = 120.0
 PROJECT_READ_TIMEOUT_SECONDS = 15.0
 SCENE_RUN_STATUSES = frozenset({"NOT_STARTED", "QUEUED", "RUNNING", "COMPLETED", "COMPLETED_WITH_WARNINGS", "FAILED"})
 SCENE_SOURCE_STATUSES = frozenset({"COMPLETED", "ABSTAINED", "FAILED", "BLOCKED", "SKIPPED_V1_INCOMPLETE"})
+SCENE_DIAGNOSTIC_STATUSES = frozenset({"NOT_ANALYZED", "RUNNING", "COMPLETED", "ABSTAINED", "FAILED", "UNKNOWN"})
+SCENE_ABSTAIN_REASONS = frozenset({"UNKNOWN", "NO_EVIDENCE", "SINGLE_MODALITY", "UNSUPPORTED_COMBINATION", "NO_TEMPORAL_OVERLAP", "PARTIAL_ANALYZER_FAILURE", "OTHER_RULE_ABSTAIN"})
 RENDER_RUN_STATUSES = frozenset({"NOT_STARTED", "QUEUED", "RUNNING", "COMPLETED", "FAILED"})
 _RESOURCE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
@@ -131,6 +133,25 @@ class VideoEditorApiClient:
             return _safe_scene_status_payload(response.json(), normalized_id)
         except ValueError as error:
             raise BackendApiError("장면 분석 상태 응답을 읽을 수 없습니다.") from error
+
+    def get_project_scene_diagnostics(self, project_id: str) -> dict[str, Any]:
+        normalized_id = _project_id(project_id)
+        try:
+            response = self._http_client.get(
+                f"{self.backend_url}/projects/{normalized_id}/scene-diagnostics",
+                timeout=PROJECT_READ_TIMEOUT_SECONDS,
+            )
+        except httpx.TimeoutException as error:
+            raise BackendTimeoutError("장면 분석 진단 조회 시간이 초과되었습니다.") from error
+        except httpx.RequestError as error:
+            raise BackendConnectionError("백엔드 서버에 연결할 수 없습니다.") from error
+        if response.status_code == 404:
+            raise BackendApiError("프로젝트를 찾을 수 없습니다.", status_code=404)
+        self._raise_for_error(response)
+        try:
+            return _safe_scene_diagnostics_payload(response.json(), normalized_id)
+        except ValueError as error:
+            raise BackendApiError("장면 분석 진단 응답을 읽을 수 없습니다.") from error
 
     def get_project_scene_edit_plan(self, project_id: str) -> dict[str, Any]:
         return self._scene_edit_plan_request(project_id, None)
@@ -363,6 +384,48 @@ def _safe_scene_status_payload(payload: Any, project_id: str) -> dict[str, Any]:
 
 def _safe_error_code(value: Any) -> str | None:
     return value if isinstance(value, str) and re.fullmatch(r"[A-Z0-9_]{1,80}", value) else None
+
+
+def _safe_scene_diagnostics_payload(payload: Any, project_id: str) -> dict[str, Any]:
+    message = "장면 분석 진단 응답 형식이 올바르지 않습니다."
+    if not isinstance(payload, dict) or payload.get("project_id") != project_id or not isinstance(payload.get("sources"), list):
+        raise BackendApiError(message)
+    safe_sources = []
+    for item in payload["sources"]:
+        try:
+            source_id = _project_id(item["source_video_id"])
+            status = item["status"]
+            reason = item["abstain_reason"]
+            candidate_count = item["candidate_count"]
+            counts = item["evidence_counts"]
+            type_counts = item["evidence_type_counts"]
+            intervals = item["evidence_intervals"]
+            warnings = item["warnings"]
+            if (status not in SCENE_DIAGNOSTIC_STATUSES or type(item["has_record"]) is not bool
+                or reason not in (None, *SCENE_ABSTAIN_REASONS)
+                or (candidate_count is not None and (type(candidate_count) is not int or candidate_count < 0))
+                or not isinstance(counts, dict) or set(counts) != {"TRANSCRIPT", "AUDIO", "VISUAL", "QUALITY"}
+                or any(value is not None and (type(value) is not int or value < 0) for value in counts.values())
+                or not isinstance(type_counts, dict) or any(_safe_error_code(key) != key or type(value) is not int or value < 0 for key, value in type_counts.items())
+                or not isinstance(intervals, list) or not isinstance(warnings, list)):
+                raise ValueError
+            safe_intervals = []
+            for row in intervals:
+                start, end = row["start_seconds"], row["end_seconds"]
+                if (row["modality"] not in counts or _safe_error_code(row["evidence_type"]) != row["evidence_type"]
+                    or type(start) not in (int, float) or type(end) not in (int, float)
+                    or not isfinite(start) or not isfinite(end) or start < 0 or end <= start):
+                    raise ValueError
+                safe_intervals.append({"modality": row["modality"], "evidence_type": row["evidence_type"],
+                                       "start_seconds": float(start), "end_seconds": float(end)})
+            safe_sources.append({"source_video_id": source_id, "status": status,
+                                 "has_record": item["has_record"], "candidate_count": candidate_count,
+                                 "abstain_reason": reason, "evidence_counts": counts,
+                                 "evidence_type_counts": type_counts, "evidence_intervals": safe_intervals,
+                                 "warnings": [code for value in warnings if (code := _safe_error_code(value))]})
+        except (KeyError, TypeError, ValueError, AttributeError, BackendApiError) as error:
+            raise BackendApiError(message) from error
+    return {"project_id": project_id, "sources": safe_sources}
 
 
 def _safe_scene_edit_plan_payload(payload: Any, project_id: str) -> dict[str, Any]:
