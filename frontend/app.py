@@ -102,6 +102,7 @@ def _render_project_candidates_section(
         if result.get("project_id") == current_project_id:
             _render_project_candidate_results(result)
             _render_project_edit_plan_section(client, result, backend_available)
+            _render_project_render_section(client, result, backend_available)
 
 
 def _render_project_scene_controls(
@@ -178,7 +179,7 @@ def _render_project_edit_plan_section(
         st.info("편집 계획을 불러온 뒤 장면을 선택할 수 있습니다.")
         return
     st.subheader("사용할 장면과 순서")
-    st.caption("AI 추천 후보 중 사용자가 사용할 장면을 선택합니다. 아직 영상 편집·결합은 하지 않습니다.")
+    st.caption("AI 추천 후보 중 사용할 장면과 순서를 정하고 저장합니다. 저장된 계획으로 최종 영상을 만들 수 있습니다.")
     invalid = plan["invalid_candidate_ids"]
     conflict_confirmed = True
     if invalid:
@@ -219,7 +220,109 @@ def _render_project_edit_plan_section(
             st.error(str(error))
         else:
             st.session_state["scene_edit_plan"] = saved
+            st.session_state.pop(f"project_render_status_{project_id}", None)
+            st.session_state.pop(f"project_render_bytes_{project_id}", None)
             st.success("편집 계획을 저장했습니다.")
+
+
+def _render_readiness(plan: dict, ordered: list[str]) -> str | None:
+    if plan["invalid_candidate_ids"]:
+        return "무효화된 장면이 있습니다. 편집 계획의 충돌을 해결하고 저장해 주세요."
+    if ordered != plan["candidate_ids"]:
+        return "화면에서 변경한 장면 선택·순서를 먼저 저장해 주세요."
+    if not plan["candidate_ids"]:
+        return "편집 계획이 비어 있습니다. 사용할 장면을 선택하고 저장해 주세요."
+    return None
+
+
+def _render_project_render_section(
+    client: VideoEditorApiClient, candidates: dict, backend_available: bool
+) -> None:
+    project_id = candidates["project_id"]
+    plan = st.session_state.get("scene_edit_plan")
+    if not isinstance(plan, dict) or plan.get("project_id") != project_id:
+        return
+    st.subheader("최종 영상")
+    ordered = st.session_state.get(f"scene_order_{project_id}", [])
+    reason = _render_readiness(plan, ordered)
+    status_key = f"project_render_status_{project_id}"
+    bytes_key = f"project_render_bytes_{project_id}"
+    error_key = f"project_render_status_error_{project_id}"
+    status = st.session_state.get(status_key)
+    active = isinstance(status, dict) and status.get("status") in {"QUEUED", "RUNNING"}
+    if reason:
+        st.info(reason)
+    if st.button("최종 영상 만들기", key=f"start_render_{project_id}",
+                 disabled=not backend_available or reason is not None or active):
+        try:
+            client.start_project_render(project_id)
+        except BackendApiError as error:
+            st.error(str(error))
+        else:
+            status = {"project_id": project_id, "status": "QUEUED", "render_id": None,
+                      "download_available": False, "output": None}
+            st.session_state[status_key] = status
+            st.session_state.pop(bytes_key, None)
+            st.session_state.pop(error_key, None)
+            st.success("렌더링 작업이 접수되었습니다. 상태 새로고침으로 확인해 주세요.")
+
+    if st.button("렌더링 상태 새로고침", key=f"refresh_render_{project_id}",
+                 disabled=not backend_available):
+        try:
+            status = client.get_project_rendering_status(project_id)
+        except BackendApiError as error:
+            st.session_state.pop(status_key, None)
+            st.session_state.pop(bytes_key, None)
+            st.session_state[error_key] = True
+            st.error(str(error))
+        else:
+            st.session_state[status_key] = status
+            st.session_state.pop(error_key, None)
+            if status["status"] != "COMPLETED" or not status["download_available"]:
+                st.session_state.pop(bytes_key, None)
+
+    if st.session_state.get(error_key):
+        st.warning("렌더링 상태를 확인할 수 없습니다. 상태 새로고침을 다시 눌러 주세요.")
+        return
+    if not isinstance(status, dict):
+        st.info("렌더링 상태를 아직 조회하지 않았습니다.")
+        return
+    _render_project_render_status(status)
+    if status["status"] != "COMPLETED" or not status["download_available"]:
+        return
+    render_id = status["render_id"]
+    if st.button("최종 영상 다운로드 준비", key=f"prepare_render_{project_id}"):
+        try:
+            latest = client.get_project_rendering_status(project_id)
+            if (latest["status"] != "COMPLETED" or not latest["download_available"]
+                or latest["render_id"] != render_id):
+                st.session_state[status_key] = latest
+                st.session_state.pop(bytes_key, None)
+                st.warning("렌더링 상태가 변경되었습니다. 다시 확인해 주세요.")
+                return
+            st.session_state[bytes_key] = (render_id, client.download_project_render(project_id, render_id))
+        except BackendApiError as error:
+            st.session_state.pop(bytes_key, None)
+            st.error(str(error))
+    cached = st.session_state.get(bytes_key)
+    if isinstance(cached, tuple) and cached[0] == render_id:
+        st.download_button("최종 영상 다운로드", data=cached[1],
+                           file_name=f"cutory-{render_id}.mp4", mime="video/mp4",
+                           key=f"download_render_{project_id}")
+
+
+def _render_project_render_status(status: dict) -> None:
+    state = status["status"]
+    if state == "NOT_STARTED":
+        st.info("현재 서버 프로세스에 렌더링 실행 기록이 없습니다. 서버 재시작으로 상태가 유실됐을 수 있습니다. 파일만으로 완료를 판단하지 않습니다.")
+    elif state in {"QUEUED", "RUNNING"}:
+        st.info("최종 영상 렌더링 중입니다. 상태 새로고침으로 확인해 주세요.")
+    elif state == "FAILED":
+        st.error(f"렌더링에 실패했습니다. 오류 코드: {status.get('safe_error_code') or '-'}")
+    elif status["download_available"]:
+        st.success("최종 영상이 완성됐습니다. 다운로드를 준비할 수 있습니다.")
+    else:
+        st.warning("렌더링은 완료됐지만 결과 파일을 다운로드할 수 없습니다.")
 
 
 def _scene_option_label(row: dict) -> str:

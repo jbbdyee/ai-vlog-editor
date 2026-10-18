@@ -15,6 +15,7 @@ DOWNLOAD_TIMEOUT_SECONDS = 120.0
 PROJECT_READ_TIMEOUT_SECONDS = 15.0
 SCENE_RUN_STATUSES = frozenset({"NOT_STARTED", "QUEUED", "RUNNING", "COMPLETED", "COMPLETED_WITH_WARNINGS", "FAILED"})
 SCENE_SOURCE_STATUSES = frozenset({"COMPLETED", "ABSTAINED", "FAILED", "BLOCKED", "SKIPPED_V1_INCOMPLETE"})
+RENDER_RUN_STATUSES = frozenset({"NOT_STARTED", "QUEUED", "RUNNING", "COMPLETED", "FAILED"})
 _RESOURCE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
 
@@ -133,6 +134,72 @@ class VideoEditorApiClient:
 
     def get_project_scene_edit_plan(self, project_id: str) -> dict[str, Any]:
         return self._scene_edit_plan_request(project_id, None)
+
+    def start_project_render(self, project_id: str) -> dict[str, Any]:
+        normalized_id = _project_id(project_id)
+        try:
+            response = self._http_client.post(
+                f"{self.backend_url}/projects/{normalized_id}/render",
+                timeout=PROJECT_READ_TIMEOUT_SECONDS,
+            )
+        except httpx.TimeoutException as error:
+            raise BackendTimeoutError("렌더링 접수 확인 시간이 초과되었습니다. 상태를 다시 조회해 주세요.") from error
+        except httpx.RequestError as error:
+            raise BackendConnectionError("백엔드 서버에 연결할 수 없습니다.") from error
+        if response.status_code == 404:
+            raise BackendApiError("프로젝트를 찾을 수 없습니다.", status_code=404)
+        if response.status_code == 409:
+            raise BackendApiError("렌더링이 이미 실행 중이거나 편집 계획의 장면이 무효입니다. 상태와 편집 계획을 확인해 주세요.", status_code=409)
+        self._raise_for_error(response)
+        try:
+            payload = response.json()
+        except ValueError as error:
+            raise BackendApiError("렌더링 접수 응답을 읽을 수 없습니다.") from error
+        if (response.status_code != 202 or not isinstance(payload, dict)
+            or payload.get("project_id") != normalized_id or payload.get("accepted") is not True
+            or payload.get("status_url") != f"/projects/{normalized_id}/rendering"):
+            raise BackendApiError("렌더링 접수 응답 형식이 올바르지 않습니다.")
+        return {"project_id": normalized_id, "accepted": True}
+
+    def get_project_rendering_status(self, project_id: str) -> dict[str, Any]:
+        normalized_id = _project_id(project_id)
+        try:
+            response = self._http_client.get(
+                f"{self.backend_url}/projects/{normalized_id}/rendering",
+                timeout=PROJECT_READ_TIMEOUT_SECONDS,
+            )
+        except httpx.TimeoutException as error:
+            raise BackendTimeoutError("렌더링 상태 조회 시간이 초과되었습니다.") from error
+        except httpx.RequestError as error:
+            raise BackendConnectionError("백엔드 서버에 연결할 수 없습니다.") from error
+        if response.status_code == 404:
+            raise BackendApiError("프로젝트를 찾을 수 없습니다.", status_code=404)
+        self._raise_for_error(response)
+        try:
+            return _safe_render_status_payload(response.json(), normalized_id)
+        except ValueError as error:
+            raise BackendApiError("렌더링 상태 응답을 읽을 수 없습니다.") from error
+
+    def download_project_render(self, project_id: str, render_id: str) -> bytes:
+        normalized_id = _project_id(project_id)
+        normalized_render_id = _project_id(render_id).replace("-", "")
+        try:
+            response = self._http_client.get(
+                f"{self.backend_url}/projects/{normalized_id}/renders/{normalized_render_id}/download",
+                timeout=DOWNLOAD_TIMEOUT_SECONDS,
+            )
+        except httpx.TimeoutException as error:
+            raise BackendTimeoutError("최종 영상 다운로드 시간이 초과되었습니다.") from error
+        except httpx.RequestError as error:
+            raise BackendConnectionError("백엔드 서버에 연결할 수 없습니다.") from error
+        if response.status_code == 404:
+            raise BackendApiError("완료된 영상을 찾을 수 없습니다. 렌더링 상태를 다시 확인해 주세요.", status_code=404)
+        if response.status_code == 409:
+            raise BackendApiError("아직 다운로드 가능한 렌더링 결과가 아닙니다.", status_code=409)
+        self._raise_for_error(response)
+        if response.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "video/mp4":
+            raise BackendApiError("다운로드 응답이 MP4 형식이 아닙니다.")
+        return response.content
 
     def save_project_scene_edit_plan(self, project_id: str, candidate_ids: list[str]) -> dict[str, Any]:
         normalized = [_project_id(value) for value in candidate_ids]
@@ -311,6 +378,51 @@ def _safe_scene_edit_plan_payload(payload: Any, project_id: str) -> dict[str, An
     except (KeyError, TypeError, ValueError, BackendApiError) as error:
         raise BackendApiError("편집 계획 응답 형식이 올바르지 않습니다.") from error
     return {"project_id": project_id, "candidate_ids": selected, "invalid_candidate_ids": invalid}
+
+
+def _safe_render_status_payload(payload: Any, project_id: str) -> dict[str, Any]:
+    message = "렌더링 상태 응답 형식이 올바르지 않습니다."
+    if (not isinstance(payload, dict) or payload.get("project_id") != project_id
+        or not isinstance(payload.get("status"), str)
+        or payload["status"] not in RENDER_RUN_STATUSES
+        or any(type(payload.get(key)) is not bool for key in
+               ("is_active", "succeeded", "failed", "download_available"))):
+        raise BackendApiError(message)
+    status = payload["status"]
+    if (payload["is_active"] != (status in {"QUEUED", "RUNNING"})
+        or payload["succeeded"] != (status == "COMPLETED")
+        or payload["failed"] != (status == "FAILED")):
+        raise BackendApiError(message)
+    render_id = payload.get("render_id")
+    output = payload.get("output")
+    safe_output = None
+    if render_id is not None:
+        try:
+            render_id = _project_id(render_id)
+        except BackendApiError as error:
+            raise BackendApiError(message) from error
+    if output is not None:
+        if not isinstance(output, dict) or render_id is None:
+            raise BackendApiError(message)
+        duration = output.get("duration_seconds")
+        size = output.get("file_size_bytes")
+        if (type(duration) not in (int, float) or not isfinite(duration) or duration <= 0
+            or type(size) is not int or size <= 0):
+            raise BackendApiError(message)
+        expected_url = f"/projects/{project_id}/renders/{UUID(render_id).hex}/download"
+        url = output.get("download_url")
+        if url is not None and url != expected_url:
+            raise BackendApiError(message)
+        safe_output = {"duration_seconds": float(duration), "file_size_bytes": size,
+                       "download_url": url}
+    if (payload["download_available"] != (status == "COMPLETED" and safe_output is not None
+                                          and safe_output["download_url"] is not None)
+        or (status == "COMPLETED") != (render_id is not None and safe_output is not None)):
+        raise BackendApiError(message)
+    return {"project_id": project_id, "status": status, "render_id": render_id,
+            "is_active": payload["is_active"], "succeeded": payload["succeeded"],
+            "failed": payload["failed"], "download_available": payload["download_available"],
+            "safe_error_code": _safe_error_code(payload.get("safe_error_code")), "output": safe_output}
 
 
 def _pick(source: Any, fields: tuple[str, ...]) -> dict[str, Any]:

@@ -142,6 +142,8 @@ MVP-05A는 저장된 장면 순서를 다시 검증한 뒤 `SourceStorage.resolv
 
 MVP-05B는 `POST /projects/{project_id}/render` (202 접수), `GET /projects/{project_id}/rendering` (상태), `GET /projects/{project_id}/renders/{render_id}/download` (완료 MP4)를 추가했다. 기존 단일 worker에서 비동기로 실행하고 프로젝트별 중복 렌더를 막는다. 빈/무효 편집 계획은 접수 전에 오류로 응답하며 실행 시에도 재검증한다. 결과는 `outputs/projects/` 아래에 보존되고 임시 구간은 MVP-05A가 정리한다. 다운로드는 같은 프로세스에서 완료를 확인한 렌더 ID와 안전한 출력 경로에만 허용한다. 실행 상태·완료 ID 목록은 **프로세스 메모리 전용**이므로 서버 재시작 뒤 파일이 남아도 성공으로 간주하거나 다운로드하지 않는다. 실제 진행률 퍼센트는 없고, 사용자 권한·Streamlit 연결·장시간 실제 촬영 영상 검증도 아직 없다.
 
+MVP-05C는 Streamlit 프로젝트 화면에서 **저장된** 편집 계획으로 렌더링을 접수하고, 수동으로 상태를 새로고침해 완료 MP4를 다운로드할 수 있게 한다. 미저장 선택·순서, 빈 계획, 무효 후보는 화면에서 실행을 막으며 백엔드도 다시 검증한다. 진행률 퍼센트나 재시작 후 상태 복구는 없고, 자동 자막·BGM·인증과 실제 촬영 영상 E2E 검증은 아직 구현·확인하지 않았다.
+
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 
 ### MVP Backend Integration
