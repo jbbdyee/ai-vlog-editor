@@ -23,17 +23,23 @@ from backend.app.models import (
     Transcript,
 )
 from backend.app.services.autonomous_discovery import (
+    AUDIO_WORK,
+    PROMOTION_WORK,
     AnalysisInterval,
     AnalysisUnitType,
     AutonomousConfig,
     ModalityAnalysis,
+    PROMOTION_VERSION,
     SignalEvidence,
+    _decode_analysis,
     analyze_audio_wav,
     analyze_transcript_structure,
     analyze_visual_video,
     build_promotion_manifest,
     process_autonomous_discovery,
 )
+from backend.app.services.project_scene_candidates import list_active_project_candidates
+from backend.app.services.scene_fingerprints import canonical_fingerprint
 from backend.app.services.visual_motion_refiner import _DecodedFrames
 
 
@@ -92,6 +98,44 @@ class AutonomousPureLogicTests(TestCase):
         proposals = build_promotion_manifest([transcript, audio, visual_only], duration_seconds=48)
         self.assertEqual([(item.start_seconds, item.end_seconds, item.rule_id) for item in proposals], [(16, 20, "REACTION_CUE_PLUS_AUDIO")])
 
+    def test_reaction_cue_and_silence_do_not_promote(self) -> None:
+        cue = _fact(self.source_id, 0, 2.2, SceneEvidenceModality.TRANSCRIPT, "TRANSCRIPT_REACTION_CUE")
+        silence = _fact(self.source_id, 0, 2, SceneEvidenceModality.AUDIO, "SILENCE")
+        self.assertEqual(build_promotion_manifest([cue, silence], duration_seconds=8), ())
+
+    def test_reaction_cue_requires_overlapping_audio_activity(self) -> None:
+        cue = _fact(self.source_id, 2, 3, SceneEvidenceModality.TRANSCRIPT, "TRANSCRIPT_REACTION_CUE")
+        earlier = _fact(self.source_id, 0, 2, SceneEvidenceModality.AUDIO, "AUDIO_ACTIVITY")
+        overlapping = _fact(self.source_id, 2.5, 3.5, SceneEvidenceModality.AUDIO, "AUDIO_ACTIVITY")
+        self.assertEqual(build_promotion_manifest([cue, earlier], duration_seconds=8), ())
+        proposals = build_promotion_manifest([cue, overlapping], duration_seconds=8)
+        self.assertEqual([(item.start_seconds, item.end_seconds, item.rule_id) for item in proposals], [(2.5, 3, "REACTION_CUE_PLUS_AUDIO")])
+
+    def test_other_supported_pairs_still_promote(self) -> None:
+        structure = _fact(self.source_id, 0, 2, SceneEvidenceModality.TRANSCRIPT, "TRANSCRIPT_STRUCTURE")
+        audio = _fact(self.source_id, 1, 3, SceneEvidenceModality.AUDIO, "AUDIO_ACTIVITY")
+        visual = _fact(self.source_id, 2, 4, SceneEvidenceModality.VISUAL, "VISUAL_ACTIVITY")
+        proposals = build_promotion_manifest([structure, audio, visual], duration_seconds=8)
+        self.assertEqual(
+            [(item.start_seconds, item.end_seconds, item.rule_id) for item in proposals],
+            [(1, 2, "TRANSCRIPT_STRUCTURE_PLUS_AUDIO"), (2, 3, "AUDIO_PLUS_VISUAL_ACTIVITY")],
+        )
+
+    def test_reaction_cue_with_silence_and_activity_promotes_only_activity_overlap(self) -> None:
+        cue = _fact(self.source_id, 0, 2.2, SceneEvidenceModality.TRANSCRIPT, "TRANSCRIPT_REACTION_CUE")
+        silence = _fact(self.source_id, 0, 2, SceneEvidenceModality.AUDIO, "SILENCE")
+        activity = _fact(self.source_id, 2, 2.4, SceneEvidenceModality.AUDIO, "AUDIO_ACTIVITY")
+        proposals = build_promotion_manifest([cue, silence, activity], duration_seconds=8)
+        self.assertEqual([(item.start_seconds, item.end_seconds, item.rule_id) for item in proposals], [(2, 2.2, "REACTION_CUE_PLUS_AUDIO")])
+
+    def test_audio_analysis_keeps_silence_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "activity-with-silence.wav"
+            _write_wav(path, [(0, 16_000 * 2), (8_000, 16_000), (0, 16_000 * 2)])
+            result = analyze_audio_wav(path, source_video_id=self.source_id, duration_seconds=5)
+        self.assertIn("AUDIO_ACTIVITY", {item.evidence_type for item in result.evidences})
+        self.assertIn("SILENCE", {item.evidence_type for item in result.evidences})
+
     def test_same_input_produces_same_manifest(self) -> None:
         facts = [
             _fact(self.source_id, 16, 20, SceneEvidenceModality.TRANSCRIPT, "TRANSCRIPT_REACTION_CUE"),
@@ -107,6 +151,53 @@ class AutonomousPersistenceTests(TestCase):
 
     def tearDown(self) -> None:
         self.engine.dispose()
+
+    def test_silence_only_reaction_abstains_and_keeps_stored_evidence(self) -> None:
+        with Session(self.engine, expire_on_commit=False) as session:
+            source = _graph(session)
+            result = process_autonomous_discovery(
+                session,
+                source.id,
+                audio_analyzer=lambda: ModalityAnalysis((
+                    _fact(source.id, 16, 20, SceneEvidenceModality.AUDIO, "SILENCE"),
+                )),
+                visual_analyzer=lambda: ModalityAnalysis(()),
+            )
+            self.assertTrue(result.abstained)
+            self.assertEqual(result.candidate_ids, ())
+            self.assertEqual(list_active_project_candidates(session, source.project_id), ())
+            audio_work = session.scalar(
+                select(SceneAnalysisWorkItem).where(
+                    SceneAnalysisWorkItem.source_video_id == source.id,
+                    SceneAnalysisWorkItem.work_type == AUDIO_WORK,
+                )
+            )
+            self.assertEqual(
+                [item.evidence_type for item in _decode_analysis(audio_work.result_reference).evidences],
+                ["SILENCE"],
+            )
+            promotion_work = session.scalar(
+                select(SceneAnalysisWorkItem).where(
+                    SceneAnalysisWorkItem.source_video_id == source.id,
+                    SceneAnalysisWorkItem.work_type == PROMOTION_WORK,
+                )
+            )
+            self.assertEqual(
+                promotion_work.config_fingerprint,
+                canonical_fingerprint({
+                    "interval_precision": 3,
+                    "maximum_manifest_intervals": 128,
+                    "promotion_version": PROMOTION_VERSION,
+                }),
+            )
+            self.assertNotEqual(
+                promotion_work.config_fingerprint,
+                canonical_fingerprint({
+                    "interval_precision": 3,
+                    "maximum_manifest_intervals": 128,
+                    "promotion_version": "autonomous-discovery-v0.1",
+                }),
+            )
 
     def test_synthetic_scenario_promotes_only_supported_interval_and_preserves_quality_facts(self) -> None:
         with Session(self.engine, expire_on_commit=False) as session:
@@ -228,6 +319,8 @@ def _fact(source_id, start, end, modality, evidence_type):
         SceneEvidenceModality.VISUAL: AnalysisUnitType.VISUAL_ACTIVITY,
         SceneEvidenceModality.QUALITY: AnalysisUnitType.STATIC_INTERVAL,
     }[modality]
+    if evidence_type == "SILENCE":
+        unit = AnalysisUnitType.SILENCE
     return SignalEvidence(AnalysisInterval(source_id, start, end, unit, "test", "v1"), modality, evidence_type, {"measurement": 1})
 
 

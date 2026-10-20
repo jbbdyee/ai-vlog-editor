@@ -307,6 +307,8 @@ Autonomous Discovery ──┘
 
 Autonomous Discovery는 Memo가 없는 영상에서도 실행하며 Memo가 있는 영상에서도 독립적으로 수행한다. 목적은 최종 편집 여부 결정이 아니라 “검토할 가치가 있는 구간을 근거와 함께 발견”하는 것이다.
 
+현재 deterministic promotion baseline에서 `REACTION_CUE_PLUS_AUDIO`는 시간상 겹치는 `AUDIO_ACTIVITY`만 반응 단서의 보강 근거로 사용한다. `SILENCE` Evidence는 분석 기록으로 유지하지만 이 조합의 보강 근거로 사용하지 않는다. 다른 허용 Evidence 조합과 STT 설정은 이 제한으로 변경되지 않는다.
+
 ### SceneRole Scope Amendment
 
 G4 Architecture Review 결과 authoritative SceneRole assignment는 v2에서 v3 Edit Planner로 이동한다. 이는 누락 기능을 삭제하거나 SceneRole capability 자체를 제거한 것이 아니다. `HIGHLIGHT`, `ESTABLISHING`, `B_ROLL`, `TRANSITION`처럼 최종 사용 역할은 Project theme, target duration, surrounding scenes, Episode와 placement에 따라 같은 Candidate에도 달라질 수 있기 때문이다.

@@ -46,6 +46,7 @@ from backend.app.services.scene_fingerprints import canonical_fingerprint, canon
 
 
 VERSION = "autonomous-discovery-v0.1"
+PROMOTION_VERSION = "autonomous-promotion-v0.2"
 TRANSCRIPT_WORK = "TRANSCRIPT_EVIDENCE"
 AUDIO_WORK = "AUDIO_EVIDENCE"
 VISUAL_WORK = "VISUAL_EVIDENCE"
@@ -309,9 +310,8 @@ def build_promotion_manifest(
             if overlap is None:
                 continue
             types = {left.evidence_type, right.evidence_type}
-            modalities = {left.modality, right.modality}
             rule = None
-            if "TRANSCRIPT_REACTION_CUE" in types and SceneEvidenceModality.AUDIO in modalities:
+            if "TRANSCRIPT_REACTION_CUE" in types and "AUDIO_ACTIVITY" in types:
                 rule = "REACTION_CUE_PLUS_AUDIO"
             elif "TRANSCRIPT_STRUCTURE" in types and "AUDIO_ACTIVITY" in types:
                 rule = "TRANSCRIPT_STRUCTURE_PLUS_AUDIO"
@@ -423,7 +423,7 @@ def process_autonomous_discovery(
         {
             "interval_precision": config.interval_precision,
             "maximum_manifest_intervals": config.maximum_manifest_intervals,
-            "promotion_version": VERSION,
+            "promotion_version": PROMOTION_VERSION,
         }
     )
     existing = session.scalar(
