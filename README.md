@@ -132,6 +132,8 @@ MVP-02 Streamlit 화면은 프로젝트 ID를 입력받아 이 읽기 전용 API
 
 MVP-03A는 v1 분석을 완료한 SourceVideo 한 건에 대해 Autonomous Discovery를 실행하는 별도 application adapter를 추가했다. 저장된 Transcript/길이를 재사용하고 원본은 SourceStorage 경유로만 열며, Scene 전용 임시 WAV를 정리한다. 결과는 기존 Scene Work/Candidate/Evidence에 저장되어 MVP-01 조회 계약을 따른다. Scene 성공·기권·실패는 v1 완료 상태와 별개다. 실제 촬영 영상에 대한 동작·정확도 검증은 아직 하지 않았다.
 
+MVP-05M은 반응 단서 Evidence를 확인된 STT 단어 구간에만 배치해 긴 segment의 다른 Audio Activity와 잘못 결합하는 경우를 차단한다. 단어 시점이 없으면 반응 단서는 보류하며, 기존 STT/VAD 설정과 다른 후보 규칙은 유지한다. 기존 Scene 결과는 자동 삭제하지 않으며 새 분석은 별도 버전·fingerprint로 구분된다.
+
 MVP-03B는 v1 전용 `POST /projects/{project_id}/process`를 변경하지 않고, `POST /projects/{project_id}/scene-process`로 별도 Scene 분석을 접수한다. 반환된 `status_url` (`GET /projects/{project_id}/scene-processing`)에서 접수·진행·Source별 성공/기권/실패/차단/건너뜀을 확인한 뒤, 기존 `GET /projects/{project_id}/scene-candidates`에서 유효 후보를 조회할 수 있다. v1 미완료 Source는 Scene 분석을 건너뛰며, 한 Source의 실패가 다른 Source의 결과나 v1 완료 상태를 변경하지 않는다. Scene Work/Candidate/Evidence는 DB에 남지만 프로젝트 Scene 실행 진행률·마지막 실행 결과는 **단일 프로세스 메모리에만** 있으므로 서버 재시작 뒤 `NOT_STARTED`는 이 프로세스에서 추적 중인 실행이 없다는 뜻이다. v1과 Scene 실행은 같은 단일-worker executor를 사용하며 영속 큐·분산 잠금·자동 재시도는 없다. 인증/사용자별 권한 검증과 실제 촬영 영상 정확도 검증은 아직 없다.
 
 MVP-05F는 읽기 전용 `GET /projects/{project_id}/scene-diagnostics`와 Streamlit의 진단 보기를 추가한다. 저장된 Scene modality Work 결과에서 Source별 Evidence 개수·유형·구간, 후보 수, 안전한 경고 코드와 관측 가능한 기권 이유를 보여준다. 근거 기록이 없거나 실행 간 대응이 불명확하면 `UNKNOWN`으로 표시한다. 이 진단은 DB에 남은 분석 사실이며, 메모리 전용 실시간 실행 상태(`scene-processing`)를 대체하지 않는다. 추천 규칙·후보 조회 계약·인증 한계는 그대로다.

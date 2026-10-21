@@ -46,7 +46,8 @@ from backend.app.services.scene_fingerprints import canonical_fingerprint, canon
 
 
 VERSION = "autonomous-discovery-v0.1"
-PROMOTION_VERSION = "autonomous-promotion-v0.2"
+REACTION_EVIDENCE_VERSION = "reaction-word-timestamps-v0.2"
+PROMOTION_VERSION = "autonomous-promotion-v0.3"
 TRANSCRIPT_WORK = "TRANSCRIPT_EVIDENCE"
 AUDIO_WORK = "AUDIO_EVIDENCE"
 VISUAL_WORK = "VISUAL_EVIDENCE"
@@ -143,7 +144,7 @@ def analyze_transcript_structure(
 ) -> ModalityAnalysis:
     validated = _segments(segments, duration_seconds)
     evidence: list[SignalEvidence] = []
-    for segment_id, start, end, text in validated:
+    for segment_id, start, end, text, words in validated:
         normalized = _normalize(text)
         cues = tuple(cue for cue in config.reaction_cues if cue in normalized)
         evidence.append(
@@ -158,17 +159,17 @@ def analyze_transcript_structure(
                 "transcript-structure",
             )
         )
-        if cues:
+        for word_start, word_end, matched_cues in _reaction_word_spans(words, cues):
             evidence.append(
-                _fact(
-                    source_video_id,
-                    start,
-                    end,
-                    AnalysisUnitType.TRANSCRIPT_SEGMENT,
+                SignalEvidence(
+                    AnalysisInterval(
+                        source_video_id, word_start, word_end,
+                        AnalysisUnitType.TRANSCRIPT_SEGMENT,
+                        "reaction-lexical-cues", REACTION_EVIDENCE_VERSION,
+                    ),
                     SceneEvidenceModality.TRANSCRIPT,
                     "TRANSCRIPT_REACTION_CUE",
-                    {"segment_id": segment_id, "cue_ids": list(cues[:4])},
-                    "reaction-lexical-cues",
+                    {"segment_id": segment_id, "cue_ids": list(matched_cues)},
                 )
             )
     return ModalityAnalysis(tuple(evidence))
@@ -530,7 +531,8 @@ def _promote(session, source, work, proposal, facts, input_fingerprint, config_f
         result_fingerprint = _fingerprint({"type": fact.evidence_type, "interval": [proposal.start_seconds, proposal.end_seconds], "payload": payload})
         if result_fingerprint in existing:
             continue
-        session.add(SceneEvidence(scene_candidate_id=candidate.id, modality=fact.modality, evidence_type=fact.evidence_type, start_seconds=fact.interval.start_seconds, end_seconds=fact.interval.end_seconds, confidence=None, payload=payload, payload_schema_version="1", producer="autonomous-discovery", producer_version=VERSION, source_reference=source_reference, input_fingerprint=input_fingerprint, config_fingerprint=config_fingerprint, result_fingerprint=result_fingerprint))
+        producer_version = REACTION_EVIDENCE_VERSION if fact.evidence_type == "TRANSCRIPT_REACTION_CUE" else VERSION
+        session.add(SceneEvidence(scene_candidate_id=candidate.id, modality=fact.modality, evidence_type=fact.evidence_type, start_seconds=fact.interval.start_seconds, end_seconds=fact.interval.end_seconds, confidence=None, payload=payload, payload_schema_version="1", producer="autonomous-discovery", producer_version=producer_version, source_reference=source_reference, input_fingerprint=input_fingerprint, config_fingerprint=config_fingerprint, result_fingerprint=result_fingerprint))
     return candidate, reused
 
 
@@ -561,6 +563,7 @@ def _modality_specs(source, config):
             canonical_fingerprint({
                 "transcript_gap_seconds": config.transcript_gap_seconds,
                 "reaction_cues": config.reaction_cues,
+                "reaction_evidence_version": REACTION_EVIDENCE_VERSION,
                 "interval_precision": config.interval_precision,
             }),
         ),
@@ -671,7 +674,7 @@ def _encode_analysis(manifest):
 
 
 def _start_work(session, source, work_type, input_fingerprint, config_fingerprint):
-    work = SceneAnalysisWorkItem(project_id=source.project_id, source_video_id=source.id, work_type=work_type, status=SceneAnalysisWorkStatus.RUNNING, input_fingerprint=input_fingerprint, producer="autonomous-discovery", producer_version=VERSION, config_fingerprint=config_fingerprint)
+    work = SceneAnalysisWorkItem(project_id=source.project_id, source_video_id=source.id, work_type=work_type, status=SceneAnalysisWorkStatus.RUNNING, input_fingerprint=input_fingerprint, producer="autonomous-discovery", producer_version=VERSION, config_fingerprint=config_fingerprint, created_at=datetime.now(timezone.utc))
     attempt = SceneAnalysisAttempt(work_item=work, attempt_number=1, status=SceneAnalysisAttemptStatus.RUNNING, started_at=datetime.now(timezone.utc))
     session.add_all([work, attempt])
     session.flush()
@@ -693,9 +696,57 @@ def _segments(segments: object, duration: float):
         start, end = _number(item.get("start_seconds"), "Segment start"), _number(item.get("end_seconds"), "Segment end")
         if start < previous_end or start < 0 or start >= end or end > duration:
             raise ValueError("Transcript segment interval is invalid.")
-        result.append((f"segment-{index:04d}", start, end, item["text"].strip()))
+        words = []
+        raw_words = item.get("words")
+        for word in raw_words if isinstance(raw_words, (list, tuple)) else ():
+            if not isinstance(word, dict) or not isinstance(word.get("text"), str):
+                continue
+            try:
+                word_start = _number(word.get("start_seconds"), "Word start")
+                word_end = _number(word.get("end_seconds"), "Word end")
+            except (TypeError, ValueError):
+                continue
+            if (0 <= word_start < word_end <= duration
+                    and word_start < end and start < word_end
+                    and _normalize(word["text"])):
+                words.append((word_start, word_end, _normalize(word["text"])))
+        result.append((f"segment-{index:04d}", start, end, item["text"].strip(), tuple(words)))
         previous_end = end
     return result
+
+
+def _reaction_word_spans(words, cues):
+    """Map lexical cue occurrences only to observed, valid word intervals."""
+    if not words or not cues:
+        return ()
+    text = "".join(word[2] for word in words)
+    boundaries = []
+    cursor = 0
+    for _, _, token in words:
+        boundaries.append((cursor, cursor + len(token)))
+        cursor += len(token)
+    matches: list[tuple[int, int, str]] = []
+    for cue in sorted(set(cues), key=lambda value: (-len(value), value)):
+        offset = 0
+        while (position := text.find(cue, offset)) != -1:
+            first = next(index for index, (_, finish) in enumerate(boundaries) if finish > position)
+            last = next(index for index, (_, finish) in enumerate(boundaries) if finish >= position + len(cue))
+            # A cue split across words must not bridge an unobserved time gap.
+            if all(words[index][1] >= words[index + 1][0] for index in range(first, last)):
+                matches.append((first, last, cue))
+            offset = position + 1
+    grouped: list[tuple[int, int, set[str]]] = []
+    for first, last, cue in matches:
+        parent = next((item for item in grouped if item[0] <= first and last <= item[1] and any(cue in existing for existing in item[2])), None)
+        if parent is not None:
+            parent[2].add(cue)
+        else:
+            grouped.append((first, last, {cue}))
+    return tuple(
+        (words[first][0], words[last][1], tuple(sorted(found, key=lambda cue: (-len(cue), cue))))
+        for first, last, found in sorted(grouped, key=lambda item: (item[0], item[1]))
+        if words[first][0] < words[last][1]
+    )
 
 
 def _normalize(text: str) -> str:

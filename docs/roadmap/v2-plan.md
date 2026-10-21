@@ -309,6 +309,8 @@ Autonomous Discovery는 Memo가 없는 영상에서도 실행하며 Memo가 있�
 
 현재 deterministic promotion baseline에서 `REACTION_CUE_PLUS_AUDIO`는 시간상 겹치는 `AUDIO_ACTIVITY`만 반응 단서의 보강 근거로 사용한다. `SILENCE` Evidence는 분석 기록으로 유지하지만 이 조합의 보강 근거로 사용하지 않는다. 다른 허용 Evidence 조합과 STT 설정은 이 제한으로 변경되지 않는다.
 
+MVP-05M에서는 `TRANSCRIPT_REACTION_CUE`의 시간 구간을 segment 전체가 아닌 확인된 단어 timestamp로 제한한다. 단어 시점이 없거나 유효하지 않으면 반응 Evidence를 임의로 만들지 않으며, `TRANSCRIPT_STRUCTURE`와 다른 modality 규칙은 유지한다. 이는 STT 오인식 자체를 해결하거나 VAD를 운영 활성화한 결과가 아니다.
+
 ### SceneRole Scope Amendment
 
 G4 Architecture Review 결과 authoritative SceneRole assignment는 v2에서 v3 Edit Planner로 이동한다. 이는 누락 기능을 삭제하거나 SceneRole capability 자체를 제거한 것이 아니다. `HIGHLIGHT`, `ESTABLISHING`, `B_ROLL`, `TRANSITION`처럼 최종 사용 역할은 Project theme, target duration, surrounding scenes, Episode와 placement에 따라 같은 Candidate에도 달라질 수 있기 때문이다.

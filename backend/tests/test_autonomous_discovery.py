@@ -30,6 +30,7 @@ from backend.app.services.autonomous_discovery import (
     AutonomousConfig,
     ModalityAnalysis,
     PROMOTION_VERSION,
+    REACTION_EVIDENCE_VERSION,
     SignalEvidence,
     _decode_analysis,
     analyze_audio_wav,
@@ -39,6 +40,7 @@ from backend.app.services.autonomous_discovery import (
     process_autonomous_discovery,
 )
 from backend.app.services.project_scene_candidates import list_active_project_candidates
+from backend.app.services.project_scene_edit_plan import get_scene_edit_plan, save_scene_edit_plan
 from backend.app.services.scene_fingerprints import canonical_fingerprint
 from backend.app.services.visual_motion_refiner import _DecodedFrames
 
@@ -54,14 +56,48 @@ class AutonomousPureLogicTests(TestCase):
     def test_transcript_structure_and_minimal_korean_reaction_cue(self) -> None:
         result = analyze_transcript_structure(
             source_video_id=self.source_id,
-            segments=[_segment(8, 16, "일반 대화"), _segment(16, 20, "우와 대박")],
+            segments=[_segment(8, 16, "일반 대화"), _segment(16, 20, "우와 대박", [(16.2, 17, "우와"), (18, 18.6, "대박")])],
             duration_seconds=48,
         )
         self.assertEqual(sum(item.evidence_type == "TRANSCRIPT_STRUCTURE" for item in result.evidences), 2)
         reaction = [item for item in result.evidences if item.evidence_type == "TRANSCRIPT_REACTION_CUE"]
-        self.assertEqual(len(reaction), 1)
-        self.assertEqual(reaction[0].payload["cue_ids"], ["우와", "와", "대박"])
+        self.assertEqual(len(reaction), 2)
+        self.assertEqual([(item.interval.start_seconds, item.interval.end_seconds) for item in reaction], [(16.2, 17), (18, 18.6)])
+        self.assertEqual(reaction[0].payload["cue_ids"], ["우와", "와"])
+        self.assertEqual(reaction[1].payload["cue_ids"], ["대박"])
         self.assertNotIn("우와 대박", str(reaction[0].payload))
+
+    def test_long_merged_segments_promote_reaction_only_at_its_word(self) -> None:
+        for cue_start, cue_end, audio_intervals, expected in (
+            (15.89, 16.17, ((2, 5.42), (16, 16.36)), (16, 16.17)),
+            (1.62, 2.28, ((2, 2.36), (16, 19.42)), (2, 2.28)),
+        ):
+            with self.subTest(cue_start=cue_start):
+                facts = analyze_transcript_structure(
+                    source_video_id=self.source_id,
+                    segments=[_segment(1.6, 19, "일반 발화 대박", [(cue_start, cue_end, "대박")])],
+                    duration_seconds=24,
+                ).evidences
+                audio = [_fact(self.source_id, start, end, SceneEvidenceModality.AUDIO, "AUDIO_ACTIVITY") for start, end in audio_intervals]
+                reactions = [item for item in build_promotion_manifest([*facts, *audio], duration_seconds=24) if item.rule_id == "REACTION_CUE_PLUS_AUDIO"]
+                self.assertEqual([(item.start_seconds, item.end_seconds) for item in reactions], [expected])
+
+    def test_missing_invalid_and_split_word_timestamps(self) -> None:
+        missing = analyze_transcript_structure(source_video_id=self.source_id, segments=[_segment(0, 3, "대박")], duration_seconds=8)
+        self.assertEqual([item.evidence_type for item in missing.evidences], ["TRANSCRIPT_STRUCTURE"])
+        invalid = _segment(0, 3, "대박", [(float("nan"), 2, "대박"), (3, 2, "대박"), (8, 9, "대박")])
+        facts = analyze_transcript_structure(source_video_id=self.source_id, segments=[invalid], duration_seconds=8)
+        self.assertEqual([item.evidence_type for item in facts.evidences], ["TRANSCRIPT_STRUCTURE"])
+        split = analyze_transcript_structure(source_video_id=self.source_id, segments=[_segment(1, 3, "대박이야", [(1.4, 1.7, "대"), (1.7, 2, "박이야")])], duration_seconds=8)
+        reaction = [item for item in split.evidences if item.evidence_type == "TRANSCRIPT_REACTION_CUE"]
+        self.assertEqual([(item.interval.start_seconds, item.interval.end_seconds) for item in reaction], [(1.4, 2)])
+        separated = analyze_transcript_structure(source_video_id=self.source_id, segments=[_segment(0, 8, "대박", [(1, 1.4, "대"), (6, 6.4, "박")])], duration_seconds=8)
+        self.assertEqual([item.evidence_type for item in separated.evidences], ["TRANSCRIPT_STRUCTURE"])
+
+    def test_multiple_reaction_occurrences_get_distinct_intervals(self) -> None:
+        result = analyze_transcript_structure(source_video_id=self.source_id, segments=[_segment(0, 8, "대박 대박", [(1, 1.4, "대박!"), (6, 6.4, "대박")])], duration_seconds=8)
+        reaction = [item for item in result.evidences if item.evidence_type == "TRANSCRIPT_REACTION_CUE"]
+        self.assertEqual([(item.interval.start_seconds, item.interval.end_seconds) for item in reaction], [(1, 1.4), (6, 6.4)])
 
     def test_audio_pcm_primitive_emits_activity_and_long_silence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -214,13 +250,17 @@ class AutonomousPersistenceTests(TestCase):
                     _fact(source.id, 40, 48, SceneEvidenceModality.VISUAL, "VISUAL_ACTIVITY"),
                 )),
             )
-            self.assertEqual(result.candidate_intervals, ((16.0, 20.0),))
+            self.assertEqual(result.candidate_intervals, ((16.0, 17.0), (16.0, 20.0), (18.0, 19.0)))
             self.assertEqual(result.runtime_quality_count, 2)
             candidate = session.get(SceneCandidate, result.candidate_ids[0])
             evidences = session.scalars(select(SceneEvidence).where(SceneEvidence.scene_candidate_id == candidate.id)).all()
             self.assertEqual(candidate.discovery_method, SceneDiscoveryMethod.AUTONOMOUS)
             self.assertIsNone(candidate.confidence)
             self.assertEqual({item.modality for item in evidences}, {SceneEvidenceModality.TRANSCRIPT, SceneEvidenceModality.AUDIO})
+            self.assertEqual(
+                {item.producer_version for item in evidences if item.evidence_type == "TRANSCRIPT_REACTION_CUE"},
+                {REACTION_EVIDENCE_VERSION},
+            )
             self.assertNotIn("우와 대박", str([item.payload for item in evidences]))
             self.assertNotIn("C:\\", str([item.payload for item in evidences]))
 
@@ -268,9 +308,9 @@ class AutonomousPersistenceTests(TestCase):
             session.add_all([exact, nearby])
             session.commit()
             result = process_autonomous_discovery(session, source.id, audio_analyzer=lambda: ModalityAnalysis((_fact(source.id, 16, 20, SceneEvidenceModality.AUDIO, "AUDIO_ACTIVITY"),)), visual_analyzer=lambda: ModalityAnalysis(()))
-            self.assertEqual(result.candidate_ids, (exact.id,))
+            self.assertIn(exact.id, result.candidate_ids)
             self.assertEqual(result.reused_candidate_count, 1)
-            self.assertEqual(session.query(SceneCandidate).count(), 2)
+            self.assertEqual(session.query(SceneCandidate).count(), 4)
             self.assertEqual(session.get(SceneCandidate, exact.id).discovery_method, SceneDiscoveryMethod.MEMO_GUIDED)
             self.assertGreater(session.query(SceneEvidence).filter_by(scene_candidate_id=exact.id).count(), 0)
 
@@ -281,8 +321,23 @@ class AutonomousPersistenceTests(TestCase):
             first = process_autonomous_discovery(session, source.id, audio_analyzer=audio, visual_analyzer=lambda: ModalityAnalysis(()))
             counts = (session.query(SceneAnalysisWorkItem).count(), session.query(SceneAnalysisAttempt).count(), session.query(SceneCandidate).count(), session.query(SceneEvidence).count())
             second = process_autonomous_discovery(session, source.id, audio_analyzer=audio, visual_analyzer=lambda: ModalityAnalysis(()))
-            self.assertEqual(first.candidate_ids, second.candidate_ids)
+            self.assertEqual(set(first.candidate_ids), set(second.candidate_ids))
             self.assertEqual(counts, (session.query(SceneAnalysisWorkItem).count(), session.query(SceneAnalysisAttempt).count(), session.query(SceneCandidate).count(), session.query(SceneEvidence).count()))
+
+    def test_reanalysis_keeps_old_rows_but_marks_selected_old_candidate_stale(self) -> None:
+        with Session(self.engine, expire_on_commit=False) as session:
+            source = _graph(session)
+            audio = lambda: ModalityAnalysis((_fact(source.id, 16, 20, SceneEvidenceModality.AUDIO, "AUDIO_ACTIVITY"),))
+            first = process_autonomous_discovery(session, source.id, audio_analyzer=audio, visual_analyzer=lambda: ModalityAnalysis(()))
+            old = next(candidate_id for candidate_id, interval in zip(first.candidate_ids, first.candidate_intervals) if interval == (16, 17))
+            save_scene_edit_plan(session, source.project_id, (old,))
+            source.transcript.segments = [_segment(8, 16, "일반 대화"), _segment(16, 20, "일반 대화")]
+            session.commit()
+            second = process_autonomous_discovery(session, source.id, audio_analyzer=audio, visual_analyzer=lambda: ModalityAnalysis(()))
+            self.assertNotIn(old, second.candidate_ids)
+            self.assertIsNotNone(session.get(SceneCandidate, old))
+            self.assertNotIn(old, {row.candidate_id for row in list_active_project_candidates(session, source.project_id)})
+            self.assertEqual(get_scene_edit_plan(session, source.project_id).invalid_candidate_ids, (old,))
 
     def test_audio_config_change_reuses_transcript_and_visual_work(self) -> None:
         with Session(self.engine, expire_on_commit=False) as session:
@@ -308,8 +363,8 @@ class AutonomousPersistenceTests(TestCase):
             self.assertEqual(new_works, 1)  # unchanged Audio result reuses Promotion
 
 
-def _segment(start, end, text):
-    return {"start_seconds": start, "end_seconds": end, "text": text, "words": []}
+def _segment(start, end, text, words=()):
+    return {"start_seconds": start, "end_seconds": end, "text": text, "words": [{"start_seconds": a, "end_seconds": b, "text": word, "probability": None} for a, b, word in words]}
 
 
 def _fact(source_id, start, end, modality, evidence_type):
@@ -327,7 +382,7 @@ def _fact(source_id, start, end, modality, evidence_type):
 def _graph(session):
     project = Project(name="Autonomous", split_policy=EpisodeSplitPolicy.SINGLE)
     source = SourceVideo(project=project, original_filename="source.mov", storage_reference="projects/test/source.mov", fingerprint="source-fingerprint", fingerprint_algorithm="sha256", duration_seconds=48, processing_status=SourceVideoStatus.COMPLETED)
-    source.transcript = Transcript(text="일반 대화 우와 대박", language="ko", language_probability=1, segments=[_segment(8, 16, "일반 대화"), _segment(16, 20, "우와 대박")])
+    source.transcript = Transcript(text="일반 대화 우와 대박", language="ko", language_probability=1, segments=[_segment(8, 16, "일반 대화"), _segment(16, 20, "우와 대박", [(16, 17, "우와"), (18, 19, "대박")])])
     session.add(project)
     session.commit()
     return source
