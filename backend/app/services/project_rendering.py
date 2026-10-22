@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, ROUND_DOWN
+import json
 from math import isfinite
 from pathlib import Path
 import subprocess
@@ -13,12 +15,13 @@ from uuid import UUID, uuid4
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 
-from backend.app.models import SceneCandidate as StoredSceneCandidate, SourceVideo
+from backend.app.models import SceneCandidate as StoredSceneCandidate, SourceVideo, Transcript
 from backend.app.services.candidate_generator import SceneCandidate as ClipSceneCandidate
 from backend.app.services.clip_renderer import ClipRenderError, RenderedClip, render_clip
 from backend.app.services.media_probe import MediaInfo, MediaProbeError, probe_media
 from backend.app.services.project_scene_candidates import SceneProjectNotFoundError
 from backend.app.services.project_scene_edit_plan import get_scene_edit_plan
+from backend.app.services.project_subtitles import format_srt, map_subtitle_cues, SubtitleCue
 from backend.app.storage.source_storage import SourceStorage, SourceStorageError
 
 
@@ -37,9 +40,11 @@ class ProjectRenderError(RuntimeError):
 @dataclass(frozen=True)
 class _Segment:
     candidate_id: UUID
+    source_video_id: UUID
     source_reference: str
     start_seconds: float
     end_seconds: float
+    transcript_segments: list[dict] | None
 
 
 @dataclass(frozen=True)
@@ -52,6 +57,27 @@ class ProjectRenderResult:
     video_codec: str | None
     audio_codec: str | None
     file_size_bytes: int
+    subtitle_path: Path | None = None
+    subtitle_error_code: str | None = None
+
+
+def probe_video_timeline(path: Path) -> float:
+    """Read the encoded video's zero-based playback duration, not container/AAC tail."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=start_time,duration", "-of", "json", str(path)],
+            capture_output=True, text=True, check=False, timeout=30,
+        )
+        if result.returncode != 0:
+            raise ValueError("Video timeline probe failed.")
+        stream = json.loads(result.stdout)["streams"][0]
+        start, duration = float(stream["start_time"]), float(stream["duration"])
+        if not isfinite(start) or abs(start) > 0.001 or not isfinite(duration) or duration <= 0:
+            raise ValueError("Video timeline is invalid.")
+        return duration
+    except (OSError, ValueError, KeyError, IndexError, TypeError, subprocess.TimeoutExpired) as error:
+        raise ValueError("Video timeline could not be measured.") from error
 
 
 def render_project_edit_plan(
@@ -63,6 +89,7 @@ def render_project_edit_plan(
     render_one: Callable[..., RenderedClip] = render_clip,
     inspect_media: Callable[[Path], MediaInfo] = probe_media,
     run_ffmpeg: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    inspect_timeline: Callable[[Path], float] = probe_video_timeline,
     ffmpeg_executable: str = "ffmpeg",
 ) -> ProjectRenderResult:
     """Validate a saved plan, render each exact interval, normalize and concatenate.
@@ -127,6 +154,25 @@ def render_project_edit_plan(
             # A plan or active-result change during a long render must not silently
             # publish a video based on a now-invalid or reordered selection.
             _assert_plan_current(session_factory, project_id, segments)
+            # Subtitle probing is optional: a failure must not discard a valid MP4.
+            subtitle_durations: list[float] | None = None
+            subtitle_error_code: str | None = None
+            if any(segment.transcript_segments for segment in segments):
+                try:
+                    subtitle_durations = []
+                    for index, clip in enumerate(rendered):
+                        normalized = Path(temporary) / f"subtitle-timeline-{index}.mp4"
+                        command = _subtitle_timeline_command(clip.clip_path, normalized, ffmpeg_executable)
+                        probe_result = run_ffmpeg(
+                            command, capture_output=True, text=True, encoding="utf-8",
+                            errors="replace", check=False,
+                        )
+                        if probe_result.returncode != 0 or not normalized.is_file():
+                            raise ValueError("Clip normalization for subtitles failed.")
+                        subtitle_durations.append(inspect_timeline(normalized))
+                except (OSError, ValueError):
+                    subtitle_durations = None
+                    subtitle_error_code = "SUBTITLE_TIMELINE_FAILED"
 
             command = _concat_command(rendered, has_audio, final_path, ffmpeg_executable)
             try:
@@ -148,17 +194,57 @@ def render_project_edit_plan(
                 or not isfinite(info.duration_seconds) or info.duration_seconds <= 0):
                 raise ProjectRenderError("OUTPUT_INVALID", "Final MP4 is missing a required stream.")
             _assert_plan_current(session_factory, project_id, segments)
+            subtitle_path: Path | None = None
+            if subtitle_durations is not None:
+                try:
+                    final_video_duration = inspect_timeline(final_path)
+                    if abs(final_video_duration - sum(subtitle_durations)) > (1 / OUTPUT_FPS + 0.001):
+                        raise ValueError("Concatenated video timeline differs from measured clips.")
+                    candidates = [StoredSceneCandidate(
+                        source_video_id=segment.source_video_id,
+                        start_seconds=segment.start_seconds,
+                        end_seconds=segment.end_seconds,
+                    ) for segment in segments]
+                    transcripts = {
+                        segment.source_video_id: Transcript(
+                            source_video_id=segment.source_video_id,
+                            text="", language="ko", segments=segment.transcript_segments or [],
+                        ) for segment in segments
+                    }
+                    cues = map_subtitle_cues(
+                        candidates, transcripts, output_clip_durations_seconds=subtitle_durations,
+                    )
+                    limit = Decimal(str(min(final_video_duration, sum(subtitle_durations)))).quantize(
+                        Decimal("0.001"), rounding=ROUND_DOWN,
+                    )
+                    clipped = tuple(
+                        SubtitleCue(cue.start_seconds, min(cue.end_seconds, limit), cue.text)
+                        for cue in cues if cue.start_seconds < limit
+                    )
+                    srt = format_srt(clipped)
+                    if srt:
+                        subtitle_path = run_directory / "final.srt"
+                        subtitle_path.write_text(srt, encoding="utf-8")
+                except Exception:
+                    try:
+                        (run_directory / "final.srt").unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    subtitle_path = None
+                    subtitle_error_code = "SUBTITLE_GENERATION_FAILED"
             output = ProjectRenderResult(
                 project_id=project_id, render_id=render_id, output_path=final_path,
                 candidate_ids=tuple(segment.candidate_id for segment in segments),
                 duration_seconds=info.duration_seconds, video_codec=info.video_codec,
                 audio_codec=info.audio_codec, file_size_bytes=final_path.stat().st_size,
+                subtitle_path=subtitle_path, subtitle_error_code=subtitle_error_code,
             )
             succeeded = True
             return output
     finally:
         if not succeeded:
             final_path.unlink(missing_ok=True)
+            (run_directory / "final.srt").unlink(missing_ok=True)
             try:
                 run_directory.rmdir()
             except OSError:
@@ -197,7 +283,8 @@ def _load_segments(session: Session, project_id: UUID) -> tuple[_Segment, ...]:
         if (not isfinite(start) or not isfinite(end) or start < 0 or end <= start
             or duration is None or not isfinite(duration) or end > duration + 1e-3):
             raise ProjectRenderError("INTERVAL_INVALID", "A selected interval is invalid.")
-        segments.append(_Segment(candidate_id, source.storage_reference, start, end))
+        segments.append(_Segment(candidate_id, source.id, source.storage_reference, start, end,
+                                 source.transcript.segments if source.transcript is not None else None))
     return tuple(segments)
 
 
@@ -249,3 +336,18 @@ def _concat_command(
         "-movflags", "+faststart", str(destination),
     ])
     return command
+
+
+def _subtitle_timeline_command(source: Path, destination: Path, executable: str) -> list[str]:
+    """Mirror the concat video filter to measure each normalized clip with ffprobe."""
+    video_filter = (
+        f"fps={OUTPUT_FPS},scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:"
+        "force_original_aspect_ratio=decrease,"
+        f"pad={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2,"
+        "setsar=1,format=yuv420p,setpts=PTS-STARTPTS"
+    )
+    return [
+        executable, "-v", "error", "-nostdin", "-y", "-i", str(source),
+        "-map", "0:v:0", "-vf", video_filter, "-an", "-c:v", "libx264",
+        "-preset", "fast", "-crf", "23", "-pix_fmt", "yuv420p", str(destination),
+    ]

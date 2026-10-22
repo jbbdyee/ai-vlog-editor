@@ -102,6 +102,25 @@ class ProjectSubtitleTests(unittest.TestCase):
         result = generate_srt([candidate(self.source, 0, 3602)], {self.source: saved})
         self.assertIn("01:00:00,100 --> 01:00:01,000", result)
 
+    def test_measured_output_lengths_scale_cues_and_offsets(self):
+        item = candidate(self.source, 0, 1)
+        saved = transcript(self.source, [segment(0.25, 0.75, "반올림")])
+        cues = map_subtitle_cues(
+            [item, item], {self.source: saved}, output_clip_durations_seconds=[1.2, 0.8],
+        )
+        self.assertEqual(
+            [(cue.start_seconds, cue.end_seconds) for cue in cues],
+            [(Decimal("0.300"), Decimal("0.900")),
+             (Decimal("1.400"), Decimal("1.800"))],
+        )
+
+    def test_invalid_measured_lengths_rejected(self):
+        item = candidate(self.source, 0, 1)
+        with self.assertRaises(ValueError):
+            map_subtitle_cues([item], {}, output_clip_durations_seconds=[])
+        with self.assertRaises(ValueError):
+            map_subtitle_cues([item], {}, output_clip_durations_seconds=[float("nan")])
+
     def test_source_mismatch_and_invalid_candidate_rejected(self):
         with self.assertRaises(ValueError):
             map_subtitle_cues([candidate(self.source, 0, 1)], {self.source: transcript(uuid4(), [])})

@@ -5,6 +5,7 @@ import shutil
 import subprocess
 from tempfile import TemporaryDirectory
 from unittest import TestCase, skipUnless
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 from sqlalchemy import create_engine
@@ -14,11 +15,11 @@ from backend.app.database import Base
 from backend.app.models import (
     EpisodeSplitPolicy, Project, ProjectSceneEditPlan, ProjectSceneEditPlanItem,
     SceneAnalysisWorkItem, SceneAnalysisWorkResultCandidate, SceneAnalysisWorkStatus,
-    SceneCandidate, SceneDiscoveryMethod, SceneEvidence, SceneEvidenceModality, SourceVideo,
+    SceneCandidate, SceneDiscoveryMethod, SceneEvidence, SceneEvidenceModality, SourceVideo, Transcript,
 )
 from backend.app.services.clip_renderer import RenderedClip
 from backend.app.services.media_probe import MediaInfo, probe_media
-from backend.app.services.project_rendering import ProjectRenderError, render_project_edit_plan
+from backend.app.services.project_rendering import ProjectRenderError, render_project_edit_plan, probe_video_timeline
 from backend.app.storage.source_storage import LocalSourceStorage
 
 
@@ -89,6 +90,16 @@ class ProjectRenderingTests(TestCase):
             plan.items = [ProjectSceneEditPlanItem(position=i, candidate_id=value)
                           for i, value in enumerate(ids)]
             session.add(plan)
+            session.commit()
+
+    def add_transcript(self, candidate_id, start, end, text):
+        with self.factory() as session:
+            source_id = session.get(SceneCandidate, candidate_id).source_video_id
+            session.add(Transcript(
+                source_video_id=source_id, text=text, language="ko",
+                segments=[{"start_seconds": start, "end_seconds": end, "text": text,
+                           "words": [{"start_seconds": start, "end_seconds": end, "text": text}]}],
+            ))
             session.commit()
 
     def fake_render_one(self, source, candidate, output, *, ffmpeg_executable):
@@ -205,6 +216,60 @@ class ProjectRenderingTests(TestCase):
             )
         self.assertEqual(raised.exception.code, "OUTPUT_MISSING")
 
+    def test_subtitle_timeline_uses_measured_clip_duration(self):
+        first = self.candidate(start=0, end=1)
+        second = self.candidate(start=2, end=3)
+        self.add_transcript(first, 0.2, 0.8, "첫째")
+        self.add_transcript(second, 2.2, 2.8, "둘째")
+        self.plan([first, second])
+        def run(command, **_):
+            Path(command[-1]).write_bytes(b"fake output")
+            return subprocess.CompletedProcess(command, 0)
+        def timeline(path):
+            return 2.0 if path.name == "final.mp4" else 1.0
+        result = render_project_edit_plan(
+            session_factory=self.factory, source_storage=self.storage,
+            project_id=self.project_id, output_root=self.root / "output",
+            render_one=self.fake_render_one, inspect_media=self.fake_probe,
+            run_ffmpeg=run, inspect_timeline=timeline,
+        )
+        self.assertEqual(result.subtitle_error_code, None)
+        self.assertTrue(result.subtitle_path.is_file())
+        self.assertIn("00:00:01,200 --> 00:00:01,800", result.subtitle_path.read_text())
+        self.assertFalse(list(result.output_path.parent.glob("segments-*")))
+
+    def test_subtitle_failure_retains_mp4_and_removes_srt(self):
+        selected = self.candidate(start=0, end=1)
+        self.add_transcript(selected, 0.1, 0.9, "자막")
+        self.plan([selected])
+        result = render_project_edit_plan(
+            session_factory=self.factory, source_storage=self.storage,
+            project_id=self.project_id, output_root=self.root / "output",
+            render_one=self.fake_render_one, inspect_media=self.fake_probe,
+            run_ffmpeg=self.fake_ffmpeg,
+            inspect_timeline=lambda _: (_ for _ in ()).throw(ValueError("probe failed")),
+        )
+        self.assertTrue(result.output_path.is_file())
+        self.assertIsNone(result.subtitle_path)
+        self.assertEqual(result.subtitle_error_code, "SUBTITLE_TIMELINE_FAILED")
+        self.assertFalse((result.output_path.parent / "final.srt").exists())
+
+    def test_srt_generation_failure_is_noncritical(self):
+        selected = self.candidate(start=0, end=1)
+        self.add_transcript(selected, 0.1, 0.9, "자막")
+        self.plan([selected])
+        with patch("backend.app.services.project_rendering.map_subtitle_cues", side_effect=ValueError("bad subtitle")):
+            result = render_project_edit_plan(
+                session_factory=self.factory, source_storage=self.storage,
+                project_id=self.project_id, output_root=self.root / "output",
+                render_one=self.fake_render_one, inspect_media=self.fake_probe,
+                run_ffmpeg=self.fake_ffmpeg, inspect_timeline=lambda _: 1.0,
+            )
+        self.assertTrue(result.output_path.is_file())
+        self.assertEqual(result.subtitle_error_code, "SUBTITLE_GENERATION_FAILED")
+        self.assertIsNone(result.subtitle_path)
+        self.assertFalse((result.output_path.parent / "final.srt").exists())
+
 
 @skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg tools are unavailable")
 class SyntheticProjectRenderTests(ProjectRenderingTests):
@@ -216,8 +281,10 @@ class SyntheticProjectRenderTests(ProjectRenderingTests):
                         "-c:v", "libx264", "-c:a", "aac", "-shortest", str(first)], check=True)
         subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=640x360:r=15:d=1.5",
                         "-an", "-c:v", "libx264", str(second)], check=True)
-        first_id = self.candidate(start=0.1, end=0.8, source_duration=1.5, source_file=first)
-        second_id = self.candidate(start=0.2, end=0.9, source_duration=1.5, source_file=second)
+        first_id = self.candidate(start=0.1, end=0.83, source_duration=1.5, source_file=first)
+        second_id = self.candidate(start=0.2, end=0.97, source_duration=1.5, source_file=second)
+        self.add_transcript(first_id, 0.2, 0.7, "첫 영상")
+        self.add_transcript(second_id, 0.3, 0.8, "둘째 영상")
         self.plan([second_id, first_id])
         result = render_project_edit_plan(
             session_factory=self.factory, source_storage=self.storage,
@@ -227,6 +294,21 @@ class SyntheticProjectRenderTests(ProjectRenderingTests):
         self.assertEqual(result.candidate_ids, (second_id, first_id))
         self.assertTrue(info.has_video_stream and info.has_audio_stream)
         self.assertEqual((info.video_codec, info.audio_codec), ("h264", "aac"))
-        self.assertAlmostEqual(info.duration_seconds, 1.4, delta=0.2)
+        self.assertAlmostEqual(info.duration_seconds, 1.5, delta=0.2)
+        self.assertIsNone(result.subtitle_error_code)
+        self.assertIsNotNone(result.subtitle_path)
+        self.assertTrue(result.subtitle_path.is_file())
+        srt = result.subtitle_path.read_text(encoding="utf-8")
+        self.assertIn("둘째 영상", srt)
+        self.assertIn("첫 영상", srt)
+        self.assertLess(srt.index("둘째 영상"), srt.index("첫 영상"))
+        self.assertLessEqual(probe_video_timeline(result.output_path), info.duration_seconds)
+        # Requested 0.77 + 0.73 seconds is not an integral 30fps frame count.
+        # The second cue must still fit the measured final video timeline.
+        last_time = srt.strip().split(" --> ")[-1].splitlines()[0]
+        h, m, rest = last_time.split(":")
+        sec, millis = rest.split(",")
+        last_seconds = int(h) * 3600 + int(m) * 60 + int(sec) + int(millis) / 1000
+        self.assertLessEqual(last_seconds, probe_video_timeline(result.output_path))
         self.assertTrue(all(path.is_file() for path in self.source_paths))
         self.assertEqual(len(list(result.output_path.parent.glob("segments-*"))), 0)

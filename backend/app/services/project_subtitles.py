@@ -50,6 +50,8 @@ def _clean_text(value: object) -> str:
 def map_subtitle_cues(
     ordered_candidates: Sequence[SceneCandidate],
     transcripts_by_source: Mapping[UUID, Transcript | None],
+    *,
+    output_clip_durations_seconds: Sequence[object] | None = None,
 ) -> tuple[SubtitleCue, ...]:
     """Map stored transcript times to the *planned* concatenated clip timeline.
 
@@ -59,13 +61,20 @@ def map_subtitle_cues(
     a wholly selected segment may use its measured segment interval and text.
     Invalid word records are skipped, never assigned inferred times.
     """
+    if output_clip_durations_seconds is not None and len(output_clip_durations_seconds) != len(ordered_candidates):
+        raise ValueError("Output clip durations must match the ordered candidates.")
     offset = Decimal(0)
     cues: list[SubtitleCue] = []
-    for candidate in ordered_candidates:
+    for index, candidate in enumerate(ordered_candidates):
         start = _time(candidate.start_seconds)
         end = _time(candidate.end_seconds)
         if start is None or end is None or end <= start:
             raise ValueError("Selected candidate interval is invalid.")
+        planned_duration = end - start
+        output_duration = planned_duration if output_clip_durations_seconds is None else _time(output_clip_durations_seconds[index])
+        if output_duration is None or output_duration <= 0:
+            raise ValueError("Output clip duration is invalid.")
+        scale = output_duration / planned_duration
         transcript = transcripts_by_source.get(candidate.source_video_id)
         if transcript is not None:
             if transcript.source_video_id != candidate.source_video_id:
@@ -106,8 +115,11 @@ def map_subtitle_cues(
                 else:
                     continue
                 if text and cue_end > cue_start:
-                    cues.append(SubtitleCue(offset + cue_start - start, offset + cue_end - start, text))
-        offset += end - start
+                    cues.append(SubtitleCue(
+                        offset + (cue_start - start) * scale,
+                        offset + min((cue_end - start) * scale, output_duration), text,
+                    ))
+        offset += output_duration
     return tuple(sorted(cues, key=lambda cue: (cue.start_seconds, cue.end_seconds)))
 
 

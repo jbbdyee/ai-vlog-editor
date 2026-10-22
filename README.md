@@ -150,6 +150,8 @@ MVP-05C는 Streamlit 프로젝트 화면에서 **저장된** 편집 계획으로
 
 MVP-06B는 저장된 Transcript의 segment/word 시각과 순서가 있는 SceneCandidate 구간에서 한국어 SRT 문자열을 생성하는 **순수 로직**을 추가했다. 선택 구간만 포함하고 클립 길이를 누적한 계획상 시간축을 사용한다. 렌더링된 MP4의 실제 PTS/길이와 동기화하거나 자막을 영상에 삽입하는 기능은 아직 없다. 현재 저장형 편집 계획은 동일 Candidate의 중복 선택을 허용하지 않지만 자막 매핑 함수는 반복 입력을 처리할 수 있다.
 
+MVP-06C-1은 자막이 있는 렌더에서 병합 영상 필터와 동일한 30fps 정규화 조건으로 클립별 영상 시간축을 측정하고, 그 실제 길이를 반영한 `final.srt`를 MP4 옆에 보관한다. 요청 구간과 출력 길이의 차이는 클립 안에서 비례 매핑하며, 최종 영상 길이와 측정값이 맞지 않거나 SRT 생성이 실패하면 **MP4는 유지하고 SRT는 생략**한다. 기존 MP4 다운로드 API는 변경하지 않았으며 SRT 다운로드·영상 내 자막 삽입은 아직 없다.
+
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 
 ### MVP Backend Integration
