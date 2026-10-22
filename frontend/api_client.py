@@ -202,11 +202,18 @@ class VideoEditorApiClient:
             raise BackendApiError("렌더링 상태 응답을 읽을 수 없습니다.") from error
 
     def download_project_render(self, project_id: str, render_id: str) -> bytes:
+        return self._download_project_video(project_id, render_id, subtitled=False)
+
+    def download_project_subtitled_render(self, project_id: str, render_id: str) -> bytes:
+        return self._download_project_video(project_id, render_id, subtitled=True)
+
+    def _download_project_video(self, project_id: str, render_id: str, *, subtitled: bool) -> bytes:
         normalized_id = _project_id(project_id)
         normalized_render_id = _project_id(render_id).replace("-", "")
+        suffix = "/subtitled/download" if subtitled else "/download"
         try:
             response = self._http_client.get(
-                f"{self.backend_url}/projects/{normalized_id}/renders/{normalized_render_id}/download",
+                f"{self.backend_url}/projects/{normalized_id}/renders/{normalized_render_id}{suffix}",
                 timeout=DOWNLOAD_TIMEOUT_SECONDS,
             )
         except httpx.TimeoutException as error:
@@ -482,10 +489,25 @@ def _safe_render_status_payload(payload: Any, project_id: str) -> dict[str, Any]
                                           and safe_output["download_url"] is not None)
         or (status == "COMPLETED") != (render_id is not None and safe_output is not None)):
         raise BackendApiError(message)
+    hard_status = payload.get("hard_subtitle_status", "NOT_STARTED")
+    hard_available = payload.get("hard_subtitle_download_available", False)
+    hard_url = payload.get("hard_subtitle_download_url")
+    if (hard_status not in {"NOT_STARTED", "AVAILABLE", "MISSING", "FAILED",
+                           "SUBTITLE_FAILED", "NO_SUBTITLES", "NOT_CONFIGURED"}
+        or type(hard_available) is not bool
+        or hard_available != (hard_status == "AVAILABLE")
+        or (hard_available and (status != "COMPLETED" or not payload["download_available"]))
+        or hard_url != (f"/projects/{project_id}/renders/{UUID(render_id).hex}/subtitled/download"
+                        if hard_available else None)):
+        raise BackendApiError(message)
     return {"project_id": project_id, "status": status, "render_id": render_id,
             "is_active": payload["is_active"], "succeeded": payload["succeeded"],
             "failed": payload["failed"], "download_available": payload["download_available"],
-            "safe_error_code": _safe_error_code(payload.get("safe_error_code")), "output": safe_output}
+            "safe_error_code": _safe_error_code(payload.get("safe_error_code")), "output": safe_output,
+            "hard_subtitle_status": hard_status,
+            "hard_subtitle_error_code": _safe_error_code(payload.get("hard_subtitle_error_code")),
+            "hard_subtitle_download_available": hard_available,
+            "hard_subtitle_download_url": hard_url}
 
 
 def _pick(source: Any, fields: tuple[str, ...]) -> dict[str, Any]:

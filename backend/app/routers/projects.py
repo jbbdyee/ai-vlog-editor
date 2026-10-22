@@ -211,6 +211,10 @@ class ProjectRenderingStatusResponse(BaseModel):
     safe_error_code: str | None
     download_available: bool
     output: ProjectRenderFileResponse | None
+    hard_subtitle_status: str
+    hard_subtitle_error_code: str | None
+    hard_subtitle_download_available: bool
+    hard_subtitle_download_url: str | None
 
 
 class ProjectSceneProcessingAcceptedResponse(BaseModel):
@@ -398,6 +402,22 @@ async def get_project_rendering(request: Request, project_id: UUID) -> ProjectRe
     snapshot = request.app.state.project_render_run_registry.snapshot(project_id)
     result = snapshot.result
     available = result is not None and _completed_render_file(request, project_id, result) is not None
+    hard_available = (result is not None and available
+                      and _completed_hard_subtitle_file(request, project_id, result) is not None)
+    if result is None:
+        hard_status = "NOT_STARTED"
+    elif result.hard_subtitle_error_code:
+        hard_status = "FAILED"
+    elif hard_available:
+        hard_status = "AVAILABLE"
+    elif result.hard_subtitle_path is not None:
+        hard_status = "MISSING"
+    elif result.subtitle_error_code:
+        hard_status = "SUBTITLE_FAILED"
+    elif result.subtitle_path is None:
+        hard_status = "NO_SUBTITLES"
+    else:
+        hard_status = "NOT_CONFIGURED"
     output = None
     if result is not None:
         output = ProjectRenderFileResponse(
@@ -414,7 +434,33 @@ async def get_project_rendering(request: Request, project_id: UUID) -> ProjectRe
         failed=snapshot.status is RenderRunStatus.FAILED,
         safe_error_code=snapshot.safe_error_code,
         download_available=available, output=output,
+        hard_subtitle_status=hard_status,
+        hard_subtitle_error_code=(result.hard_subtitle_error_code or result.subtitle_error_code) if result else None,
+        hard_subtitle_download_available=hard_available,
+        hard_subtitle_download_url=(f"/projects/{project_id}/renders/{result.render_id.hex}/subtitled/download"
+                                    if hard_available else None),
     )
+
+
+@router.get("/{project_id}/renders/{render_id:path}/subtitled/download", response_class=FileResponse)
+async def download_project_subtitled_render(request: Request, project_id: UUID, render_id: str) -> FileResponse:
+    if _RENDER_ID_PATTERN.fullmatch(render_id) is None:
+        raise HTTPException(status_code=422, detail={"code": "INVALID_RENDER_ID", "message": "Render ID must be a lowercase 32-character hex value."})
+    await _snapshot_or_404(request, project_id)
+    registry = request.app.state.project_render_run_registry
+    result = registry.completed_result(project_id, UUID(hex=render_id))
+    if result is None:
+        snapshot = registry.snapshot(project_id)
+        if snapshot.status in {RenderRunStatus.QUEUED, RenderRunStatus.RUNNING, RenderRunStatus.FAILED}:
+            raise HTTPException(status_code=409, detail={"code": "RENDER_NOT_COMPLETED", "message": "Render is not completed."})
+        raise _render_not_found()
+    if _completed_render_file(request, project_id, result) is None:
+        raise _render_not_found()
+    path = _completed_hard_subtitle_file(request, project_id, result)
+    if path is None:
+        raise HTTPException(status_code=404, detail={"code": "SUBTITLED_RENDER_NOT_FOUND", "message": "Subtitled render is unavailable."})
+    return FileResponse(path=path, media_type="video/mp4", filename=f"{render_id}-subtitled.mp4",
+                        content_disposition_type="attachment")
 
 
 @router.get("/{project_id}/renders/{render_id:path}/download", response_class=FileResponse)
@@ -448,7 +494,22 @@ def _completed_render_file(request: Request, project_id: UUID, result: ProjectRe
             or not actual.is_file() or actual.stat().st_size != result.file_size_bytes
             or result.file_size_bytes <= 0):
             return None
-    except OSError:
+    except (OSError, RuntimeError):
+        return None
+    return actual
+
+
+def _completed_hard_subtitle_file(request: Request, project_id: UUID, result: ProjectRenderResult) -> Path | None:
+    if result.project_id != project_id or result.hard_subtitle_path is None or result.hard_subtitle_error_code:
+        return None
+    try:
+        root = Path(request.app.state.project_render_output_root).resolve()
+        expected = root / "projects" / project_id.hex / "renders" / result.render_id.hex / "final-subtitled.mp4"
+        actual = expected.resolve()
+        if (actual != expected or Path(result.hard_subtitle_path).absolute() != expected
+            or not actual.is_file() or actual.stat().st_size <= 0):
+            return None
+    except (OSError, RuntimeError):
         return None
     return actual
 

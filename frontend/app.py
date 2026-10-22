@@ -281,6 +281,7 @@ def _render_project_edit_plan_section(
             st.session_state["scene_edit_plan"] = saved
             st.session_state.pop(f"project_render_status_{project_id}", None)
             st.session_state.pop(f"project_render_bytes_{project_id}", None)
+            st.session_state.pop(f"project_subtitled_bytes_{project_id}", None)
             st.success("편집 계획을 저장했습니다.")
 
 
@@ -306,6 +307,7 @@ def _render_project_render_section(
     reason = _render_readiness(plan, ordered)
     status_key = f"project_render_status_{project_id}"
     bytes_key = f"project_render_bytes_{project_id}"
+    subtitled_bytes_key = f"project_subtitled_bytes_{project_id}"
     error_key = f"project_render_status_error_{project_id}"
     status = st.session_state.get(status_key)
     active = isinstance(status, dict) and status.get("status") in {"QUEUED", "RUNNING"}
@@ -322,6 +324,7 @@ def _render_project_render_section(
                       "download_available": False, "output": None}
             st.session_state[status_key] = status
             st.session_state.pop(bytes_key, None)
+            st.session_state.pop(subtitled_bytes_key, None)
             st.session_state.pop(error_key, None)
             st.success("렌더링 작업이 접수되었습니다. 상태 새로고침으로 확인해 주세요.")
 
@@ -332,6 +335,7 @@ def _render_project_render_section(
         except BackendApiError as error:
             st.session_state.pop(status_key, None)
             st.session_state.pop(bytes_key, None)
+            st.session_state.pop(subtitled_bytes_key, None)
             st.session_state[error_key] = True
             st.error(str(error))
         else:
@@ -339,6 +343,8 @@ def _render_project_render_section(
             st.session_state.pop(error_key, None)
             if status["status"] != "COMPLETED" or not status["download_available"]:
                 st.session_state.pop(bytes_key, None)
+            if not status.get("hard_subtitle_download_available"):
+                st.session_state.pop(subtitled_bytes_key, None)
 
     if st.session_state.get(error_key):
         st.warning("렌더링 상태를 확인할 수 없습니다. 상태 새로고침을 다시 눌러 주세요.")
@@ -347,10 +353,12 @@ def _render_project_render_section(
         st.info("렌더링 상태를 아직 조회하지 않았습니다.")
         return
     _render_project_render_status(status)
+    if "hard_subtitle_status" in status and status["status"] == "COMPLETED":
+        _render_hard_subtitle_status(status)
     if status["status"] != "COMPLETED" or not status["download_available"]:
         return
     render_id = status["render_id"]
-    if st.button("최종 영상 다운로드 준비", key=f"prepare_render_{project_id}"):
+    if st.button("자막 없는 영상 다운로드 준비", key=f"prepare_render_{project_id}"):
         try:
             latest = client.get_project_rendering_status(project_id)
             if (latest["status"] != "COMPLETED" or not latest["download_available"]
@@ -365,9 +373,45 @@ def _render_project_render_section(
             st.error(str(error))
     cached = st.session_state.get(bytes_key)
     if isinstance(cached, tuple) and cached[0] == render_id:
-        st.download_button("최종 영상 다운로드", data=cached[1],
+        st.download_button("자막 없는 영상 다운로드", data=cached[1],
                            file_name=f"cutory-{render_id}.mp4", mime="video/mp4",
                            key=f"download_render_{project_id}")
+    if "hard_subtitle_status" in status:
+        hard_available = status.get("hard_subtitle_download_available") is True
+        if st.button("자막 적용 영상 다운로드 준비", key=f"prepare_subtitled_{project_id}",
+                     disabled=not hard_available):
+            try:
+                latest = client.get_project_rendering_status(project_id)
+                if (latest.get("status") != "COMPLETED" or latest.get("render_id") != render_id
+                    or not latest.get("hard_subtitle_download_available")):
+                    st.session_state[status_key] = latest
+                    st.session_state.pop(subtitled_bytes_key, None)
+                    st.warning("자막 적용 영상 상태가 변경되었습니다. 다시 확인해 주세요.")
+                    return
+                st.session_state[subtitled_bytes_key] = (
+                    render_id, client.download_project_subtitled_render(project_id, render_id))
+            except BackendApiError as error:
+                st.session_state.pop(subtitled_bytes_key, None)
+                st.error(str(error))
+        hard_cached = st.session_state.get(subtitled_bytes_key)
+        ready = hard_available and isinstance(hard_cached, tuple) and hard_cached[0] == render_id
+        st.download_button("자막 적용 영상 다운로드", data=hard_cached[1] if ready else b"",
+                           file_name=f"cutory-{render_id}-subtitled.mp4", mime="video/mp4",
+                           key=f"download_subtitled_{project_id}", disabled=not ready)
+
+
+def _render_hard_subtitle_status(status: dict) -> None:
+    state = status["hard_subtitle_status"]
+    if state == "AVAILABLE":
+        st.success("한국어 자막 적용 영상이 준비됐습니다.")
+    elif state == "NO_SUBTITLES":
+        st.info("이 영상에는 적용할 자막이 없습니다.")
+    elif state == "NOT_CONFIGURED":
+        st.info("자막 글꼴 환경이 설정되지 않아 자막 적용 영상을 만들지 않았습니다.")
+    elif state in {"FAILED", "SUBTITLE_FAILED"}:
+        st.warning(f"자막 적용 영상 생성에 실패했습니다. 오류 코드: {status.get('hard_subtitle_error_code') or '-'}")
+    elif state == "MISSING":
+        st.warning("자막 적용 영상 파일을 찾을 수 없습니다.")
 
 
 def _render_project_render_status(status: dict) -> None:

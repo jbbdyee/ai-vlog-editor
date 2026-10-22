@@ -53,7 +53,7 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 
 ## Current Repository Status
 
-MVP-06C-2B의 Windows 합성 미디어 하드 자막 렌더 경로는 [검증 기록](docs/handoff/mvp-06c-2b-windows-validation.md)에 정리했다. 로컬 `CUTORY_SUBTITLE_FONT_PATH`에 검증된 NotoSansCJKkr-Regular.otf 경로를 설정하면 기존 `final.mp4`와 `final.srt` 옆에 별도의 `final-subtitled.mp4`를 만든다. 현재 다운로드 API는 기본 `final.mp4`만 제공한다. 실제 촬영 영상 검증은 미완료다.
+MVP-06C-2B의 Windows 합성 미디어 하드 자막 렌더 경로는 [검증 기록](docs/handoff/mvp-06c-2b-windows-validation.md)에 정리했다. 로컬 `CUTORY_SUBTITLE_FONT_PATH`에 검증된 NotoSansCJKkr-Regular.otf 경로를 설정하면 기존 `final.mp4`와 `final.srt` 옆에 별도의 `final-subtitled.mp4`를 만든다. MVP-06D에서는 기존 기본 MP4 다운로드를 유지하고, 하드 자막 MP4의 상태 조회·다운로드 및 Streamlit 선택 UI를 추가했다. [검증 범위](docs/handoff/mvp-06d-subtitle-download-validation.md)를 참고한다. 실제 촬영 영상 검증은 미완료다.
 
 아래는 구현 단계별 기록입니다. 각 기능의 검증 범위와 남은 한계는 해당 설명을 기준으로 확인해 주세요.
 
