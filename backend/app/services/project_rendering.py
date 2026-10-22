@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_DOWN
 import json
+import os
 from math import isfinite
 from pathlib import Path
 import subprocess
@@ -22,6 +23,7 @@ from backend.app.services.media_probe import MediaInfo, MediaProbeError, probe_m
 from backend.app.services.project_scene_candidates import SceneProjectNotFoundError
 from backend.app.services.project_scene_edit_plan import get_scene_edit_plan
 from backend.app.services.project_subtitles import format_srt, map_subtitle_cues, SubtitleCue
+from backend.app.services.hard_subtitles import HardSubtitleError, burn_hard_subtitles
 from backend.app.storage.source_storage import SourceStorage, SourceStorageError
 
 
@@ -59,6 +61,8 @@ class ProjectRenderResult:
     file_size_bytes: int
     subtitle_path: Path | None = None
     subtitle_error_code: str | None = None
+    hard_subtitle_path: Path | None = None
+    hard_subtitle_error_code: str | None = None
 
 
 def probe_video_timeline(path: Path) -> float:
@@ -232,12 +236,22 @@ def render_project_edit_plan(
                         pass
                     subtitle_path = None
                     subtitle_error_code = "SUBTITLE_GENERATION_FAILED"
+            hard_subtitle_path: Path | None = None
+            hard_subtitle_error_code: str | None = None
+            font_path = os.environ.get("CUTORY_SUBTITLE_FONT_PATH")
+            if font_path and subtitle_path is not None:
+                try:
+                    hard_subtitle_path = burn_hard_subtitles(final_path, subtitle_path, Path(font_path))
+                except HardSubtitleError as error:
+                    hard_subtitle_error_code = error.code
             output = ProjectRenderResult(
                 project_id=project_id, render_id=render_id, output_path=final_path,
                 candidate_ids=tuple(segment.candidate_id for segment in segments),
                 duration_seconds=info.duration_seconds, video_codec=info.video_codec,
                 audio_codec=info.audio_codec, file_size_bytes=final_path.stat().st_size,
                 subtitle_path=subtitle_path, subtitle_error_code=subtitle_error_code,
+                hard_subtitle_path=hard_subtitle_path,
+                hard_subtitle_error_code=hard_subtitle_error_code,
             )
             succeeded = True
             return output
