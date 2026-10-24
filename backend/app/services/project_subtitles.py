@@ -44,7 +44,57 @@ def _clean_text(value: object) -> str:
         return ""
     # Keep spoken text, but never let stored newlines/control characters or an
     # SRT timing arrow inject another cue into the output.
-    return " ".join(value.replace("-->", "→").split())
+    safe = value.replace("-->", "→")
+    safe = "".join(" " if ord(character) < 32 or ord(character) == 127 else character for character in safe)
+    return " ".join(safe.split())
+
+
+def _selected_word_text(
+    segment_text: object,
+    words: list[object],
+    selected: list[tuple[int, Decimal, Decimal, str]],
+) -> str:
+    """Recover separators from the observed segment without inventing words."""
+    fallback = "".join(part[3] for part in selected)
+    if not isinstance(segment_text, str):
+        return _clean_text(fallback)
+
+    spans: list[tuple[int, int]] = []
+    cursor = 0
+    for word in words:
+        if not isinstance(word, dict) or not isinstance(word.get("text"), str):
+            return _clean_text(fallback)
+        token = word["text"].strip()
+        if not token:
+            return _clean_text(fallback)
+        position = segment_text.find(token, cursor)
+        if position < 0:
+            return _clean_text(fallback)
+        if any(character.isalnum() for character in segment_text[cursor:position]):
+            return _clean_text(fallback)
+        spans.append((position, position + len(token)))
+        cursor = position + len(token)
+    if any(character.isalnum() for character in segment_text[cursor:]):
+        return _clean_text(fallback)
+
+    first_index = selected[0][0]
+    parts = [segment_text[:spans[0][0]] if first_index == 0 else "",
+             segment_text[slice(*spans[first_index])]]
+    previous_index = first_index
+    for index, _, _, raw_text in selected[1:]:
+        if index == previous_index + 1:
+            parts.append(segment_text[spans[previous_index][1]:spans[index][0]])
+            parts.append(segment_text[slice(*spans[index])])
+        else:
+            # An unselected word may occupy the gap. Keep only its trailing
+            # observed whitespace, never its spoken text.
+            gap = segment_text[spans[previous_index][1]:spans[index][0]]
+            separator = gap[len(gap.rstrip()):]
+            parts.append(separator + segment_text[slice(*spans[index])] if separator else raw_text)
+        previous_index = index
+    if previous_index == len(words) - 1:
+        parts.append(segment_text[cursor:])
+    return _clean_text("".join(parts))
 
 
 def map_subtitle_cues(
@@ -90,8 +140,8 @@ def map_subtitle_cues(
                     continue
                 words = segment.get("words")
                 if isinstance(words, list) and words:
-                    selected: list[tuple[Decimal, Decimal, str]] = []
-                    for word in words:
+                    selected: list[tuple[int, Decimal, Decimal, str]] = []
+                    for word_index, word in enumerate(words):
                         if not isinstance(word, dict):
                             continue
                         word_interval = _interval(word)
@@ -103,12 +153,12 @@ def map_subtitle_cues(
                             continue
                         word_text = word.get("text")
                         if word_start < end and word_end > start and isinstance(word_text, str):
-                            selected.append((max(word_start, start), min(word_end, end), word_text))
+                            selected.append((word_index, max(word_start, start), min(word_end, end), word_text))
                     if not selected:
                         continue
-                    text = _clean_text("".join(part[2] for part in selected))
-                    cue_start = min(part[0] for part in selected)
-                    cue_end = max(part[1] for part in selected)
+                    text = _selected_word_text(segment.get("text"), words, selected)
+                    cue_start = min(part[1] for part in selected)
+                    cue_end = max(part[2] for part in selected)
                 elif not words and segment_start >= start and segment_end <= end:
                     text = _clean_text(segment.get("text"))
                     cue_start, cue_end = segment_start, segment_end
