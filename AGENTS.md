@@ -13,7 +13,7 @@
 - Version Roadmap의 `v1 — Project & Large Video Foundation`은 완료됐다.
 - 완료 범위와 근거는 `docs/roadmap/v1-plan.md`, `docs/roadmap/v1-completion.md`, `evaluation/results/cutory-v1-foundation-eval-v0.1.md`를 따른다.
 - `v2 — Tool / MCP & Scene Intelligence`의 Detailed Plan이 수립됐으며 `docs/roadmap/v2-plan.md`를 현재 v2 구현의 Source of Truth로 사용한다.
-- v2는 Structural/Foundation Implementation Complete 상태이며 Gap Closure를 진행 중이다. G4-A/B/C, G5-A review, G5-B1 focused dataset schema/annotation guide, G5-B2 recording scenario preregistration와 G5-B5 media-free Validator는 완료됐다. G5-B3 촬영·G5-B4 GT 주석은 일부 P1 초안만 존재하고 GT freeze는 없으며, G2/G3는 pending, G1 actual Text LLM evaluation은 `BLOCKED_NO_API_KEY`다. 현재 Windows checkout에는 controlled media가 없다. v2는 observed Evidence를 소유하고 SceneRole은 v3에서 Scene Agent의 optional/non-authoritative hint와 Edit Planner의 authoritative SceneEditPlan role로 분리한다. v2 전체를 Completed로 과장하거나 Distributed queue/lock, semantic Event relation, VLM, Scene Agent, LangGraph, Multi-Agent, RAG, Creative Editing, Reviewer, Final Mobile App, Short-form을 앞당기지 않는다.
+- v2는 Structural/Foundation Implementation Complete 상태이며 Gap Closure를 진행 중이다. G4-A/B/C, G5-A review, G5-B1 focused dataset schema/annotation guide, G5-B2 recording scenario preregistration와 G5-B5 media-free Validator는 완료됐다. G5-B3 촬영·G5-B4 GT 주석은 일부 P1 초안만 존재하고 GT freeze는 없으며, G2/G3는 pending, G1 actual Text LLM evaluation은 미실행이다(기존 `BLOCKED_NO_API_KEY` 기록의 현재 실행 조건은 재확인 필요). 이 Windows checkout의 P1-S01 실제 영상 한 건은 API 수준에서 MP4·SRT·한국어 하드 자막 MP4 생성과 다운로드를 확인했다. 검증 스크립트가 촬영자 확인 구간과의 겹침으로 후보를 선택했으며 자동 추천 품질의 정량 평가와 Streamlit 실제 클릭 조작은 미완료다. MVP-07B 원인 분석은 완료했지만 코드·의존성은 수정하지 않았다. v2는 observed Evidence를 소유하고 SceneRole은 v3에서 Scene Agent의 optional/non-authoritative hint와 Edit Planner의 authoritative SceneEditPlan role로 분리한다. v2 전체를 Completed로 과장하거나 Distributed queue/lock, semantic Event relation, VLM, Scene Agent, LangGraph, Multi-Agent, RAG, Creative Editing, Reviewer, Final Mobile App, Short-form을 앞당기지 않는다.
 - 미결정 사항을 임의로 확정하거나 포트폴리오 목적만으로 기술을 추가하지 않는다.
 
 ## 기준 문서
@@ -29,6 +29,14 @@
 현재 저장소의 코드와 자동화된 테스트는 이미 구현된 사실의 기준이다. 문서와 코드가 다르면 차이를 숨기지 말고 먼저 보고하되, 과거 Baseline 문서로 완료된 v1 범위를 축소하지 않는다.
 
 `docs/mvp-v1-spec.md`의 “MVP v1”은 현재 Version Roadmap의 v1과 다른 단일 영상 Baseline의 역사적 명칭이다. 기존 Evaluation과 통합 검증 기록도 Baseline history로 보존하며 현재 Version의 Scope 문서로 사용하지 않는다.
+
+## 문서 관리
+
+- 기능이나 요구사항이 바뀌면 해당 Source of Truth를 갱신한다. 구현·검증 상태가 바뀌면 `TODO.md`와 필요한 `README.md` 요약을 갱신한다.
+- 오류 원인과 해결 과정은 `docs/handoff/`에 재현 근거, 변경 이유, 테스트 결과와 남은 한계를 함께 기록한다. 기술 블로그에 활용할 수 있도록 문제·원인·해결·검증을 구분한다.
+- 구현 완료, 합성 테스트 통과, 제한된 실제 영상 검증, 사전 정의된 품질 평가를 서로 다른 상태로 표시한다. 건너뛴 테스트는 통과로 집계하지 않는다.
+- 평가 계약, GT, Manifest는 결과에 맞춰 임의로 수정하지 않는다. 과거 실험과 handoff 기록은 해당 시점의 증거로 보존한다.
+- 개인정보가 포함된 원본 영상·프레임, 비밀키, 민감한 로그는 Git에 추가하지 않는다.
 
 ## 구현 규칙
 

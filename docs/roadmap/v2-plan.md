@@ -8,7 +8,9 @@
 > Version sequence: [Cutory Version Roadmap](version-roadmap.md)
 > Product direction: [Cutory Full Product Development Plan](../product/full-development-plan.md)
 
-이 문서는 Cutory v2 구현 범위, 설계 경계, 구현 순서와 Completion Gate의 Source of Truth다. 아직 구현 코드, DB migration, API, Tool 또는 MCP Server가 추가됐다는 뜻이 아니다. 세부사항이 평가 근거 없이 확정되지 않은 경우 `TBD`, `Evaluation으로 결정`, `구현 전 확정 필요`로 남긴다.
+이 문서는 Cutory v2 구현 범위, 설계 경계, 구현 순서와 Completion Gate의 Source of Truth다. 구조·기반 코드, DB migration, API와 제한된 MCP Tool은 구현됐지만 이 문서의 모든 범위나 Completion Gate가 완료됐다는 뜻은 아니다. 세부사항이 평가 근거 없이 확정되지 않은 경우 `TBD`, `Evaluation으로 결정`, `구현 전 확정 필요`로 남긴다.
+
+MVP-07A에서는 P1-S01 실제 촬영 영상 한 건으로 API 수준의 MP4·SRT·한국어 하드 자막 MP4 생성과 두 MP4의 다운로드를 확인했다([검증 기록](../handoff/mvp-07a-real-video-validation.md)). 촬영자 확인 구간과의 겹침으로 검증 스크립트가 후보를 선택했으며, 자동 추천 품질의 정량 평가나 Streamlit 실제 클릭 조작은 수행하지 않았다. GT는 미동결이다. MVP-07B 원인 분석은 [별도 기록](../handoff/mvp-07b-root-cause-analysis.md)에 정리했으며 코드·의존성 수정은 아직 하지 않았다.
 
 기존 `docs/mvp-v1-spec.md`의 “MVP v1”은 단일 영상 Baseline의 역사적 명칭이다. 이 문서의 v2는 Version Roadmap의 `Tool / MCP & Scene Intelligence`를 뜻한다.
 
@@ -45,7 +47,7 @@ v1에서 구현·검증된 다음 자산을 다시 만들지 않고 재사용한
 - FastAPI Project API와 DB-backed processing status
 - Original Source와 Temporary Workspace lifecycle 분리
 
-현재 저장소에는 SceneCandidate, SceneEvidence, SceneRelation, EventGroup의 Product persistence가 없다. `scene_boundary_proposals`, transcript block retrieval, semantic selectors, audio/visual refiners와 Gemini/Ollama VLM selector는 historical/experimental service다. 이를 곧바로 production truth로 승격하지 않고 v2 Baseline과 Evidence/Proposal 전략으로 재평가한다.
+현재 저장소에는 SceneCandidate, SceneEvidence, SceneRelation, EventGroup의 Product persistence가 구현돼 있다. 일반 SceneUnit, 별도 QualityFlag, final Scene entity는 아직 구현하지 않았다. `scene_boundary_proposals`, transcript block retrieval, 과거 semantic selectors·audio/visual refiners·Gemini/Ollama VLM selector의 실험 결과는 historical baseline으로 보존하며, 이를 평가 없이 production truth로 승격하지 않는다.
 
 v1 background execution은 in-process executor이며 durable queue가 아니다. v2는 v1의 durable DB state와 manual resume 철학을 확장하되, distributed queue/worker 도입을 자동 전제로 삼지 않는다.
 

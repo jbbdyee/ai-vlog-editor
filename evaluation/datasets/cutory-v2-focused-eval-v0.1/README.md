@@ -1,6 +1,6 @@
 # Cutory v2 focused evaluation dataset v0.1
 
-Status: **G5-B1/B2 contracts and G5-B5 media-free Validator implemented**. Eight unfrozen P1 GT drafts are present; P2/P3 GT and selected Memo/VLM/Event references remain incomplete. This Windows checkout has no controlled media. There is no frozen GT case, provider result, or semantic accuracy result yet. The v2 version completion gate remains open.
+Status: **G5-B1/B2 contracts and G5-B5 media-free Validator implemented**. Eight unfrozen P1 GT drafts are present; P2/P3 GT and selected Memo/VLM/Event references remain incomplete. Controlled media is now present in this Windows checkout. One P1-S01 video completed a limited API-level integration run that generated MP4, SRT, and Korean hard-subtitled MP4 and verified both MP4 downloads ([MVP-07A record](../../../docs/handoff/mvp-07a-real-video-validation.md)). The run's candidate was selected by the validation script using overlap with the filmmaker-confirmed interval, not by an automatic recommendation. Streamlit user clicks and quantitative recommendation quality remain unverified. [MVP-07B root-cause analysis](../../../docs/handoff/mvp-07b-root-cause-analysis.md) is complete; no product code or dependency fix has been applied. There is no frozen GT case, provider result, or semantic accuracy result yet. The v2 version completion gate remains open.
 
 This focused dataset will measure four distinct questions against controlled local vlog media:
 
@@ -11,7 +11,7 @@ This focused dataset will measure four distinct questions against controlled loc
 | C VLM | Does bounded visual input resolve a specific proposal ambiguity? | Visual sufficiency of the exact bounded representation |
 | D Event | Are cross-video relations and conservative groups correct? | Focused pairs, event membership, must-not-merge |
 
-The historical `evaluation/README.md` and `evaluation/results/` describe earlier runs. They are not this dataset's GT. Current `evaluation/data/` has no source media.
+The historical `evaluation/README.md` and `evaluation/results/` describe earlier runs. They are not this dataset's GT. Local source media in `evaluation/data/` is ignored by Git; the P1-S01 integration result is not a frozen-GT quality result.
 
 ## Directory contract
 
@@ -50,4 +50,4 @@ The separate [G5-B6 preregistration checker](../../validate_focused_manifest.py)
 
 For Dataset B, a GT target is recalled only if **target coverage ≥ 0.70 AND tIoU ≥ 0.30**. Both thresholds are fixed before v0.1 evaluation. They prevent a very long Candidate from earning recall solely by covering a short target. Do not tune them after viewing v0.1 results. Report reduction rate together with GT recall.
 
-See [ANNOTATION_GUIDE.md](ANNOTATION_GUIDE.md) for recording, relation, ambiguity, privacy, and leakage rules. G5-B2 preregistered the [recording manifest](manifests/recording-scenarios.json), [coverage](manifests/COVERAGE.md), and [filming checklist](manifests/RECORDING_CHECKLIST.md). G5-B3/B4 controlled recording and GT annotation are only partial; eight P1 drafts are unfrozen. G1 is `BLOCKED_NO_API_KEY`; G2/G3 remain pending.
+See [ANNOTATION_GUIDE.md](ANNOTATION_GUIDE.md) for recording, relation, ambiguity, privacy, and leakage rules. G5-B2 preregistered the [recording manifest](manifests/recording-scenarios.json), [coverage](manifests/COVERAGE.md), and [filming checklist](manifests/RECORDING_CHECKLIST.md). G5-B3/B4 controlled recording and GT annotation are only partial; eight P1 drafts are unfrozen. G1 actual Text LLM evaluation has not run (the earlier `BLOCKED_NO_API_KEY` condition needs a fresh execution-readiness check); G2/G3 remain pending.
