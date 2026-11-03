@@ -277,8 +277,10 @@ class ProjectSceneAPITests(TestCase):
                                  ("ABSTAINED", 0, expected))
 
     def test_diagnostics_unsupported_nonoverlap_candidate_and_partial_failure(self):
-        _, unsupported = self._controlled_diagnosis(visual=((4, 8),))
-        self.assertEqual(unsupported["abstain_reason"], "UNSUPPORTED_COMBINATION")
+        # v0.4: speech overlapping visual motion is a fallback scene (was UNSUPPORTED_COMBINATION).
+        _, speech_motion = self._controlled_diagnosis(visual=((4, 8),))
+        self.assertEqual((speech_motion["status"], speech_motion["candidate_count"], speech_motion["abstain_reason"]),
+                         ("COMPLETED", 1, None))
         _, nonoverlap = self._controlled_diagnosis(audio=((10, 12),))
         self.assertEqual(nonoverlap["abstain_reason"], "NO_TEMPORAL_OVERLAP")
         source_id, created = self._controlled_diagnosis(audio=((4, 8),))

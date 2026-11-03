@@ -107,6 +107,19 @@ class AutonomousPureLogicTests(TestCase):
         types = {item.evidence_type for item in result.evidences}
         self.assertIn("AUDIO_ACTIVITY", types)
         self.assertIn("LONG_SILENCE", types)
+        self.assertIn("CONFIRMED_SILENCE", types)
+
+    def test_steady_audible_audio_is_not_confirmed_silence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "steady.wav"
+            _write_wav(path, [(8_000, 16_000 * 7)])
+            result = analyze_audio_wav(path, source_video_id=self.source_id, duration_seconds=7)
+        types = {item.evidence_type for item in result.evidences}
+        self.assertIn("LONG_SILENCE", types)  # relative activity detector still labels the complement
+        self.assertNotIn("CONFIRMED_SILENCE", types)
+        for item in result.evidences:
+            if item.evidence_type in {"SILENCE", "LONG_SILENCE"}:
+                self.assertFalse(item.payload["confirmed_silence"])
 
     def test_visual_frame_difference_emits_activity_and_static(self) -> None:
         black = bytes([0]) * 16
@@ -250,7 +263,16 @@ class AutonomousPersistenceTests(TestCase):
                     _fact(source.id, 40, 48, SceneEvidenceModality.VISUAL, "VISUAL_ACTIVITY"),
                 )),
             )
-            self.assertEqual(result.candidate_intervals, ((16.0, 17.0), (16.0, 20.0), (18.0, 19.0)))
+            # v0.4: the raw cue/structure intersections (16-17, 16-20, 18-19) become one editable scene.
+            self.assertEqual(result.candidate_intervals, ((16.0, 20.0),))
+            self.assertEqual(
+                [(item.start_seconds, item.end_seconds) for item in build_promotion_manifest(
+                    [*_decode_analysis(session.scalars(select(SceneAnalysisWorkItem).where(
+                        SceneAnalysisWorkItem.source_video_id == source.id,
+                        SceneAnalysisWorkItem.work_type == "TRANSCRIPT_EVIDENCE")).one().result_reference).evidences,
+                     _fact(source.id, 16, 20, SceneEvidenceModality.AUDIO, "AUDIO_ACTIVITY")], duration_seconds=48)],
+                [(16, 17), (16, 20), (18, 19)],
+            )
             self.assertEqual(result.runtime_quality_count, 2)
             candidate = session.get(SceneCandidate, result.candidate_ids[0])
             evidences = session.scalars(select(SceneEvidence).where(SceneEvidence.scene_candidate_id == candidate.id)).all()
@@ -310,7 +332,9 @@ class AutonomousPersistenceTests(TestCase):
             result = process_autonomous_discovery(session, source.id, audio_analyzer=lambda: ModalityAnalysis((_fact(source.id, 16, 20, SceneEvidenceModality.AUDIO, "AUDIO_ACTIVITY"),)), visual_analyzer=lambda: ModalityAnalysis(()))
             self.assertIn(exact.id, result.candidate_ids)
             self.assertEqual(result.reused_candidate_count, 1)
-            self.assertEqual(session.query(SceneCandidate).count(), 4)
+            # v0.4 consolidates 16-17/16-20/18-19 into the exact 16-20 scene; the 16-19 memo stays separate.
+            self.assertNotIn(nearby.id, result.candidate_ids)
+            self.assertEqual(session.query(SceneCandidate).count(), 2)
             self.assertEqual(session.get(SceneCandidate, exact.id).discovery_method, SceneDiscoveryMethod.MEMO_GUIDED)
             self.assertGreater(session.query(SceneEvidence).filter_by(scene_candidate_id=exact.id).count(), 0)
 
@@ -329,9 +353,9 @@ class AutonomousPersistenceTests(TestCase):
             source = _graph(session)
             audio = lambda: ModalityAnalysis((_fact(source.id, 16, 20, SceneEvidenceModality.AUDIO, "AUDIO_ACTIVITY"),))
             first = process_autonomous_discovery(session, source.id, audio_analyzer=audio, visual_analyzer=lambda: ModalityAnalysis(()))
-            old = next(candidate_id for candidate_id, interval in zip(first.candidate_ids, first.candidate_intervals) if interval == (16, 17))
+            old = next(candidate_id for candidate_id, interval in zip(first.candidate_ids, first.candidate_intervals) if interval == (16, 20))
             save_scene_edit_plan(session, source.project_id, (old,))
-            source.transcript.segments = [_segment(8, 16, "일반 대화"), _segment(16, 20, "일반 대화")]
+            source.transcript.segments = [_segment(8, 12, "일반 대화"), _segment(17.5, 20, "일반 대화")]
             session.commit()
             second = process_autonomous_discovery(session, source.id, audio_analyzer=audio, visual_analyzer=lambda: ModalityAnalysis(()))
             self.assertNotIn(old, second.candidate_ids)

@@ -193,7 +193,9 @@ def _abstain_reason(facts, selected, incomplete: bool) -> str:
             modalities = {left.modality.value, right.modality.value}
             if (("TRANSCRIPT_REACTION_CUE" in types and "AUDIO" in modalities)
                 or {"TRANSCRIPT_STRUCTURE", "AUDIO_ACTIVITY"} <= types
-                or {"AUDIO_ACTIVITY", "VISUAL_ACTIVITY"} <= types):
+                or {"AUDIO_ACTIVITY", "VISUAL_ACTIVITY"} <= types
+                # promotion v0.4 fallback: speech overlapping visual motion
+                or ("VISUAL_ACTIVITY" in types and "TRANSCRIPT" in modalities)):
                 allowed_pairs.append((left, right))
     if not allowed_pairs:
         return "UNSUPPORTED_COMBINATION"

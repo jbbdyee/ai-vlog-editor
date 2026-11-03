@@ -47,7 +47,13 @@ from backend.app.services.scene_fingerprints import canonical_fingerprint, canon
 
 VERSION = "autonomous-discovery-v0.1"
 REACTION_EVIDENCE_VERSION = "reaction-word-timestamps-v0.2"
-PROMOTION_VERSION = "autonomous-promotion-v0.3"
+# v0.4: raw evidence intersections are consolidated into editable scenes (merge gaps <= 1s,
+# pad to >= 3s, cap merges at 15s, no overlaps) and, only when no audio-based intersection
+# exists, speech+motion (transcript x visual activity) intersections are used as a fallback.
+PROMOTION_VERSION = "autonomous-promotion-v0.4"
+SCENE_MIN_SECONDS = 3.0
+SCENE_MERGE_GAP_SECONDS = 1.0
+SCENE_MAX_SECONDS = 15.0
 TRANSCRIPT_WORK = "TRANSCRIPT_EVIDENCE"
 AUDIO_WORK = "AUDIO_EVIDENCE"
 VISUAL_WORK = "VISUAL_EVIDENCE"
@@ -213,6 +219,10 @@ def analyze_audio_wav(
     for start, end in _complement(activity_ranges, duration_seconds):
         kind = "LONG_SILENCE" if end - start >= config.long_silence_seconds else "SILENCE"
         modality = SceneEvidenceModality.QUALITY if kind == "LONG_SILENCE" else SceneEvidenceModality.AUDIO
+        quiet_levels = [level for frame_start, frame_end, level in frames if frame_start < end and frame_end > start]
+        # Relative activity alone cannot establish silence (e.g. steady music below a raised noise floor).
+        # The extra marker lets clients distinguish a conservative absolute-level confirmation from legacy evidence.
+        confirmed_silence = bool(quiet_levels) and all(level <= -60.0 for level in quiet_levels)
         evidence.append(
             _fact(
                 source_video_id,
@@ -221,10 +231,16 @@ def analyze_audio_wav(
                 AnalysisUnitType.SILENCE,
                 modality,
                 kind,
-                {"duration_seconds": round(end - start, 3)},
+                {"duration_seconds": round(end - start, 3), "confirmed_silence": confirmed_silence},
                 "pcm-rms-activity",
             )
         )
+        if confirmed_silence:
+            evidence.append(
+                _fact(source_video_id, start, end, AnalysisUnitType.SILENCE,
+                      SceneEvidenceModality.AUDIO, "CONFIRMED_SILENCE",
+                      {"duration_seconds": round(end - start, 3)}, "pcm-rms-activity")
+            )
     return ModalityAnalysis(tuple(evidence))
 
 
@@ -329,6 +345,83 @@ def build_promotion_manifest(
         if key not in seen:
             seen.add(key)
             result.append(proposal)
+    return tuple(result)
+
+
+def build_scene_proposals(
+    evidences: Iterable[SignalEvidence],
+    *,
+    duration_seconds: float,
+    config: AutonomousConfig = DEFAULT_CONFIG,
+) -> tuple[PromotionProposal, ...]:
+    """Editable scene proposals: raw cross-modality intersections, consolidated for editing.
+
+    ``build_promotion_manifest`` stays the observed-evidence contract. When it yields nothing
+    (e.g. audio activity never crosses its relative threshold), speech overlapping visual
+    motion is used instead. The result is then merged/padded so a user gets watchable scenes.
+    """
+    facts = tuple(evidences)
+    if len(facts) > config.maximum_manifest_intervals:
+        facts = facts[: config.maximum_manifest_intervals]
+    raw = list(build_promotion_manifest(facts, duration_seconds=duration_seconds, config=config))
+    if not raw:
+        for left_index, left in enumerate(facts):
+            for right_index in range(left_index + 1, len(facts)):
+                right = facts[right_index]
+                if left.interval.source_video_id != right.interval.source_video_id:
+                    continue
+                types = {left.evidence_type, right.evidence_type}
+                if "VISUAL_ACTIVITY" not in types or not types & {"TRANSCRIPT_STRUCTURE", "TRANSCRIPT_REACTION_CUE"}:
+                    continue
+                overlap = _overlap(left.interval, right.interval)
+                if overlap is None:
+                    continue
+                start, end = (_quantize(value, config.interval_precision) for value in overlap)
+                if 0 <= start < end <= duration_seconds:
+                    raw.append(PromotionProposal(start, end, "TRANSCRIPT_PLUS_VISUAL_ACTIVITY", (left_index, right_index)))
+    return _consolidate_proposals(raw, duration_seconds, config)
+
+
+def _consolidate_proposals(
+    proposals: list[PromotionProposal], duration: float, config: AutonomousConfig
+) -> tuple[PromotionProposal, ...]:
+    if duration <= 0:
+        return ()
+    minimum = min(SCENE_MIN_SECONDS, duration)
+    q = lambda value: _quantize(value, config.interval_precision)  # noqa: E731
+
+    def merge(items, gap):
+        merged: list[PromotionProposal] = []
+        for item in sorted(items, key=lambda value: (value.start_seconds, value.end_seconds)):
+            last = merged[-1] if merged else None
+            if (last is not None and item.start_seconds - last.end_seconds <= gap
+                    and max(last.end_seconds, item.end_seconds) - last.start_seconds <= SCENE_MAX_SECONDS):
+                rules = "+".join(sorted(set(last.rule_id.split("+")) | set(item.rule_id.split("+"))))
+                merged[-1] = PromotionProposal(last.start_seconds, max(last.end_seconds, item.end_seconds), rules,
+                                               tuple(sorted(set(last.evidence_indexes) | set(item.evidence_indexes))))
+            else:
+                merged.append(item)
+        return merged
+
+    def pad(item):
+        length = item.end_seconds - item.start_seconds
+        if length >= minimum:
+            return item
+        extra = (minimum - length) / 2
+        start = max(0.0, item.start_seconds - extra)
+        end = min(duration, start + minimum)
+        start = max(0.0, end - minimum)
+        return PromotionProposal(q(start), q(end), item.rule_id, item.evidence_indexes)
+
+    padded = [pad(item) for item in merge(proposals, SCENE_MERGE_GAP_SECONDS)]
+    result: list[PromotionProposal] = []
+    for item in merge(padded, 0.0):
+        # Overlap left over because a merge would exceed the cap: start after the previous scene.
+        if result and item.start_seconds < result[-1].end_seconds:
+            item = PromotionProposal(result[-1].end_seconds, item.end_seconds, item.rule_id, item.evidence_indexes)
+            if item.end_seconds - item.start_seconds < minimum:
+                continue
+        result.append(item)
     return tuple(result)
 
 
@@ -452,7 +545,7 @@ def process_autonomous_discovery(
     work_items.append(promotion)
     session.commit()
     try:
-        proposals = build_promotion_manifest(facts, duration_seconds=duration, config=config)
+        proposals = build_scene_proposals(facts, duration_seconds=duration, config=config)
         candidate_ids: list[UUID] = []
         intervals: list[tuple[float, float]] = []
         reused_count = 0
@@ -634,7 +727,11 @@ def _analysis_manifest(analysis):
 
 def _decode_analysis(value):
     try:
-        if value and value.startswith("zlib:"):
+        if value and value.startswith("zlib2:"):
+            payload = _expand_compact_analysis(
+                json.loads(zlib.decompress(base64.b64decode(value[6:])).decode("utf-8"))
+            )
+        elif value and value.startswith("zlib:"):
             payload = json.loads(
                 zlib.decompress(base64.b64decode(value[5:])).decode("utf-8")
             )
@@ -661,7 +758,7 @@ def _decode_analysis(value):
                 )
             )
         return ModalityAnalysis(tuple(facts), tuple(payload.get("warnings", ())))
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError, zlib.error, binascii.Error):
+    except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError, zlib.error, binascii.Error):
         return None
 
 
@@ -669,8 +766,58 @@ def _encode_analysis(manifest):
     raw = canonical_json(manifest).encode("utf-8")
     encoded = "zlib:" + base64.b64encode(zlib.compress(raw, level=9)).decode("ascii")
     if len(encoded) > 1024:
-        raise AutonomousDiscoveryError("Bounded modality result manifest is too large.")
+        compact = _compact_analysis_manifest(manifest)
+        if compact is not None:
+            raw = canonical_json(compact).encode("utf-8")
+            encoded = "zlib2:" + base64.b64encode(zlib.compress(raw, level=9)).decode("ascii")
+        if len(encoded) > 1024:
+            raise AutonomousDiscoveryError("Bounded modality result manifest is too large.")
     return encoded
+
+
+def _compact_analysis_manifest(manifest):
+    """Deduplicate evidence fields without changing the 1024-character DB contract."""
+    evidences = manifest["evidences"]
+    if not evidences:
+        return None
+    source_id = evidences[0]["interval"]["source_video_id"]
+    types = []
+    items = []
+    for fact in evidences:
+        interval = fact["interval"]
+        if interval["source_video_id"] != source_id:
+            return None
+        keys = sorted(fact["payload"])
+        kind = [interval[key] for key in ("unit_type", "producer", "producer_version")]
+        kind += [fact["modality"], fact["evidence_type"], keys]
+        if kind not in types:
+            types.append(kind)
+        items.append([
+            interval["start_seconds"], interval["end_seconds"], types.index(kind),
+            [fact["payload"][key] for key in keys],
+        ])
+    return {"v": 1, "s": source_id, "t": types, "e": items, "w": manifest["warnings"]}
+
+
+def _expand_compact_analysis(compact):
+    if compact["v"] != 1:
+        raise ValueError("Unsupported compact analysis version.")
+    evidences = []
+    for start, end, type_index, values in compact["e"]:
+        unit_type, producer, version, modality, evidence_type, keys = compact["t"][type_index]
+        if len(keys) != len(values):
+            raise ValueError("Invalid compact evidence payload.")
+        evidences.append({
+            "interval": {
+                "source_video_id": compact["s"], "start_seconds": start,
+                "end_seconds": end, "unit_type": unit_type,
+                "producer": producer, "producer_version": version,
+            },
+            "modality": modality, "evidence_type": evidence_type,
+            "payload": dict(zip(keys, values)),
+        })
+    return {"schema": "autonomous-modality-result-v0.1", "evidences": evidences,
+            "warnings": compact["w"]}
 
 
 def _start_work(session, source, work_type, input_fingerprint, config_fingerprint):
