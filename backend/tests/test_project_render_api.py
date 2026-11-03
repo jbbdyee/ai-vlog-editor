@@ -199,7 +199,12 @@ class ProjectRenderApiTests(TestCase):
         outside = self.root / "outside.mp4"
         outside.write_bytes(b"private")
         result.output_path.parent.mkdir(parents=True)
-        result.output_path.symlink_to(outside)
+        try:
+            result.output_path.symlink_to(outside)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 1314:
+                self.skipTest("Windows symlink privilege is unavailable")
+            raise
         with patch("backend.app.routers.projects.render_project_edit_plan", return_value=result):
             self.client.post(self._url() + "/render")
             self.executor.run_next()

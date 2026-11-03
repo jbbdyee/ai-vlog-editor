@@ -28,8 +28,10 @@ from backend.app.models.scene import (
     SceneRelationType,
 )
 from backend.app.models.edit_plan import ProjectSceneEditPlan, ProjectSceneEditPlanItem
+from backend.app.models.render import ProjectRenderRun
 
 __all__ = [
+    "ProjectRenderRun",
     "ProjectSceneEditPlan",
     "ProjectSceneEditPlanItem",
     "EditMemo",

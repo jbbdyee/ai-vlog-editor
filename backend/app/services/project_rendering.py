@@ -63,6 +63,13 @@ class ProjectRenderResult:
     subtitle_error_code: str | None = None
     hard_subtitle_path: Path | None = None
     hard_subtitle_error_code: str | None = None
+    hard_subtitle_size_bytes: int | None = None
+    # QA-03: digests are filled only by a registry at completion, never by the
+    # renderer itself. None means "not verified" and is never served.
+    file_sha256: str | None = None
+    subtitle_size_bytes: int | None = None
+    subtitle_sha256: str | None = None
+    hard_subtitle_sha256: str | None = None
 
 
 def probe_video_timeline(path: Path) -> float:
@@ -95,6 +102,8 @@ def render_project_edit_plan(
     run_ffmpeg: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     inspect_timeline: Callable[[Path], float] = probe_video_timeline,
     ffmpeg_executable: str = "ffmpeg",
+    render_id: UUID | None = None,
+    expected_plan_snapshot: tuple[dict, ...] | None = None,
 ) -> ProjectRenderResult:
     """Validate a saved plan, render each exact interval, normalize and concatenate.
 
@@ -109,8 +118,11 @@ def render_project_edit_plan(
     except SceneProjectNotFoundError as error:
         raise ProjectRenderError("PROJECT_NOT_FOUND", "Project was not found.") from error
 
+    if expected_plan_snapshot is not None and plan_snapshot(segments) != expected_plan_snapshot:
+        raise ProjectRenderError("PLAN_CHANGED", "The edit plan changed before rendering.")
+
     root = Path(output_root).resolve()
-    render_id = uuid4()
+    render_id = render_id or uuid4()
     run_directory = root / "projects" / project_id.hex / "renders" / render_id.hex
     try:
         if not run_directory.parent.resolve().is_relative_to(root):
@@ -276,6 +288,14 @@ def validate_project_render_request(
             return tuple(segment.candidate_id for segment in _load_segments(session, project_id))
     except SceneProjectNotFoundError as error:
         raise ProjectRenderError("PROJECT_NOT_FOUND", "Project was not found.") from error
+
+
+def plan_snapshot(segments: tuple[_Segment, ...]) -> tuple[dict, ...]:
+    """Only immutable render selection facts; never persist source paths or transcript text."""
+    return tuple({"candidate_id": str(item.candidate_id),
+                  "source_video_id": str(item.source_video_id),
+                  "start_seconds": item.start_seconds,
+                  "end_seconds": item.end_seconds} for item in segments)
 
 
 def _load_segments(session: Session, project_id: UUID) -> tuple[_Segment, ...]:

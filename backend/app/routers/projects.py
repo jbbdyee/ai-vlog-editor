@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from ipaddress import ip_address
 import re
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, status
 from pydantic import BaseModel, Field
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import FileResponse
@@ -19,7 +21,13 @@ from backend.app.models import (
     ProjectStatus,
     SourceVideoStatus,
 )
+from backend.app.models.product import Project, SourceVideo
+from backend.app.models.edit_plan import ProjectSceneEditPlan
+from backend.app.models.render import ProjectRenderRun
 from backend.app.services.project_processing import process_project
+from backend.app.services.edit_request import MAX_REQUEST_LENGTH
+from backend.app.services.llm_edit_interpreter import interpret_with_llm
+from backend.app.services.project_scene_vision import start_vision, vision_status
 from backend.app.services.project_scene_execution import SceneRunStatus
 from backend.app.services.project_scene_processing import (
     SceneSourceOutcome,
@@ -40,6 +48,8 @@ from backend.app.services.project_scene_edit_plan import (
     save_scene_edit_plan,
 )
 from backend.app.services.project_render_execution import RenderRunStatus
+from backend.app.services.render_integrity import IntegrityStatus, VerifiedFile, verify_file
+from backend.app.routers.verified_file_response import VerifiedFileResponse
 from backend.app.services.project_rendering import (
     ProjectRenderError,
     ProjectRenderResult,
@@ -61,7 +71,7 @@ from backend.app.services.source_ingestion import (
     ingest_source,
 )
 from backend.app.services.video_storage import VideoValidationError
-from backend.app.storage.source_storage import SourceStorageError
+from backend.app.storage.source_storage import LocalSourceStorage, SourceStorageError
 
 
 class ProjectCreateRequest(BaseModel):
@@ -91,6 +101,21 @@ class ProjectResponse(BaseModel):
     updated_at: datetime
     source_count: int
     processing: ProcessingSummaryResponse
+
+
+class ProjectListItemResponse(BaseModel):
+    project_id: UUID
+    name: str | None
+    created_at: datetime
+    updated_at: datetime
+    source_count: int
+    has_edit_plan: bool
+    latest_render_status: str | None
+
+
+class ProjectListResponse(BaseModel):
+    items: list[ProjectListItemResponse]
+    next_offset: int | None
 
 
 class StageSummaryResponse(BaseModel):
@@ -145,6 +170,10 @@ class ActiveSceneCandidateResponse(BaseModel):
     start_seconds: float
     end_seconds: float
     evidence: list[CandidateEvidenceSummaryResponse]
+    transcript_text: str | None = None
+    visual_caption: str | None = None
+    visual_tags: list[str] = []
+    visual_categories: list[str] = []
 
 
 class ProjectSceneCandidatesResponse(BaseModel):
@@ -190,6 +219,7 @@ class ProjectRenderAcceptedResponse(BaseModel):
     project_id: UUID
     accepted: bool
     status_url: str
+    render_id: UUID | None = None
 
 
 class ProjectRenderFileResponse(BaseModel):
@@ -215,6 +245,16 @@ class ProjectRenderingStatusResponse(BaseModel):
     hard_subtitle_error_code: str | None
     hard_subtitle_download_available: bool
     hard_subtitle_download_url: str | None
+    # QA-03 per-file content integrity. None = no such file recorded / not checked.
+    integrity_status: IntegrityStatus | None = None
+    subtitle_integrity_status: IntegrityStatus | None = None
+    hard_subtitle_integrity_status: IntegrityStatus | None = None
+
+
+class ProjectRenderHistoryResponse(BaseModel):
+    project_id: UUID
+    items: list[ProjectRenderingStatusResponse]
+    next_cursor: UUID | None
 
 
 class ProjectSceneProcessingAcceptedResponse(BaseModel):
@@ -249,6 +289,44 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 _RENDER_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
 
+def _source_media_path(factory, storage: LocalSourceStorage, project_id: UUID, source_id: UUID) -> Path:
+    with factory() as session:
+        if session.get(Project, project_id) is None:
+            raise HTTPException(status_code=404, detail={"code": "PROJECT_NOT_FOUND"})
+        source = session.get(SourceVideo, source_id)
+        if source is None or source.project_id != project_id:
+            raise HTTPException(status_code=404, detail={"code": "SOURCE_NOT_FOUND"})
+        reference = source.storage_reference
+    try:
+        path = storage.resolve(reference)
+    except SourceStorageError as error:
+        raise HTTPException(status_code=404, detail={"code": "SOURCE_MEDIA_UNAVAILABLE"}) from error
+    expected_prefix = f"projects/{project_id.hex}/sources/"
+    if not reference.startswith(expected_prefix) or path != storage._root.joinpath(*reference.split("/")):
+        raise HTTPException(status_code=404, detail={"code": "SOURCE_MEDIA_UNAVAILABLE"})
+    if not path.is_file() or path.stat().st_size == 0:
+        raise HTTPException(status_code=404, detail={"code": "SOURCE_MEDIA_UNAVAILABLE"})
+    return path
+
+
+@router.get("/{project_id}/sources/{source_id}/media", response_class=FileResponse)
+async def get_project_source_media(request: Request, project_id: UUID, source_id: UUID) -> FileResponse:
+    try:
+        local = ip_address(request.client.host).is_loopback if request.client else False
+    except ValueError:
+        local = False
+    if not local:
+        raise HTTPException(status_code=403, detail={"code": "LOCAL_ACCESS_ONLY"})
+    storage = request.app.state.source_storage
+    if not isinstance(storage, LocalSourceStorage):
+        raise HTTPException(status_code=500, detail={"code": "SOURCE_STORAGE_UNAVAILABLE"})
+    path = await run_in_threadpool(_source_media_path, _session_factory(request), storage, project_id, source_id)
+    media_type = "video/quicktime" if path.suffix.lower() == ".mov" else "video/mp4"
+    return FileResponse(path, media_type=media_type, filename=f"source-preview{path.suffix.lower()}", content_disposition_type="inline", headers={
+        "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"
+    })
+
+
 @router.get(
     "/{project_id}/scene-candidates", response_model=ProjectSceneCandidatesResponse
 )
@@ -279,6 +357,10 @@ async def get_project_scene_candidates(
                 start_seconds=float(item.start_seconds),
                 end_seconds=float(item.end_seconds),
                 evidence=[CandidateEvidenceSummaryResponse(**row.__dict__) for row in item.evidence],
+                transcript_text=item.transcript_text,
+                visual_caption=item.visual_caption,
+                visual_tags=list(item.visual_tags),
+                visual_categories=list(item.visual_categories),
             )
             for item in candidates
         ],
@@ -345,6 +427,84 @@ async def update_project_scene_edit_plan(
     return _scene_edit_plan_response(snapshot)
 
 
+class EditSuggestionRequest(BaseModel):
+    request: str = Field(min_length=1, max_length=MAX_REQUEST_LENGTH)
+
+
+class SuggestedSceneResponse(BaseModel):
+    candidate_id: UUID
+    reasons: list[str]
+
+
+class EditSuggestionResponse(BaseModel):
+    project_id: UUID
+    candidate_ids: list[UUID]
+    scenes: list[SuggestedSceneResponse]
+    total_seconds: float
+    target_seconds: float | None
+    max_count: int | None
+    keywords: list[str]
+    excluded: list[str]
+    categories: list[str]
+    order: str
+    notes: list[str]
+    engine: str = "rule"
+    interpretation: str | None = None
+    mood: str | None = None
+    fallback_reason: str | None = None
+
+
+class SceneVisionStatusResponse(BaseModel):
+    project_id: UUID
+    status: str
+    model: str
+    total: int
+    captioned: int
+    skipped: int
+    failed: int
+    error_codes: list[str]
+
+
+@router.post("/{project_id}/scene-vision", response_model=SceneVisionStatusResponse, status_code=202)
+async def start_project_scene_vision(request: Request, project_id: UUID) -> SceneVisionStatusResponse:
+    """Run the VLM over active candidates: visual caption/tags only, stored as non-authoritative evidence."""
+    await _snapshot_or_404(request, project_id)
+    if not start_vision(project_id, _session_factory(request), request.app.state.source_storage):
+        raise HTTPException(status_code=409, detail={"code": "SCENE_VISION_ALREADY_ACTIVE", "message": "Scene vision analysis is already running."})
+    return SceneVisionStatusResponse(project_id=project_id, **{k: v for k, v in vision_status(project_id).items() if k != "latency_seconds"})
+
+
+@router.get("/{project_id}/scene-vision", response_model=SceneVisionStatusResponse)
+async def get_project_scene_vision(request: Request, project_id: UUID) -> SceneVisionStatusResponse:
+    await _snapshot_or_404(request, project_id)
+    return SceneVisionStatusResponse(project_id=project_id, **{k: v for k, v in vision_status(project_id).items() if k != "latency_seconds"})
+
+
+@router.post("/{project_id}/edit-suggestions", response_model=EditSuggestionResponse)
+async def suggest_project_edit(request: Request, project_id: UUID, payload: EditSuggestionRequest) -> EditSuggestionResponse:
+    """Natural-language request -> suggested scene order. Read-only: nothing is saved."""
+    factory = _session_factory(request)
+    try:
+        candidates = await run_in_threadpool(_list_active_candidates_sync, factory, project_id)
+    except SceneProjectNotFoundError as error:
+        raise _project_not_found() from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail={"code": "SCENE_CANDIDATE_READ_FAILED", "message": "Scene candidates could not be loaded."}) from error
+    if not candidates:
+        raise HTTPException(status_code=409, detail={"code": "NO_SCENE_CANDIDATES", "message": "Run scene analysis before requesting an edit."})
+    result = await run_in_threadpool(interpret_with_llm, payload.request, candidates)
+    suggestion = result.suggestion
+    intent = suggestion.intent
+    return EditSuggestionResponse(
+        project_id=project_id, candidate_ids=[scene.candidate_id for scene in suggestion.scenes],
+        scenes=[SuggestedSceneResponse(candidate_id=scene.candidate_id, reasons=list(scene.reasons)) for scene in suggestion.scenes],
+        total_seconds=suggestion.total_seconds, target_seconds=intent.target_seconds, max_count=intent.max_count,
+        keywords=list(intent.keywords), excluded=list(intent.excluded), categories=list(intent.categories),
+        order=intent.order, notes=list(suggestion.notes), engine=result.engine,
+        interpretation=result.interpretation, mood=result.mood, fallback_reason=result.fallback_reason,
+    )
+
+
 def _read_scene_edit_plan_sync(factory, project_id):
     with factory() as session:
         return get_scene_edit_plan(session, project_id)
@@ -377,12 +537,14 @@ async def start_project_render(request: Request, project_id: UUID) -> ProjectRen
     except Exception as error:
         raise HTTPException(status_code=500, detail={"code": "RENDER_PREFLIGHT_FAILED", "message": "Render request could not be validated."}) from error
 
-    def operation() -> ProjectRenderResult:
+    def operation(render_id: UUID | None = None, expected_plan_snapshot=None) -> ProjectRenderResult:
         return render_project_edit_plan(
             session_factory=factory,
             source_storage=request.app.state.source_storage,
             project_id=project_id,
             output_root=request.app.state.project_render_output_root,
+            **({"render_id": render_id, "expected_plan_snapshot": expected_plan_snapshot}
+               if render_id is not None else {}),
         )
 
     try:
@@ -392,7 +554,8 @@ async def start_project_render(request: Request, project_id: UUID) -> ProjectRen
     if not accepted:
         raise _render_already_active()
     return ProjectRenderAcceptedResponse(
-        project_id=project_id, accepted=True, status_url=f"/projects/{project_id}/rendering"
+        project_id=project_id, accepted=True, status_url=f"/projects/{project_id}/rendering",
+        render_id=accepted if getattr(registry, "persistent", False) else None,
     )
 
 
@@ -400,18 +563,42 @@ async def start_project_render(request: Request, project_id: UUID) -> ProjectRen
 async def get_project_rendering(request: Request, project_id: UUID) -> ProjectRenderingStatusResponse:
     await _snapshot_or_404(request, project_id)
     snapshot = request.app.state.project_render_run_registry.snapshot(project_id)
+    # SHA-256 verification reads whole files; keep it off the event loop.
+    return await run_in_threadpool(_render_status_response, request, project_id, snapshot)
+
+
+_BASE_INTEGRITY_CODES = {
+    IntegrityStatus.MISSING: "RENDER_FILE_MISSING",
+    IntegrityStatus.CORRUPT: "RENDER_FILE_CORRUPT",
+    IntegrityStatus.UNVERIFIED: "RENDER_FILE_UNVERIFIED",
+}
+_HARD_INTEGRITY_STATES = {
+    IntegrityStatus.VERIFIED: "AVAILABLE",
+    IntegrityStatus.MISSING: "MISSING",
+    IntegrityStatus.CORRUPT: "CORRUPT",
+    IntegrityStatus.UNVERIFIED: "UNVERIFIED",
+}
+
+
+def _render_status_response(request: Request, project_id: UUID, snapshot) -> ProjectRenderingStatusResponse:
     result = snapshot.result
-    available = result is not None and _completed_render_file(request, project_id, result) is not None
-    hard_available = (result is not None and available
-                      and _completed_hard_subtitle_file(request, project_id, result) is not None)
+    base_integrity = _verify_base_file(request, project_id, result).status if result is not None else None
+    available = base_integrity is IntegrityStatus.VERIFIED
+    srt_integrity = None
+    if result is not None and result.subtitle_path is not None and not result.subtitle_error_code:
+        srt_integrity = _verify_srt_file(request, project_id, result).status
+    hard_integrity = None
+    # Current dependency contract: the subtitled MP4 is offered only with a verified base MP4.
+    if (result is not None and available and result.hard_subtitle_path is not None
+            and not result.hard_subtitle_error_code):
+        hard_integrity = _verify_hard_file(request, project_id, result).status
+    hard_available = hard_integrity is IntegrityStatus.VERIFIED
     if result is None:
         hard_status = "NOT_STARTED"
     elif result.hard_subtitle_error_code:
         hard_status = "FAILED"
-    elif hard_available:
-        hard_status = "AVAILABLE"
     elif result.hard_subtitle_path is not None:
-        hard_status = "MISSING"
+        hard_status = _HARD_INTEGRITY_STATES[hard_integrity] if available else "BASE_UNAVAILABLE"
     elif result.subtitle_error_code:
         hard_status = "SUBTITLE_FAILED"
     elif result.subtitle_path is None:
@@ -428,18 +615,75 @@ async def get_project_rendering(request: Request, project_id: UUID) -> ProjectRe
         )
     return ProjectRenderingStatusResponse(
         project_id=project_id, status=snapshot.status,
-        render_id=result.render_id if result else None,
+        render_id=result.render_id if result else snapshot.render_id,
         is_active=snapshot.status in {RenderRunStatus.QUEUED, RenderRunStatus.RUNNING},
         succeeded=snapshot.status is RenderRunStatus.COMPLETED,
         failed=snapshot.status is RenderRunStatus.FAILED,
-        safe_error_code=snapshot.safe_error_code,
+        # The stored status stays COMPLETED; only current availability is reported.
+        safe_error_code=(_BASE_INTEGRITY_CODES[base_integrity] if snapshot.status is RenderRunStatus.COMPLETED
+                         and result is not None and not available else snapshot.safe_error_code),
         download_available=available, output=output,
         hard_subtitle_status=hard_status,
         hard_subtitle_error_code=(result.hard_subtitle_error_code or result.subtitle_error_code) if result else None,
         hard_subtitle_download_available=hard_available,
         hard_subtitle_download_url=(f"/projects/{project_id}/renders/{result.render_id.hex}/subtitled/download"
                                     if hard_available else None),
+        integrity_status=base_integrity,
+        subtitle_integrity_status=srt_integrity,
+        hard_subtitle_integrity_status=hard_integrity,
     )
+
+
+@router.get("/{project_id}/renders", response_model=ProjectRenderHistoryResponse)
+async def get_project_render_history(request: Request, project_id: UUID,
+                                     limit: int = 20, before: UUID | None = None) -> ProjectRenderHistoryResponse:
+    await _snapshot_or_404(request, project_id)
+    if limit < 1 or limit > 50:
+        raise HTTPException(status_code=422, detail={"code": "INVALID_PAGE_SIZE", "message": "Limit must be 1–50."})
+    registry = request.app.state.project_render_run_registry
+    if not getattr(registry, "persistent", False):
+        return ProjectRenderHistoryResponse(project_id=project_id, items=[], next_cursor=None)
+    snapshots, cursor = registry.history(project_id, limit, before)
+    items = await run_in_threadpool(
+        lambda: [_render_status_response(request, project_id, item) for item in snapshots])
+    return ProjectRenderHistoryResponse(project_id=project_id, items=items, next_cursor=cursor)
+
+
+def _completed_result_or_error(request: Request, project_id: UUID, render_id: str) -> ProjectRenderResult:
+    registry = request.app.state.project_render_run_registry
+    result = registry.completed_result(project_id, UUID(hex=render_id))
+    if result is not None:
+        return result
+    if getattr(registry, "persistent", False):
+        status = registry.run_status(project_id, UUID(hex=render_id))
+        if status in {RenderRunStatus.QUEUED, RenderRunStatus.RUNNING, RenderRunStatus.FAILED,
+                      RenderRunStatus.INTERRUPTED, RenderRunStatus.RECONCILIATION_REQUIRED}:
+            raise HTTPException(status_code=409, detail={"code": "RENDER_NOT_COMPLETED", "message": "Render is not completed."})
+        raise _render_not_found()
+    snapshot = registry.snapshot(project_id)
+    if snapshot.status in {RenderRunStatus.QUEUED, RenderRunStatus.RUNNING, RenderRunStatus.FAILED}:
+        raise HTTPException(status_code=409, detail={"code": "RENDER_NOT_COMPLETED", "message": "Render is not completed."})
+    raise _render_not_found()
+
+
+def _base_integrity_error(status: IntegrityStatus) -> HTTPException:
+    if status is IntegrityStatus.CORRUPT:
+        return HTTPException(status_code=409, detail={"code": "RENDER_FILE_CORRUPT",
+                                                      "message": "Render file content does not match its recorded digest."})
+    if status is IntegrityStatus.UNVERIFIED:
+        return HTTPException(status_code=409, detail={"code": "RENDER_FILE_UNVERIFIED",
+                                                      "message": "Render has no recorded digest and is not served."})
+    return _render_not_found()
+
+
+def _hard_integrity_error(status: IntegrityStatus) -> HTTPException:
+    if status is IntegrityStatus.CORRUPT:
+        return HTTPException(status_code=409, detail={"code": "SUBTITLED_RENDER_CORRUPT",
+                                                      "message": "Subtitled render content does not match its recorded digest."})
+    if status is IntegrityStatus.UNVERIFIED:
+        return HTTPException(status_code=409, detail={"code": "SUBTITLED_RENDER_UNVERIFIED",
+                                                      "message": "Subtitled render has no recorded digest and is not served."})
+    return HTTPException(status_code=404, detail={"code": "SUBTITLED_RENDER_NOT_FOUND", "message": "Subtitled render is unavailable."})
 
 
 @router.get("/{project_id}/renders/{render_id:path}/subtitled/download", response_class=FileResponse)
@@ -447,20 +691,17 @@ async def download_project_subtitled_render(request: Request, project_id: UUID, 
     if _RENDER_ID_PATTERN.fullmatch(render_id) is None:
         raise HTTPException(status_code=422, detail={"code": "INVALID_RENDER_ID", "message": "Render ID must be a lowercase 32-character hex value."})
     await _snapshot_or_404(request, project_id)
-    registry = request.app.state.project_render_run_registry
-    result = registry.completed_result(project_id, UUID(hex=render_id))
-    if result is None:
-        snapshot = registry.snapshot(project_id)
-        if snapshot.status in {RenderRunStatus.QUEUED, RenderRunStatus.RUNNING, RenderRunStatus.FAILED}:
-            raise HTTPException(status_code=409, detail={"code": "RENDER_NOT_COMPLETED", "message": "Render is not completed."})
-        raise _render_not_found()
-    if _completed_render_file(request, project_id, result) is None:
-        raise _render_not_found()
-    path = _completed_hard_subtitle_file(request, project_id, result)
-    if path is None:
-        raise HTTPException(status_code=404, detail={"code": "SUBTITLED_RENDER_NOT_FOUND", "message": "Subtitled render is unavailable."})
-    return FileResponse(path=path, media_type="video/mp4", filename=f"{render_id}-subtitled.mp4",
-                        content_disposition_type="attachment")
+    result = _completed_result_or_error(request, project_id, render_id)
+    base = await run_in_threadpool(_verify_base_file, request, project_id, result)
+    if base.status is not IntegrityStatus.VERIFIED:
+        raise _base_integrity_error(base.status)
+    if result.hard_subtitle_path is None or result.hard_subtitle_error_code:
+        raise _hard_integrity_error(IntegrityStatus.MISSING)
+    hard = await run_in_threadpool(_verify_hard_file, request, project_id, result, True)
+    if hard.status is not IntegrityStatus.VERIFIED:
+        raise _hard_integrity_error(hard.status)
+    return VerifiedFileResponse(hard, media_type="video/mp4", filename=f"{render_id}-subtitled.mp4",
+                                content_disposition_type="attachment")
 
 
 @router.get("/{project_id}/renders/{render_id:path}/download", response_class=FileResponse)
@@ -468,50 +709,65 @@ async def download_project_render(request: Request, project_id: UUID, render_id:
     if _RENDER_ID_PATTERN.fullmatch(render_id) is None:
         raise HTTPException(status_code=422, detail={"code": "INVALID_RENDER_ID", "message": "Render ID must be a lowercase 32-character hex value."})
     await _snapshot_or_404(request, project_id)
-    registry = request.app.state.project_render_run_registry
-    result = registry.completed_result(project_id, UUID(hex=render_id))
-    if result is None:
-        snapshot = registry.snapshot(project_id)
-        if snapshot.status in {RenderRunStatus.QUEUED, RenderRunStatus.RUNNING, RenderRunStatus.FAILED}:
-            raise HTTPException(status_code=409, detail={"code": "RENDER_NOT_COMPLETED", "message": "Render is not completed."})
-        raise _render_not_found()
-    path = _completed_render_file(request, project_id, result)
-    if path is None:
-        raise _render_not_found()
-    return FileResponse(
-        path=path, media_type="video/mp4", filename=f"{render_id}.mp4",
-        content_disposition_type="inline",
-    )
+    result = _completed_result_or_error(request, project_id, render_id)
+    base = await run_in_threadpool(_verify_base_file, request, project_id, result, True)
+    if base.status is not IntegrityStatus.VERIFIED:
+        raise _base_integrity_error(base.status)
+    return VerifiedFileResponse(base, media_type="video/mp4", filename=f"{render_id}.mp4",
+                                content_disposition_type="inline")
+
+
+def _render_output_path(request: Request, project_id: UUID, result: ProjectRenderResult,
+                        filename: str, recorded: Path | None) -> Path | None:
+    """Rebuild the only allowed path; reject foreign IDs, symlinks and mismatched records."""
+    if recorded is None or result.project_id != project_id:
+        return None
+    try:
+        root = Path(request.app.state.project_render_output_root).resolve()
+        expected = root / "projects" / project_id.hex / "renders" / result.render_id.hex / filename
+        if (expected.resolve() != expected or any(path.is_symlink() for path in
+                (root / "projects", root / "projects" / project_id.hex,
+                 root / "projects" / project_id.hex / "renders", expected.parent, expected))
+                or Path(recorded).resolve() != expected):
+            return None
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return expected
+
+
+def _verify_base_file(request: Request, project_id: UUID, result: ProjectRenderResult,
+                      keep_open: bool = False) -> VerifiedFile:
+    if result.file_size_bytes <= 0:
+        return VerifiedFile(IntegrityStatus.MISSING)
+    path = _render_output_path(request, project_id, result, "final.mp4", result.output_path)
+    return verify_file(path, result.file_size_bytes, result.file_sha256, keep_open=keep_open)
+
+
+def _verify_hard_file(request: Request, project_id: UUID, result: ProjectRenderResult,
+                      keep_open: bool = False) -> VerifiedFile:
+    if result.hard_subtitle_error_code:
+        return VerifiedFile(IntegrityStatus.MISSING)
+    path = _render_output_path(request, project_id, result, "final-subtitled.mp4", result.hard_subtitle_path)
+    return verify_file(path, result.hard_subtitle_size_bytes, result.hard_subtitle_sha256, keep_open=keep_open)
+
+
+def _verify_srt_file(request: Request, project_id: UUID, result: ProjectRenderResult) -> VerifiedFile:
+    path = _render_output_path(request, project_id, result, "final.srt", result.subtitle_path)
+    return verify_file(path, result.subtitle_size_bytes, result.subtitle_sha256)
 
 
 def _completed_render_file(request: Request, project_id: UUID, result: ProjectRenderResult) -> Path | None:
-    try:
-        root = Path(request.app.state.project_render_output_root).resolve()
-        expected = root / "projects" / project_id.hex / "renders" / result.render_id.hex / "final.mp4"
-        actual = expected.resolve()
-        if (result.project_id != project_id or expected.is_symlink()
-            or not actual.is_relative_to(root) or result.output_path.resolve() != actual
-            or not actual.is_file() or actual.stat().st_size != result.file_size_bytes
-            or result.file_size_bytes <= 0):
-            return None
-    except (OSError, RuntimeError):
-        return None
-    return actual
+    """Compatibility helper: path only when the base MP4 is present and its SHA-256 matches."""
+    verified = _verify_base_file(request, project_id, result)
+    return _render_output_path(request, project_id, result, "final.mp4", result.output_path) \
+        if verified.status is IntegrityStatus.VERIFIED else None
 
 
 def _completed_hard_subtitle_file(request: Request, project_id: UUID, result: ProjectRenderResult) -> Path | None:
-    if result.project_id != project_id or result.hard_subtitle_path is None or result.hard_subtitle_error_code:
-        return None
-    try:
-        root = Path(request.app.state.project_render_output_root).resolve()
-        expected = root / "projects" / project_id.hex / "renders" / result.render_id.hex / "final-subtitled.mp4"
-        actual = expected.resolve()
-        if (actual != expected or Path(result.hard_subtitle_path).absolute() != expected
-            or not actual.is_file() or actual.stat().st_size <= 0):
-            return None
-    except (OSError, RuntimeError):
-        return None
-    return actual
+    """Compatibility helper: path only when the subtitled MP4 is present and its SHA-256 matches."""
+    verified = _verify_hard_file(request, project_id, result)
+    return _render_output_path(request, project_id, result, "final-subtitled.mp4", result.hard_subtitle_path) \
+        if verified.status is IntegrityStatus.VERIFIED else None
 
 
 def _render_already_active() -> HTTPException:
@@ -621,6 +877,46 @@ async def create_project_route(
         sources=(),
     )
     return _project_response(snapshot)
+
+
+def _list_projects_sync(factory: sessionmaker[Session], limit: int, offset: int) -> ProjectListResponse:
+    source_count = (
+        select(func.count(SourceVideo.id))
+        .where(SourceVideo.project_id == Project.id).correlate(Project).scalar_subquery()
+    )
+    has_plan = (
+        select(ProjectSceneEditPlan.project_id)
+        .where(ProjectSceneEditPlan.project_id == Project.id).correlate(Project).exists()
+    )
+    latest_render = (
+        select(ProjectRenderRun.status)
+        .where(ProjectRenderRun.project_id == Project.id)
+        .order_by(ProjectRenderRun.created_at.desc(), ProjectRenderRun.render_id.desc())
+        .limit(1).correlate(Project).scalar_subquery()
+    )
+    with factory() as session:
+        rows = session.execute(
+            select(Project.id, Project.name, Project.created_at, Project.updated_at,
+                   source_count, has_plan, latest_render)
+            .order_by(Project.created_at.desc(), Project.id.desc())
+            .offset(offset).limit(limit + 1)
+        ).all()
+    return ProjectListResponse(
+        items=[ProjectListItemResponse(project_id=row[0], name=row[1], created_at=row[2],
+                                       updated_at=row[3], source_count=row[4],
+                                       has_edit_plan=row[5], latest_render_status=row[6])
+               for row in rows[:limit]],
+        next_offset=offset + limit if len(rows) > limit else None,
+    )
+
+
+@router.get("", response_model=ProjectListResponse)
+async def list_projects_route(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
+) -> ProjectListResponse:
+    return await run_in_threadpool(_list_projects_sync, _session_factory(request), limit, offset)
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)

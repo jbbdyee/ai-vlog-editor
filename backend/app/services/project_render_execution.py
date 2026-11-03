@@ -4,12 +4,37 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import Executor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
+from pathlib import Path
 from threading import Lock
 from uuid import UUID
 
 from backend.app.services.project_rendering import ProjectRenderError, ProjectRenderResult
+from backend.app.services.render_integrity import OutputIntegrityError, record_output_digest
+
+
+def _digest_or_none(path: Path | None, size: int | None) -> tuple[int | None, str | None]:
+    """Best-effort digest for the process-local registry; None stays unservable."""
+    if path is None:
+        return size, None
+    try:
+        size = Path(path).stat().st_size if size is None else size
+        if Path(path).is_symlink() or size <= 0:
+            return size, None
+        return size, record_output_digest(Path(path), size)[0]
+    except (OSError, OutputIntegrityError):
+        return size, None
+
+
+def with_output_digests(result: ProjectRenderResult) -> ProjectRenderResult:
+    """Attach completion-time SHA-256 values. A missing/unreadable file keeps None,
+    so the router reports it MISSING/UNVERIFIED instead of serving it."""
+    _, base_sha = _digest_or_none(result.output_path, result.file_size_bytes)
+    srt_size, srt_sha = _digest_or_none(result.subtitle_path, result.subtitle_size_bytes)
+    hard_size, hard_sha = _digest_or_none(result.hard_subtitle_path, result.hard_subtitle_size_bytes)
+    return replace(result, file_sha256=base_sha, subtitle_size_bytes=srt_size, subtitle_sha256=srt_sha,
+                   hard_subtitle_size_bytes=hard_size, hard_subtitle_sha256=hard_sha)
 
 
 class RenderRunStatus(str, Enum):
@@ -18,6 +43,8 @@ class RenderRunStatus(str, Enum):
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    INTERRUPTED = "INTERRUPTED"
+    RECONCILIATION_REQUIRED = "RECONCILIATION_REQUIRED"
 
 
 @dataclass(frozen=True)
@@ -25,6 +52,7 @@ class RenderRunSnapshot:
     status: RenderRunStatus
     result: ProjectRenderResult | None = None
     safe_error_code: str | None = None
+    render_id: UUID | None = None
 
 
 class ProjectRenderRunRegistry:
@@ -52,6 +80,7 @@ class ProjectRenderRunRegistry:
                 result = operation()
                 if result.project_id != project_id:
                     raise ProjectRenderError("RENDER_PROJECT_MISMATCH", "Render result Project did not match.")
+                result = with_output_digests(result)
                 with self._lock:
                     self._completed[(project_id, result.render_id)] = result
                     self._snapshots[project_id] = RenderRunSnapshot(RenderRunStatus.COMPLETED, result)

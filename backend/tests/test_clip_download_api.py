@@ -85,7 +85,12 @@ class ClipDownloadAPITests(TestCase):
         outside.write_bytes(b"secret")
         clip_path = self.output_root / RUN_ID / "clips" / f"{CLIP_ID}.mp4"
         clip_path.parent.mkdir(parents=True)
-        clip_path.symlink_to(outside)
+        try:
+            clip_path.symlink_to(outside)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 1314:
+                self.skipTest("Windows symlink privilege is unavailable")
+            raise
 
         response = self.client.get(f"/videos/clips/{RUN_ID}/{CLIP_ID}")
 

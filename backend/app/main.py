@@ -1,9 +1,11 @@
 import asyncio
+import os
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from sqlalchemy import inspect
 from starlette.concurrency import run_in_threadpool
 
 from backend.app.config import DatabaseConfigError, DatabaseSettings, load_environment
@@ -13,6 +15,7 @@ from backend.app.routers.videos import router as video_router
 from backend.app.services.project_execution import ProjectRunRegistry
 from backend.app.services.project_scene_execution import ProjectSceneRunRegistry
 from backend.app.services.project_render_execution import ProjectRenderRunRegistry
+from backend.app.services.persistent_render_execution import PersistentProjectRenderRunRegistry
 from backend.app.services.stt_service import load_model
 from backend.app.storage.processing_workspace import LocalProcessingWorkspace
 from backend.app.storage.source_storage import LocalSourceStorage
@@ -54,6 +57,18 @@ async def lifespan(application: FastAPI):
         application.state.project_session_factory = create_session_factory(
             database_engine
         )
+        if os.environ.get("CUTORY_RENDER_PERSISTENCE_ENABLED") == "1":
+            if not inspect(database_engine).has_table("project_render_runs"):
+                raise RuntimeError("Render persistence requires the project_render_runs migration.")
+            render_columns = {column["name"] for column in
+                              inspect(database_engine).get_columns("project_render_runs")}
+            if not {"base_sha256", "srt_sha256", "hard_sha256"} <= render_columns:
+                # QA-03: fail fast instead of 500s on every render status/history query.
+                raise RuntimeError("Render persistence requires the render digest migration (e3a1c9d27b45).")
+            application.state.project_render_run_registry = PersistentProjectRenderRunRegistry(
+                project_executor, application.state.project_session_factory,
+                PROJECT_RENDER_OUTPUT_DIRECTORY,
+            )
 
     try:
         yield

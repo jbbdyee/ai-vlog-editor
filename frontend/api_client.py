@@ -18,6 +18,17 @@ SCENE_SOURCE_STATUSES = frozenset({"COMPLETED", "ABSTAINED", "FAILED", "BLOCKED"
 SCENE_DIAGNOSTIC_STATUSES = frozenset({"NOT_ANALYZED", "RUNNING", "COMPLETED", "ABSTAINED", "FAILED", "UNKNOWN"})
 SCENE_ABSTAIN_REASONS = frozenset({"UNKNOWN", "NO_EVIDENCE", "SINGLE_MODALITY", "UNSUPPORTED_COMBINATION", "NO_TEMPORAL_OVERLAP", "PARTIAL_ANALYZER_FAILURE", "OTHER_RULE_ABSTAIN"})
 RENDER_RUN_STATUSES = frozenset({"NOT_STARTED", "QUEUED", "RUNNING", "COMPLETED", "FAILED"})
+# QA-03 output integrity: each file is reported VERIFIED/MISSING/CORRUPT/UNVERIFIED (absent on older servers).
+RENDER_INTEGRITY_STATUSES = frozenset({"VERIFIED", "MISSING", "CORRUPT", "UNVERIFIED"})
+HARD_SUBTITLE_STATUSES = frozenset({"NOT_STARTED", "AVAILABLE", "MISSING", "FAILED", "SUBTITLE_FAILED",
+                                    "NO_SUBTITLES", "NOT_CONFIGURED", "CORRUPT", "UNVERIFIED",
+                                    "BASE_UNAVAILABLE"})
+_RENDER_DOWNLOAD_CONFLICT_MESSAGES = {
+    "RENDER_FILE_CORRUPT": "결과 영상 파일이 렌더링 완료 당시 기록과 일치하지 않아(손상 또는 변경 의심) 제공하지 않습니다. 다시 렌더링해 주세요.",
+    "RENDER_FILE_UNVERIFIED": "무결성 기록이 없는 과거 렌더링 결과라 제공하지 않습니다. 다시 렌더링해 주세요.",
+    "SUBTITLED_RENDER_CORRUPT": "자막 적용 영상 파일이 렌더링 완료 당시 기록과 일치하지 않아(손상 또는 변경 의심) 제공하지 않습니다. 다시 렌더링해 주세요.",
+    "SUBTITLED_RENDER_UNVERIFIED": "무결성 기록이 없는 과거 자막 적용 영상이라 제공하지 않습니다. 다시 렌더링해 주세요.",
+}
 _RESOURCE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
 
@@ -221,9 +232,12 @@ class VideoEditorApiClient:
         except httpx.RequestError as error:
             raise BackendConnectionError("백엔드 서버에 연결할 수 없습니다.") from error
         if response.status_code == 404:
-            raise BackendApiError("완료된 영상을 찾을 수 없습니다. 렌더링 상태를 다시 확인해 주세요.", status_code=404)
+            raise BackendApiError("완료된 영상을 찾을 수 없습니다. 렌더링 상태를 다시 확인해 주세요.",
+                                  status_code=404, code=_detail_code(response))
         if response.status_code == 409:
-            raise BackendApiError("아직 다운로드 가능한 렌더링 결과가 아닙니다.", status_code=409)
+            code = _detail_code(response)
+            raise BackendApiError(_RENDER_DOWNLOAD_CONFLICT_MESSAGES.get(
+                code, "아직 다운로드 가능한 렌더링 결과가 아닙니다."), status_code=409, code=code)
         self._raise_for_error(response)
         if response.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "video/mp4":
             raise BackendApiError("다운로드 응답이 MP4 형식이 아닙니다.")
@@ -393,6 +407,14 @@ def _safe_error_code(value: Any) -> str | None:
     return value if isinstance(value, str) and re.fullmatch(r"[A-Z0-9_]{1,80}", value) else None
 
 
+def _detail_code(response: httpx.Response) -> str | None:
+    try:
+        detail = response.json().get("detail")
+    except (ValueError, AttributeError):
+        return None
+    return _safe_error_code(detail.get("code")) if isinstance(detail, dict) else None
+
+
 def _safe_scene_diagnostics_payload(payload: Any, project_id: str) -> dict[str, Any]:
     message = "장면 분석 진단 응답 형식이 올바르지 않습니다."
     if not isinstance(payload, dict) or payload.get("project_id") != project_id or not isinstance(payload.get("sources"), list):
@@ -492,13 +514,21 @@ def _safe_render_status_payload(payload: Any, project_id: str) -> dict[str, Any]
     hard_status = payload.get("hard_subtitle_status", "NOT_STARTED")
     hard_available = payload.get("hard_subtitle_download_available", False)
     hard_url = payload.get("hard_subtitle_download_url")
-    if (hard_status not in {"NOT_STARTED", "AVAILABLE", "MISSING", "FAILED",
-                           "SUBTITLE_FAILED", "NO_SUBTITLES", "NOT_CONFIGURED"}
+    if (hard_status not in HARD_SUBTITLE_STATUSES
         or type(hard_available) is not bool
+        or (hard_status == "BASE_UNAVAILABLE" and (status != "COMPLETED" or payload["download_available"]))
         or hard_available != (hard_status == "AVAILABLE")
         or (hard_available and (status != "COMPLETED" or not payload["download_available"]))
         or hard_url != (f"/projects/{project_id}/renders/{UUID(render_id).hex}/subtitled/download"
                         if hard_available else None)):
+        raise BackendApiError(message)
+    integrity = {key: payload.get(key) for key in
+                 ("integrity_status", "subtitle_integrity_status", "hard_subtitle_integrity_status")}
+    base_integrity = integrity["integrity_status"]
+    hard_integrity = integrity["hard_subtitle_integrity_status"]
+    if (any(value is not None and value not in RENDER_INTEGRITY_STATUSES for value in integrity.values())
+        or (base_integrity is not None and (base_integrity == "VERIFIED") != payload["download_available"])
+        or (hard_integrity is not None and (hard_integrity == "VERIFIED") != hard_available)):
         raise BackendApiError(message)
     return {"project_id": project_id, "status": status, "render_id": render_id,
             "is_active": payload["is_active"], "succeeded": payload["succeeded"],
@@ -507,7 +537,7 @@ def _safe_render_status_payload(payload: Any, project_id: str) -> dict[str, Any]
             "hard_subtitle_status": hard_status,
             "hard_subtitle_error_code": _safe_error_code(payload.get("hard_subtitle_error_code")),
             "hard_subtitle_download_available": hard_available,
-            "hard_subtitle_download_url": hard_url}
+            "hard_subtitle_download_url": hard_url, **integrity}
 
 
 def _pick(source: Any, fields: tuple[str, ...]) -> dict[str, Any]:

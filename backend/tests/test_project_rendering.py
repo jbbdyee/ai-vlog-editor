@@ -235,7 +235,7 @@ class ProjectRenderingTests(TestCase):
         )
         self.assertEqual(result.subtitle_error_code, None)
         self.assertTrue(result.subtitle_path.is_file())
-        self.assertIn("00:00:01,200 --> 00:00:01,800", result.subtitle_path.read_text())
+        self.assertIn("00:00:01,200 --> 00:00:01,800", result.subtitle_path.read_text(encoding="utf-8"))
         self.assertFalse(list(result.output_path.parent.glob("segments-*")))
 
     def test_subtitle_failure_retains_mp4_and_removes_srt(self):

@@ -105,5 +105,6 @@ class DatabaseFoundationTests(TestCase):
                 "scene_analysis_work_result_candidates",
                 "project_scene_edit_plans",
                 "project_scene_edit_plan_items",
+                "project_render_runs",
             },
         )

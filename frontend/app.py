@@ -412,6 +412,12 @@ def _render_hard_subtitle_status(status: dict) -> None:
         st.warning(f"자막 적용 영상 생성에 실패했습니다. 오류 코드: {status.get('hard_subtitle_error_code') or '-'}")
     elif state == "MISSING":
         st.warning("자막 적용 영상 파일을 찾을 수 없습니다.")
+    elif state == "CORRUPT":
+        st.warning("자막 적용 영상 파일이 렌더링 완료 당시 기록과 일치하지 않아(손상 또는 변경 의심) 제공하지 않습니다. 자막 없는 영상은 따로 다운로드할 수 있습니다.")
+    elif state == "UNVERIFIED":
+        st.warning("무결성 기록이 없는 과거 자막 적용 영상이라 제공하지 않습니다. 다시 렌더링해 주세요.")
+    elif state == "BASE_UNAVAILABLE":
+        st.warning("자막 없는 기본 영상을 제공할 수 없어 자막 적용 영상도 제공하지 않습니다.")
 
 
 def _render_project_render_status(status: dict) -> None:
@@ -425,7 +431,15 @@ def _render_project_render_status(status: dict) -> None:
     elif status["download_available"]:
         st.success("최종 영상이 완성됐습니다. 다운로드를 준비할 수 있습니다.")
     else:
-        st.warning("렌더링은 완료됐지만 결과 파일을 다운로드할 수 없습니다.")
+        reason = _RENDER_UNAVAILABLE_REASONS.get(status.get("safe_error_code"))
+        st.warning("렌더링은 완료됐지만 결과 파일을 다운로드할 수 없습니다." + (f" {reason}" if reason else ""))
+
+
+_RENDER_UNAVAILABLE_REASONS = {
+    "RENDER_FILE_MISSING": "결과 파일을 찾을 수 없습니다.",
+    "RENDER_FILE_CORRUPT": "결과 파일 내용이 렌더링 완료 당시 기록과 일치하지 않아(손상 또는 변경 의심) 제공을 막았습니다. 다시 렌더링해 주세요.",
+    "RENDER_FILE_UNVERIFIED": "무결성 기록이 없는 과거 렌더링 결과라 제공하지 않습니다. 다시 렌더링해 주세요.",
+}
 
 
 def _scene_option_label(row: dict) -> str:
