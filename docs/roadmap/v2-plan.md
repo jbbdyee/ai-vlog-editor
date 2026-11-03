@@ -10,7 +10,49 @@
 
 이 문서는 Cutory v2 구현 범위, 설계 경계, 구현 순서와 Completion Gate의 Source of Truth다. 구조·기반 코드, DB migration, API와 제한된 MCP Tool은 구현됐지만 이 문서의 모든 범위나 Completion Gate가 완료됐다는 뜻은 아니다. 세부사항이 평가 근거 없이 확정되지 않은 경우 `TBD`, `Evaluation으로 결정`, `구현 전 확정 필요`로 남긴다.
 
-MVP-07A에서는 P1-S01 실제 촬영 영상 한 건으로 API 수준의 MP4·SRT·한국어 하드 자막 MP4 생성과 두 MP4의 다운로드를 확인했다([검증 기록](../handoff/mvp-07a-real-video-validation.md)). 촬영자 확인 구간과의 겹침으로 검증 스크립트가 후보를 선택했으며, 자동 추천 품질의 정량 평가나 Streamlit 실제 클릭 조작은 수행하지 않았다. GT는 미동결이다. MVP-07B 원인 분석은 [별도 기록](../handoff/mvp-07b-root-cause-analysis.md)에 정리했으며 코드·의존성 수정은 아직 하지 않았다.
+MVP-07A에서는 P1-S01 실제 촬영 영상 한 건으로 API 수준의 MP4·SRT·한국어 하드 자막 MP4 생성과 두 MP4의 다운로드를 확인했다([검증 기록](../handoff/mvp-07a-real-video-validation.md)). 촬영자 확인 구간과의 겹침으로 검증 스크립트가 후보를 선택했으며, 자동 추천 품질의 정량 평가나 Streamlit 실제 클릭 조작은 수행하지 않았다. GT는 미동결이다. [MVP-07B 원인 분석](../handoff/mvp-07b-root-cause-analysis.md) 당시에는 코드·의존성 변경이 없었고, 이후 [07C](../handoff/mvp-07c-stt-dependency-validation.md)에서 STT 의존성을 고정하고 [07D](../handoff/mvp-07d-subtitle-spacing-validation.md)에서 SRT 공백 손실을 수정했다. React WEB-01~04 로컬 화면은 [WEB-04 기록](../handoff/web-04-react-e2e-validation.md)의 P1-S01·S02 두 원본 전체 흐름까지 실제 Chrome으로 검증했지만, 이는 사용자 화면의 제한된 기술 검증이며 v2 Completion Gate나 독립 추천 품질 평가의 통과를 뜻하지 않는다.
+
+[EVAL-01 진단](../handoff/eval-01-scene-candidate-quality.md)에서는 기존 Manifest 검사가 통과하고 현존 P1 초안 8개의 구조 검사가 통과했으나, freeze-ready는 28개 미비 항목으로 `PENDING`임을 재확인했다. WEB-04 두 소스의 후보 17개와 Evidence 연결은 읽기 전용으로 집계했다. 동결 GT 기반 Dataset B recall·tIoU와 시나리오별 품질 평가는 실행하지 않았다. 다음 순서는 독립 주석·GT 동결과 고정 출력 준비, 기존 평가 계약에 따른 비교, 실패 분석이며 후보 생성 알고리즘과 임계값은 평가 전에 변경하지 않는다.
+
+[EVAL-02 동결 준비](../handoff/eval-02-gt-freeze-preparation.md)는 28개 미비 항목을 P2/P3 source envelope 12건, COVERED 작업 GT 13건, Project Event GT 3건의 사람 작업으로 대응시켰다. P1 원본 7개의 해시·길이를 다시 확인했지만 P2/P3 원본은 현재 checkout에 없고, 현존 P1 초안도 독립 인간 검토·승인이 없다. 주석·조정·미디어 대조·사람 승인과 고정 Proposal/Candidate 대응을 마친 뒤 기존 검사기를 재실행한다. 이번 단계에서 GT를 생성하거나 동결하지 않았으며 EVAL-01의 정량 품질 평가도 여전히 미실행이다.
+
+[WEB-05 사용성 분석](../handoff/web-05-ux-gap-analysis.md)은 React/Streamlit/현재 API를 비교했다. React가 프로젝트 기반 업로드·처리·분석·편집 계획·렌더·두 MP4 다운로드를 제공하지만, 원본·후보·최종 결과의 화면 재생이 편집 경험의 핵심 공백이다. Streamlit의 `st.video`는 별도 레거시 단일 클립에만 적용된다. 로컬 전용 미디어 접근·안전한 후보 재생을 후속 P0로, 최종 영상 재생과 서버 재시작 뒤 렌더 조회/복구를 별도 단계로 제안한다. Streamlit 제거와 공개 배포는 보류하며, 이 분석으로 v2 제품 범위·평가 계약·완료 기준을 바꾸지 않는다.
+
+[WEB-06](../handoff/web-06-source-preview-validation.md)에서는 로컬 전용 프로젝트·소스 미디어 Range API와 React 원본·후보 구간 미리보기를 추가했다. P1-S01·S02 HEVC MOV는 현재 Windows Chrome에서 원본 재생·seek를 제한적으로 확인했으며, 프록시 재인코딩은 추가하지 않았다. 선택 목록에는 소스명·시각·길이를 표시한다. 다른 브라우저 코덱 호환성, 프레임 정확도, 인증·소유권은 미해결이다. 이 구현은 SceneCandidate 품질 평가나 v2 Completion Gate의 통과를 뜻하지 않는다.
+
+[WEB-07](../handoff/web-07-render-preview-validation.md)은 기존 두 렌더 다운로드 API의 MP4·Range 응답을 재사용해 React 최종 결과 플레이어를 연결했다. 기본·하드 자막 버전 전환, 로딩·오류·파일 누락 상태와 다운로드 유지가 구현됐다. 기존 WEB-04 QA 두 MP4를 **시험용 프로세스 메모리 완료 상태**에서 실제 Chrome으로 재생·seek하고 한국어 자막 프레임을 확인했다. 이는 일반 서버 재시작 뒤 결과 복구 검증이 아니며, 그 영속화는 WEB-08로 남긴다. 공개 배포·사용자별 권한·독립 추천 품질 평가는 여전히 미완료다.
+
+[WEB-08A](../handoff/web-08a-render-persistence-design.md)는 현재 렌더 registry·편집 계획·파일 경로·다운로드 계약과 PostgreSQL/Alembic 구조를 조사해 영속화 정책을 설계했다. 제품 코드·DB 스키마는 변경하지 않았으며 일반 서버 재시작 복구는 아직 구현·검증되지 않았다. WEB-08B의 선행 조건은 기존 DB·QA 출력 백업 검증, 새 작업 ID와 계획 스냅샷의 DB 기록, 한 프로젝트의 동시 실행 방지, 작업 소유권 만료 후 중단 표시, 파일 재검증이다. 기존 파일 자동 등록과 자동 재렌더는 제외하고 격리 DB·QA 프로젝트의 단위/통합/실제 재시작 E2E를 거쳐야 한다. 이 로컬 제품 UX 단계는 v2 평가 계약이나 Completion Gate를 바꾸지 않는다.
+
+[WEB-08B](../handoff/web-08b-render-persistence-validation.md)는 새 `project_render_runs` Alembic revision과 DB 기반 작업 ID·계획 스냅샷·상태 전이, lease와 PostgreSQL advisory lock, 파일 검증·기록 조회·React 과거 결과 선택을 구현했다. 당시 기존 DB/QA 결과의 백업과 별도 DB 복원 검증 뒤 **격리 DB·출력에서만** 마이그레이션과 실제 P1-S01·S02 렌더, API 프로세스 재시작, Chrome 기본/한국어 하드 자막 재생·seek·다운로드를 확인했다. 당시 기존 PostgreSQL은 이전 revision에 남아 있고 기존 8000 API는 재시작하지 않았다. 이후 기존 로컬 환경 적용은 WEB-08C에서 별도 승인 후 진행했으며 공개 배포·GT 품질 평가는 미완료다.
+
+[WEB-08C](../handoff/web-08c-production-local-rollout.md)는 기존 로컬 DB의 새 백업·격리 복원과 기존 16개 테이블 행 수, 격리 DB migration 경로를 확인한 뒤 승인받아 기존 DB를 `b8c01e2a4f60`으로 업그레이드하고 FastAPI만 영속화 모드로 교체했다. 기존 데이터·원본·렌더 파일을 보존하고 새 기록 API 및 실제 Chrome의 빈 기록 화면을 확인했다. 새 렌더를 실행하지 않아 기존 환경의 완료 기록 재시작 복구는 아직 미검증이다. 기존 QA 파일은 자동 등록하지 않았다.
+
+[WEB-10](../handoff/web-10-project-list.md)은 로컬 개발용 프로젝트 목록 API와 React 홈의 목록·선택 화면을 추가했다. DB의 프로젝트 생성일 최신순, 영상 수, 편집 계획 존재, 최신 렌더 상태를 제한된 페이지로 조회하며 새 렌더 실행·파일 자동 등록·DB 마이그레이션은 하지 않았다. 실제 Chrome+FastAPI+PostgreSQL의 목록·상세 진입 및 모바일 너비를 확인했다. 이는 인증·소유권이나 독립 SceneCandidate 품질 평가의 완료를 뜻하지 않는다.
+
+[WEB-11](../handoff/web-11-edit-plan-ux.md)은 기존 EditPlan API와 후보 미리보기를 재사용해 React의 선택 수·상태·순서 조작과 빈 계획 저장을 개선했다. 격리 PostgreSQL의 실제 저장 후보로 저장·재조회를 확인하고 원래 계획을 복원했다. 현재 사용 중인 DB는 읽기 전용 Chrome 조작만 확인했으며 렌더·알고리즘·평가 계약은 변경하지 않았다. 장면 후보는 품질 순위가 아니다.
+
+[WEB-12](../handoff/web-12-render-review.md)는 저장된 EditPlan 후보 순서와 각 구간 길이의 합계를 렌더 실행 전에 검토할 수 있게 했다. 미저장·저장 중·실패·빈 계획·무효 구간에서는 렌더를 차단하고 기존 편집 카드로 이동할 수 있다. React 단위·Mock Chrome 모바일/데스크톱 검증은 완료했다. WEB-12 당시 기존 DB의 실제 Chrome 읽기 전용 확인은 미실행이었으며 DEV-01에서 후속 검증했다. 실제 영상 렌더는 미실행이고 예상 길이는 실제 렌더 길이나 영상 미리보기를 보장하지 않는다.
+
+[DEV-01](../handoff/dev-01-server-and-web12-validation.md)은 기존 FastAPI가 실제로 실행 중임을 확인하고, 기존 PostgreSQL의 저장 4장면 계획을 Chrome 375·1440px에서 읽기 전용으로 검증했다. 화면의 예상 길이 6.16초가 API 구간 합계와 일치하고 미저장 초안에서 렌더 버튼이 차단됨을 확인했다. 기존 렌더 기록은 0건이어서 과거 렌더가 있는 실제 화면은 미검증이며 새 영상 렌더는 실행하지 않았다.
+
+[QA-01](../handoff/qa-01-render-recovery.md)은 WEB-08B의 격리 영속 렌더 경로를 일회용 PostgreSQL과 Mock 실행기로 추가 검증했다. 동시 접수·프로젝트 분리·ownerless lease 만료·실패 후 새 ID 재시도·파일 누락은 기대한 상태였다. **동일 크기로 바뀐 완료 파일은 현재 경로/크기 검증만으로 감지되지 않는 결함**이 확인됐다. 콘텐츠 해시의 영속 저장과 기존 기록 정책은 별도 DB 스키마 변경 검토가 필요하며 이 단계에서 제품 코드·현재 DB를 변경하지 않았다. 실제 프로세스 강제 종료나 새 영상 렌더도 실행하지 않았다.
+
+[QA-02](../handoff/qa-02-render-integrity-design.md)는 이 결함에 대해 완료 시 파일별 SHA-256 기록과 조회·다운로드·미리보기 요청의 검증, 해시 없는 과거 완료 기록의 보수적 처리, 파일별 누락/손상 오류와 비용 평가를 설계했다. b8 revision 일회용 격리 DB에서 세 nullable 해시 컬럼·CHECK SQL을 시험했지만 실제 migration·제품 코드·현재 DB 적용은 하지 않았다. 구현은 스키마 변경과 호환성 정책 승인, 대용량·동시 Range 요청 비용 검증이 선행 조건이다.
+
+[QA-03](../handoff/qa-03-render-integrity-implementation.md)은 QA-02 설계를 구현했다. 후속 revision `e3a1c9d27b45`가 세 nullable SHA-256 컬럼과 형식 CHECK를 추가하며 기존 행은 NULL로 보존한다. 영속 렌더 완료는 기본 MP4 해시를 기록하지 못하면 COMPLETED를 기록하지 않고, SRT·하드 자막 MP4는 파일별로 해시한다. 상태·기록·미리보기·다운로드·Range는 같은 정책으로 크기·SHA-256을 검증하고 검증한 핸들에서만 스트리밍한다(Windows는 공유 모드로 쓰기 거부). 누락 404, 불일치 409 `RENDER_FILE_CORRUPT`, 해시 없는 과거 기록 409 `RENDER_FILE_UNVERIFIED`로 구분하며 기록은 보존한다. 합성 파일·SQLite 23건, QA-01 격리 PostgreSQL 3건(기존 expected failure를 실제 해결 후 정상 통과로 전환), 격리 DB migration 왕복과 WEB-08C 백업 복원 데이터 보존, React 52건·Mock Chrome 22건을 확인했다. 요청마다 전체 해시하므로 대용량 결과의 Range 지연(warm 1GiB 약 0.6초/요청)이 남은 위험이며 정책을 약화하지 않았다. **현재 개발 DB 적용·FastAPI 교체·실제 렌더 MP4 검증은 미실행이고 승인이 필요하다.**
+
+[QA-04](../handoff/qa-04-pre-rollout-verification.md)는 적용 전 최종 검증으로, 일회용 격리 DB(`head`=`e3a1c9d27b45`)와 Git 제외 임시 루트의 합성 원본에서 실제 FFmpeg 렌더·Docker 하드 자막을 실행했다. 세 파일의 SHA-256이 DB와 일치했고 API 재초기화 후에도 유지됐으며, 다운로드·Range·실제 Chrome 재생/다운로드와 동일 크기·다른 크기·누락·하드 자막·SRT·해시 없음 변조의 차단과 복원을 확인했다. Windows에서는 스트리밍 중 쓰기·교체·삭제가 OS 수준에서 거부됐고 POSIX는 제자리 수정과 Range 부분 바이트 위험이 남는다. 같은 DB를 쓰는 두 API 프로세스의 판정은 일치했다. 판정은 **CONDITIONAL PASS**이며 적용 순서·중단 조건·롤백 계획과 운영 정책 승인이 조건이다. 실제 개발 DB 적용·운영 FastAPI 재시작·실제 사용자 영상 렌더는 미실행이다.
+
+[QA-05](../handoff/qa-05-pre-rollout-compatibility.md)는 QA-04가 남긴 호환성 항목을 정리했다. QA-04는 Streamlit 문제를 '안내 문구 누락'으로 기록했지만, 실제로는 Streamlit 클라이언트가 하드 자막 `CORRUPT`/`UNVERIFIED`/`BASE_UNAVAILABLE`을 허용하지 않아 무결성 차단 시 상태 조회 전체가 형식 오류로 실패했다. 하드 자막만 손상된 경우 정상 기본 MP4 다운로드 버튼도 사라졌다. 이를 고쳐 상태를 받아들이고, 409 무결성 코드와 하드 자막 상태를 한국어로 구분해 안내한다. 다운로드 가능 조건은 바꾸지 않았다. 기존 백엔드 실패 3건은 미커밋 WEB-08B 모델 등록으로 늘어난 `project_render_runs` 테이블 때문이었고(QA-03 무관, 보호 대상과 중복 없음), 정확한 집합 일치 검사를 유지한 채 기대값만 갱신했다. 회귀는 백엔드 0 실패, Streamlit 72건이다. 판정은 **CONDITIONAL PASS**이며, QA-04 조건 1–4가 남고 실제 개발 DB 적용은 미실행이다.
+
+[QA-06](../handoff/qa-06-dev-db-rollout-preparation.md)은 사용자가 Windows 단일 호스트 개발 환경에 한정해 운영 정책 5개를 승인한 뒤 진행한 적용 준비 단계다. 개발 DB(`b8c01e2a4f60`, 렌더 기록 0)를 백업·격리 복원해 데이터가 일치함을 확인했고, `e3a1c9d27b45` upgrade·downgrade와 새 코드 기동이 무손실이었다. 보강 단계에서는 실행 중인 8000의 코드가 HEAD가 아닌 'HEAD + 세션 시작 시점 미커밋 변경'임을 확인하고, 그 트리를 재구성·보존했다(OpenAPI 지문 일치). 복구 런처로 기존 코드의 영속 기동, 실제 렌더, 재시작을 확인했고, migration 실패·새 서버 기동 실패·렌더 실패·회귀 상황의 복구를 격리 환경에서 리허설했다. 기존 코드는 e3 DB에서도 동작하고 새 코드는 b8 DB에서 기동을 거부한다. 해시가 있는 상태의 downgrade는 해시를 소실시키므로 자동 실행하지 않는다. 실제 migration·FastAPI 재시작·실제 렌더 검증은 사용자 승인 전이라 미실행이다.
+
+[WEB-09](../handoff/web-09-responsive-ui-validation.md)는 React의 프로젝트 제목·UUID·파일명·선택 장면 줄바꿈과 모바일 여백·타이포그래피, 작업 단계의 스크롤 중 이동을 개선했다. 모의 API Chrome에서 320·375·390·430px 및 1440px 레이아웃과 기존 화면 기능을 검증했으나 실제 iPhone Safari 조작·코덱 재생은 후속 확인이 필요하다. 백엔드·DB·Tailscale 설정과 v2 평가 계약은 변경하지 않았다.
+
+[WEB-09B](../handoff/web-09b-iphone-layout-validation.md)는 실제 iPhone 13 mini에서 보고된 가로 잘림을 조사했다. 모바일 표시 영역 300px 재현에서 `body`의 320px 최소 너비가 문서를 321px로 넓히는 것을 확인하고 해당 제한과 단계 바 음수 여백을 제거했다. 입력의 모바일 글자를 16px로 조정하고 등록 카드의 너비 경계를 검증했다. Chrome 모바일 에뮬레이션과 기존 화면 회귀는 통과했으나, 실제 iPhone Safari에서의 원인 확정과 수정 효과 확인은 남아 있다. 이 UI 수정은 v2 품질 평가나 백엔드 계약을 변경하지 않는다.
+
+[SEC-01](../handoff/sec-01-postgres-network-hardening.md)은 Compose의 PostgreSQL 호스트 게시를 `127.0.0.1:5432`로 제한했다. 기존 DB의 새 백업과 별도 DB 복원, 원래 볼륨/테이블·주요 행 수 보존 및 FastAPI→Vite→Tailscale HTTPS 경로를 확인했다. 이 PC의 Tailscale IP에서 5432 접속은 차단됐고 다른 tailnet 기기 검증은 미실행이다. WEB-08B 마이그레이션은 적용하지 않았으며 이 네트워크 설정은 v2 평가 계약이나 인증 범위를 변경하지 않는다.
 
 기존 `docs/mvp-v1-spec.md`의 “MVP v1”은 단일 영상 Baseline의 역사적 명칭이다. 이 문서의 v2는 Version Roadmap의 `Tool / MCP & Scene Intelligence`를 뜻한다.
 

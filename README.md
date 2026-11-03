@@ -1,8 +1,48 @@
-# 🎬 AI Vlog Editor
+# Cutory — AI 브이로그 편집기
 
-> Working product name: **Cutory** (WIP)
->
 > 사용자의 편집 의도는 남기고, 반복적인 영상 편집 노동은 AI에게 맡깁니다.
+
+> **현재 상태 (2026-11-04 작업 트리):** React·FastAPI·PostgreSQL 기반 편집 흐름과 로컬 Ollama LLM/VLM 제안을 구현했습니다. 이 기능들은 아직 모두 GitHub `main`에 커밋된 상태가 아닙니다. 실제 영상의 제한된 시연과 격리 합성 영상의 하드 자막 생성은 확인했지만, 동결 GT 기반 추천 품질 평가는 미실행입니다.
+
+## 한눈에 보는 실제 흐름
+
+1. 프로젝트를 만들거나 목록에서 열고 MOV/MP4를 등록합니다.
+2. 서버가 영상 메타데이터·오디오·전사를 처리하고 장면 Evidence와 SceneCandidate를 생성합니다. 후보가 없으면 근거 부족 상태를 보여 주며 편집 완료로 취급하지 않습니다.
+3. 원본·후보 구간을 미리 보고 장면을 직접 선택·정렬합니다. 자연어 요청은 **저장 전 제안**이며, 로컬 Ollama LLM이 의도를 해석하고 VLM이 저장한 화면 설명·태그·분류를 활용합니다. Python은 STT 대사 근거와 화면 근거를 구분하고, 지원하는 명시적 화면 조건(예: 음식·동물·풍경)을 최종 검증합니다. 근거가 부족하면 전체 장면을 임의로 선택하지 않습니다. LLM 실패 시 규칙 기반 제안으로 돌아갑니다.
+4. 사용자가 편집 계획을 저장·검토한 뒤 렌더를 실행합니다. 로컬 FFmpeg가 기본 MP4와 SRT를 만들고, 글꼴이 설정되면 Docker의 고정 FFmpeg/libass 이미지가 **별도** 한국어 하드 자막 MP4를 만듭니다. 자막 생성 실패 시 기본 MP4는 유지됩니다.
+5. 완료된 두 영상을 React에서 재생·다운로드합니다. 렌더 기록은 PostgreSQL에 저장하고 결과 파일은 경로·크기·SHA-256으로 검증합니다.
+
+**사용 기술:** React 19·TypeScript·Vite·Tailwind CSS·React Router·TanStack Query, FastAPI·SQLAlchemy·Alembic·PostgreSQL, faster-whisper, 로컬 Ollama `gemma3:4b`, FFmpeg/FFprobe, Docker/libass. 기존 Streamlit 화면도 유지합니다. Redis는 현재 확인된 처리 경로에 사용하지 않습니다.
+
+## 로컬 실행 요약
+
+인증·사용자 소유권 검증이 없어 **개인 로컬 개발 환경용**입니다. 원본 영상, `.env`, DB 백업, 렌더 파일을 Git에 추가하거나 앱을 공개 배포하지 마세요.
+
+1. Python 3.12, Node.js 24·pnpm 11, Docker Desktop, FFmpeg/FFprobe, PostgreSQL을 준비합니다. `.env.example`을 `.env`로 복사하고 로컬 DB 암호를 설정합니다. Compose는 PostgreSQL을 `127.0.0.1:5432`에만 게시합니다.
+2. Python 가상환경을 새로 만들고 `pip install -r requirements.txt`로 설치합니다. 새 빈 DB에서만 `alembic upgrade head`를 실행합니다. 기존 DB에 무심코 migration을 다시 적용하지 마세요.
+3. 자연어·화면 분석 시 로컬 Ollama에 `gemma3:4b`를 준비하고 `CUTORY_EDIT_LLM_PROVIDER=ollama`, `CUTORY_EDIT_LLM_MODEL=gemma3:4b`, `CUTORY_VLM_MODEL=gemma3:4b`, `OLLAMA_BASE_URL=http://127.0.0.1:11434`를 설정합니다. 외부 Provider 키는 필요하지 않습니다. 하드 자막을 만들려면 [검증된 글꼴·Docker 조건](docs/handoff/mvp-06c-2b-windows-validation.md)에 맞는 `CUTORY_SUBTITLE_FONT_PATH`가 필요합니다.
+4. 최신 렌더 기록·해시 검증 스키마가 준비된 DB에서는 `CUTORY_RENDER_PERSISTENCE_ENABLED=1`로 FastAPI를 `127.0.0.1:8000`에서 실행합니다. 별도 터미널에서 `cd web`, `pnpm install --frozen-lockfile`, `pnpm dev`를 실행하면 `http://127.0.0.1:5173`에서 `/api` 프록시로 연결됩니다. 실행 상세는 아래 [React 개발 화면 실행](#react-개발-화면-실행-web-01)과 [현재 API 실행](#run-the-current-api)을 참고하세요.
+
+Windows PowerShell 예시(가상환경·`.env`·**새 빈 DB의** migration 준비 후, 각 서버는 별도 터미널에서 실행):
+
+```powershell
+docker compose up -d postgres
+$env:CUTORY_RENDER_PERSISTENCE_ENABLED = '1'
+$env:CUTORY_EDIT_LLM_PROVIDER = 'ollama'
+$env:CUTORY_EDIT_LLM_MODEL = 'gemma3:4b'
+$env:CUTORY_VLM_MODEL = 'gemma3:4b'
+$env:OLLAMA_BASE_URL = 'http://127.0.0.1:11434'
+.\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+# 다른 터미널: cd web; pnpm install --frozen-lockfile; pnpm dev
+```
+
+하드 자막 생성 시에는 위 FastAPI 프로세스가 Docker CLI·엔진과 검증된 글꼴에 접근할 수 있어야 합니다. 로컬 Ollama를 쓰지 않으면 LLM 제안은 규칙 기반 fallback으로 제한되며, VLM 화면 분석은 로컬 모델을 요구합니다.
+
+## 시연 증거와 검증 범위
+
+- [포트폴리오 편집 흐름 기록](docs/handoff/demo-01-portfolio-edit-flow.md), [실제 영상 두 소스 E2E](docs/handoff/web-04-react-e2e-validation.md), [렌더 결과 미리보기](docs/handoff/web-07-render-preview-validation.md)에 실행 조건과 범위를 남겼습니다. 현재 화면 캡처 스크립트는 [portfolio-capture.spec.ts](web/e2e-real/portfolio-capture.spec.ts)입니다. **원본 프레임이 포함된 로컬 캡처·영상은 공개 저장소에 포함하지 않습니다.** 공개용 이미지는 별도 검토 후 비식별 자료만 사용합니다.
+- 현재 8000에는 최신 P0 제안 수정이 적용됐고 실사 데모의 “음식이 보이는 장면만” 요청에서 케이크 화면 근거 2건을 반환했습니다. 기존 MP4 다운로드·SHA-256과 5173 프록시를 확인했습니다. 별도 2초 합성 영상에서 Docker 하드 자막 생성·한글 프레임·H.264/AAC·해시 일치를 확인했습니다. [현재 인수인계](Doc/HANDOFF.md)에 세부 증거가 있습니다.
+- **한계:** 신규 실사 영상의 전체 렌더·자막 품질을 이번 8000 교체 후 재검증하지 않았습니다. 실제 iPhone Safari 검증, 다양한 시각 조건의 품질, 동결 GT 기반 정량 평가도 미완료입니다. GT freeze-ready는 `PENDING` 28건이며 SceneCandidate를 정량 품질 합격으로 소개하지 않습니다.
 
 Cutory는 여러 촬영 영상에서 장면과 사건을 찾고, 사용자 의도·취향·현재 요청을 반영해 한 편의 브이로그를 만드는 **멀티 에이전트 AI 편집기**를 목표로 합니다. 사용자는 창작 방향과 결과를 확인하고, AI는 반복적인 탐색·구성·편집 작업을 돕습니다.
 
@@ -14,10 +54,39 @@ Cutory는 여러 촬영 영상에서 장면과 사건을 찾고, 사용자 의�
 
 이는 [최종 제품 기획](docs/product/full-development-plan.md)의 방향이며, 아래의 현재 구현 범위와 구분됩니다.
 
-## 현재 구현 범위
+## 구현·검증 이력
+
+아래 항목은 **각 단계가 끝났을 당시**의 결과와 당시 미완료 상태를 보존한 이력입니다. 현재 적용 상태는 위의 ‘한눈에 보는 실제 흐름’·‘시연 증거와 검증 범위’ 및 [HANDOFF](Doc/HANDOFF.md)를 우선합니다.
 
 - **v1 완료:** 여러 원본 영상의 등록·처리 상태 저장, 재개와 부분 실패 처리를 위한 기반을 만들었습니다.
 - **v2 진행 중:** 장면 후보 분석과 편집 계획, 선택한 장면을 MP4로 결합하는 백엔드 기능을 단계적으로 구현했습니다. 실제 영상 평가와 사용자 화면 연결 등은 계속 진행 중입니다.
+- **WEB-01 기반:** 기존 Streamlit을 유지하면서 `web/`에 React + TypeScript 개발용 화면을 추가했습니다. 프로젝트 생성·ID 조회, MOV/MP4 등록, 서버 소스 처리 상태를 연결했습니다.
+- **WEB-02 구현·제한된 실제 영상 검증:** 같은 React 프로젝트 화면에서 장면 분석 실행·상태 조회, 관측된 SceneCandidate와 Evidence 진단을 확인할 수 있습니다. P1-S01 QA 프로젝트 한 건의 실제 Chrome·FastAPI·PostgreSQL 경로에서 후보 5개를 확인했습니다. 이는 추천 순위나 정량 품질 평가가 아닙니다.
+- **WEB-03 구현·제한된 실제 영상 검증:** React 화면에서 후보를 선택·정렬해 편집 계획을 저장하고 렌더 실행·상태 확인·기본 MP4와 한국어 하드 자막 MP4 다운로드를 수행합니다. P1-S01 격리 QA 프로젝트에서 실제 Chrome·FastAPI·PostgreSQL·FFmpeg·Docker 경로로 두 파일 생성과 다운로드를 확인했습니다. 편집 품질의 정량 평가, 다른 영상·운영체제 검증은 미완료입니다.
+- **WEB-04 실제 전체 흐름 검증:** 새 격리 프로젝트에서 P1-S01·S02 두 영상을 Chrome으로 업로드해 분석·계획 저장·렌더·두 MP4 다운로드까지 확인했습니다. 두 소스 연결과 일부 자막 경계 프레임을 확인했으며, 전체 프레임·추천 품질·다른 운영체제 평가는 미완료입니다.
+- **EVAL-01 평가 준비 진단:** 기존 Manifest와 P1 GT 초안의 구조 검사는 통과했지만 freeze-ready는 미비 28건으로 `PENDING`입니다. 두 실제 소스에 저장된 후보 17개의 수·길이·Evidence 연결만 읽기 전용으로 확인했습니다. 동결 GT 대비 검출률·IoU·Precision 및 시나리오별 품질 평가는 미실행입니다.
+- **EVAL-02 GT 동결 준비:** P1 원본 7개의 해시·길이와 초안 대응을 재확인하고, freeze-ready 미비 28건을 사람이 수행할 작업으로 분류했습니다. P2·P3 원본과 독립 주석·인간 승인 기록이 없어 GT 동결 및 정량 평가는 여전히 미완료입니다.
+- **WEB-05 편집기 사용성 분석:** 분석 당시 React는 프로젝트 기반 업로드부터 두 MP4 다운로드까지 연결됐습니다. 기존 Streamlit에는 별도의 단일 영상 fixed Window·Transcript/EditMemo 확인·클립 재생 기능이 남아 있습니다. 분석 당시 프로젝트 원본·장면 후보 구간·최종 렌더의 화면 재생은 두 UI 모두 제공하지 않았습니다.
+- **WEB-06 로컬 원본·후보 미리보기:** React 프로젝트 화면에서 등록된 MOV/MP4를 선택해 재생하고 후보 시작·종료 구간을 확인할 수 있습니다. P1-S01·S02 HEVC Main 10 MOV는 이 Windows Chrome에서 원본 그대로 재생·탐색돼 프록시는 생성하지 않았습니다. 이 결과를 다른 브라우저·기기에 일반화하지 않습니다. 후보 재생은 프레임 정확도를 보장하지 않습니다.
+- **WEB-07 최종 결과 미리보기:** 당시 완료·파일 사용 가능으로 확인한 기본 MP4와 한국어 하드 자막 MP4를 React에서 전환해 재생·탐색했습니다. 기존 다운로드는 유지합니다. 기존 WEB-04 QA 영상 두 파일은 실제 Windows Chrome에서 재생·seek와 자막 프레임을 확인했으나, 시험용 서버 메모리 상태를 사용했습니다. 당시 남은 재시작 복구는 WEB-08B/08C에서 구현·적용했습니다.
+- **WEB-08A 설계 완료:** 당시 프로세스 메모리 전용 렌더 상태와 재시작 복구 정책을 [별도 문서](docs/handoff/web-08a-render-persistence-design.md)에 정리했습니다.
+- **WEB-08B 격리 검증 완료:** 새 렌더의 DB 기록, 계획 스냅샷, 중단·파일 누락 구분, 과거 성공 결과 선택을 구현했습니다. 복원한 별도 PostgreSQL과 출력 경로에서 실제 P1-S01·S02 프로젝트 렌더 후 API 재시작·Chrome 재생/seek·두 MP4 다운로드를 확인했습니다. 당시 기존 DB에는 미적용이었으며 이후 WEB-08C에서 적용했습니다. 기존 QA 파일은 자동 등록하지 않습니다. [WEB-08B 기록](docs/handoff/web-08b-render-persistence-validation.md)을 참고하세요.
+- **WEB-08C 기존 로컬 환경 적용 완료:** 새 백업·격리 복원 확인 후 승인받아 기존 DB를 `b8c01e2a4f60`으로 업그레이드하고 FastAPI만 영속화 모드로 교체했습니다. 새 기록 API와 실제 Chrome의 빈 기록 화면은 확인했습니다. 새 영상 렌더는 실행하지 않았으므로 기존 환경에서 완료 기록의 재시작 복구는 미검증입니다. 기존 QA 파일은 자동 등록하지 않았습니다. [WEB-08C 기록](docs/handoff/web-08c-production-local-rollout.md)을 참고하세요.
+- **WEB-10 프로젝트 목록:** React 홈에서 기존 로컬 DB의 프로젝트를 생성일 최신순으로 보고 선택할 수 있습니다. 영상 수·편집 계획 존재·최신 렌더 기록 상태는 DB에 저장된 값만 표시하며, 렌더 기록이 없으면 ‘없음’으로 표시합니다. 기존 ID 직접 열기와 프로젝트 생성은 유지합니다. 실제 Chrome+FastAPI+PostgreSQL에서 12개 목록·상세 진입을 확인했습니다. 인증이 없어 로컬 개발 전용입니다. [WEB-10 기록](docs/handoff/web-10-project-list.md)을 참고하세요.
+- **WEB-11 장면 선택·순서 UX:** React 편집 계획에서 선택 수·선택 표시, 모바일용 위·아래 이동, 선택 목록의 해제, 빈 계획 저장, 저장 중·완료·실패 상태를 명확히 했습니다. 기존 EditPlan API를 재사용하며 요청과 다른 저장 응답은 성공으로 취급하지 않습니다. 격리 PostgreSQL에서 실제 후보의 순서 저장·재조회 후 원래 계획을 복원했고, 기존 DB를 읽는 Chrome에서는 저장 없이 임시 순서 변경만 확인했습니다. 실제 영상 렌더는 실행하지 않았습니다. [WEB-11 기록](docs/handoff/web-11-edit-plan-ux.md)을 참고하세요.
+- **WEB-12 렌더 전 계획 검토:** 렌더 버튼 위에서 서버에 저장된 장면의 순서·원본 파일명·시작/종료·개별 길이와 구간 길이 합계인 예상 영상 길이를 확인할 수 있습니다. 미저장·저장 중·실패·빈 계획·무효 구간이면 렌더를 막고 기존 선택 영역으로 돌아갈 수 있습니다. [DEV-01](docs/handoff/dev-01-server-and-web12-validation.md)에서 기존 FastAPI·PostgreSQL 데이터를 실제 Chrome 375px·1440px으로 읽기 전용 검증했습니다. 예상 길이는 실제 MP4 길이를 보장하지 않으며 이번에는 렌더를 실행하지 않았습니다. [WEB-12 구현 기록](docs/handoff/web-12-render-review.md)을 참고하세요.
+- **QA-01 렌더 복구 점검:** 일회용 격리 PostgreSQL과 Mock 렌더로 동시 접수·stale 중단·실패 후 재시도·파일 누락을 검증했습니다. 완료 파일을 같은 크기의 다른 내용으로 바꾸면 현재 API가 감지하지 못하는 결함을 재현했습니다. 이를 막는 콘텐츠 해시 기록은 DB 스키마 변경 검토가 필요해 제품 코드는 수정하지 않았습니다. 현재 DB 쓰기와 실제 영상 렌더는 하지 않았습니다. [QA-01 기록](docs/handoff/qa-01-render-recovery.md)을 참고하세요.
+- **QA-02 결과 무결성 설계:** 완료 시 기본·SRT·하드 자막 파일별 SHA-256을 기록하고 제공 시 다시 대조하는 정책을 제안했습니다. 해시가 없는 과거 완료 기록은 자동으로 신뢰하거나 재등록하지 않는 방안이며, 후속 DB migration과 오류 계약은 승인 전입니다. 격리 DB에서 nullable 컬럼 SQL만 시험했고 제품 코드와 현재 DB는 변경하지 않았습니다. [QA-02 설계](docs/handoff/qa-02-render-integrity-design.md)를 참고하세요.
+- **QA-03 결과 무결성 구현(당시 DB 미적용):** 렌더 완료 시 기본 MP4·SRT·하드 자막 MP4의 SHA-256을 기록하고, 상태·기록·미리보기·다운로드·Range 요청마다 검증한 같은 파일 핸들로만 제공합니다. 같은 크기 변조는 409 `RENDER_FILE_CORRUPT`, 해시 없는 과거 완료 기록은 409 `RENDER_FILE_UNVERIFIED`로 차단하고 기록은 삭제하지 않으며, React가 누락·변형·무결성 기록 없음을 구분해 안내합니다. 후속 Alembic revision `e3a1c9d27b45`는 격리 PostgreSQL에서 upgrade/downgrade/reupgrade와 기존 데이터 보존을 확인했지만 **당시 개발 DB 적용과 FastAPI 교체는 승인 전**입니다. 합성 파일·Mock 검증이며 실제 렌더 MP4는 검증하지 않았습니다. [QA-03 기록](docs/handoff/qa-03-render-integrity-implementation.md)을 참고하세요.
+- **QA-04 적용 전 최종 검증(CONDITIONAL PASS):** 격리 DB·합성 원본으로 실제 FFmpeg 렌더와 Docker 하드 자막을 실행해 세 파일의 SHA-256 저장, API 재초기화 후 유지, 다운로드·Range·실제 Chrome 재생, 동일 크기 변조 등의 차단과 복원을 확인했습니다. Windows에서는 스트리밍 중 파일 쓰기·교체·삭제가 거부됨을 실측했고, POSIX 보장은 더 약합니다. 적용 순서·중단 조건·롤백 계획을 정리했으며 **현재 개발 DB 적용과 FastAPI 재시작은 승인 전**입니다. Streamlit은 안전하지만 새 무결성 안내가 누락돼 최소 변경안만 제시했습니다. [QA-04 기록](docs/handoff/qa-04-pre-rollout-verification.md)을 참고하세요.
+- **QA-05 적용 전 호환성 정리(CONDITIONAL PASS):** Streamlit은 QA-03 서버의 하드 자막 `CORRUPT`/`UNVERIFIED`/`BASE_UNAVAILABLE`을 형식 오류로 거부해 상태 조회 전체가 실패하던 문제를 고쳤습니다. 이제 상태를 받아들이고 409 `RENDER_FILE_CORRUPT`/`RENDER_FILE_UNVERIFIED`와 하드 자막 상태를 한국어로 구분해 안내하며, 다운로드 가능 조건은 그대로입니다. 기존 백엔드 실패 3건은 WEB-08B의 `project_render_runs` 테이블이 기대 집합에 없어서 생긴 것으로 확인했습니다. 기대값만 갱신해(완화 없음) 백엔드 593건 중 557 통과·36 건너뜀·0 실패, Streamlit 72건 통과입니다. **당시 개발 DB 적용은 승인 전**입니다. [QA-05 기록](docs/handoff/qa-05-pre-rollout-compatibility.md)을 참고하세요.
+- **QA-06 실제 개발 DB 적용 준비(준비 게이트 PASS, 복구 경로 확보, 적용 승인 대기):** 개발 DB(revision `b8c01e2a4f60`, 프로젝트 13, 렌더 기록 0)를 백업했고, 격리 복원본에서 upgrade·downgrade·새 코드 기동이 무손실임을 확인했습니다. 실행 중인 8000은 커밋되지 않은 코드로 떠 있어 HEAD만으로는 재현되지 않습니다. 그래서 그 코드 트리를 재구성해 보존했고, 8000과 OpenAPI 지문이 일치함을 확인했습니다. 복구 런처로 기존 코드의 영속 모드 기동, 실제 FFmpeg 렌더, 재시작 후 이력 유지, 그리고 migration 실패·새 서버 기동 실패·렌더 실패·회귀 상황의 복구를 격리 환경에서 리허설했습니다. 해시가 있는 상태의 downgrade와 백업 복원은 데이터 손실이 있어 자동 실행하지 않습니다. **당시 실제 migration과 FastAPI 재시작은 사용자 승인 전이라 실행하지 않았습니다.** [QA-06 기록](docs/handoff/qa-06-dev-db-rollout-preparation.md)을 참고하세요.
+- **DEMO-01 포트폴리오 편집 흐름(제한된 실제 검증):** 업로드 → AI 장면 추천 → 미리보기·선택 또는 자연어 요청 → 저장 → MP4 다운로드 흐름을 실제 영상 1개로 처음부터 끝까지 확인했습니다. 실제 Chrome, 격리 환경, 1.1분 소요. 장면 추천 v0.4는 짧은 근거 구간을 3~15초 장면으로 묶고 겹침을 없앱니다. 오디오 근거가 없으면 말과 화면 움직임이 겹치는 구간을 대안으로 써서, 후보가 0개이던 실제 MOV에서도 6개를 추천합니다. 추천 이유는 한국어 근거와 실제 대사로 표시합니다. 자연어 요청(길이·개수·포함/제외 단어·리액션/움직임/대화·역순)은 규칙 기반이며, 제안만 하고 저장은 사용자가 확정합니다. 시연 당시 8000에는 새 백엔드가 아직 반영되지 않았습니다(QA-06 승인 대기). 현재 8000에는 이후 P0 코드가 반영됐습니다. 추천 품질의 정량 평가는 미실행입니다. [DEMO-01 기록](docs/handoff/demo-01-portfolio-edit-flow.md)을 참고하세요.
+- **WEB-09 모바일 반응형 UI:** 프로젝트 제목·ID·파일명의 좁은 화면 줄바꿈, 카드·글자 크기·간격, 스크롤 중 접근 가능한 작업 단계 이동을 개선했습니다. 320·375·390·430px 및 1440px의 모의 API Chrome 레이아웃 검사는 통과했으며, 변경 후 실제 iPhone Safari 조작·코덱 재생은 아직 확인하지 않았습니다. [WEB-09 기록](docs/handoff/web-09-responsive-ui-validation.md)을 참고하세요.
+- **WEB-09B 실기기 잘림 대응:** iPhone 13 mini에서 보고된 화면 밀림을 조사했습니다. 모바일 표시 너비가 320px보다 좁아질 때 `body`의 고정 최소 너비로 문서가 넓어지는 현상을 재현해 제거하고, 단계 바의 음수 여백과 입력의 모바일 글자 크기를 조정했습니다. 모바일 Chrome 에뮬레이션에서는 300·375px 및 기존 뷰포트 회귀가 통과했지만, 수정 후 실제 iPhone Safari 재확인은 필요합니다. [WEB-09B 기록](docs/handoff/web-09b-iphone-layout-validation.md)을 참고하세요.
+- **포트폴리오 화면 정리:** 좁은 화면의 단계 메뉴와 긴 상태값·버튼 줄바꿈을 보완하고, 서버에서 받은 장면 후보·진단 건수와 렌더 기록 조회 상태를 명확히 표시합니다. 기존 API와 처리·렌더 동작은 그대로이며, 이번 회귀 검증은 모의 API Chrome 기준입니다. 실제 영상·Safari 재검증은 별도입니다. [화면 점검 기록](docs/handoff/ui-portfolio-demo-validation.md)을 참고하세요.
+- **새 실제 영상 처리 점검:** 한 로컬 MOV의 소스 처리는 FFprobe 실행 경로를 FastAPI 프로세스에 전달하고 명시적 재시도로 완료했다. 장면 분석의 긴 전사 근거 저장 오류는 기존 1,024자 DB 필드 안의 호환 인코딩으로 수정했다. 분석은 `ABSTAINED`로 끝나 후보가 0개라 이 영상의 편집 계획·렌더·자막 영상은 생성되지 않았다. [실행 기록](docs/handoff/scene-preview-recovery-2026-11-03.md)을 참고한다.
+- **SEC-01 PostgreSQL localhost 제한:** Compose의 DB 게시 주소를 `127.0.0.1:5432`로 한정했습니다. 별도 백업·격리 복원 후 기존 볼륨과 DB 행 수, FastAPI·Vite·Tailscale HTTPS 경로를 확인했습니다. 이 PC의 Tailscale IP에서 5432 연결은 실패했으며 다른 tailnet 기기에서의 직접 접속 테스트는 미실행입니다. [SEC-01 기록](docs/handoff/sec-01-postgres-network-hardening.md)을 참고하세요.
 - **아직 개발 중:** AI가 스토리·스타일을 계획하는 멀티 에이전트 편집과 최종 사용자 경험은 완성되지 않았습니다.
 
 자세한 완료 범위와 한계는 아래 [Current Repository Status](#current-repository-status) 및 [Version Roadmap](docs/roadmap/version-roadmap.md)을 참고해 주세요.
@@ -34,6 +103,8 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 
 ## Documentation
 
+- [현재 서비스 명세](Doc/SPEC.md) · [제출 전 구현 계획](Doc/IMP-PLAN.md) · [현재 작업](Doc/TODO.md) · [최신 인수인계](Doc/HANDOFF.md)
+- [v2 계획과 완료 기준](docs/roadmap/v2-plan.md) · [시점별 실행 보고서](docs/handoff/)
 - [Cutory Full Product Design Source of Truth](docs/product/full-development-plan.md)
 - [Version Roadmap](docs/roadmap/version-roadmap.md)
 - [Completed v1 Detailed Plan](docs/roadmap/v1-plan.md)
@@ -51,6 +122,53 @@ Video → Audio → STT → Timestamp → Edit Memo → Candidate Interval → E
 - [Evaluation Dataset v0.1](evaluation/README.md)
 - [Codex Project Instructions](AGENTS.md)
 - [Current Work Index](TODO.md)
+- [WEB-01 구현·검증 기록](docs/handoff/web-01-react-foundation-validation.md)
+- [WEB-01B 실제 백엔드 브라우저 검증](docs/handoff/web-01b-real-backend-e2e-validation.md)
+- [WEB-02 장면 분석 UI 검증](docs/handoff/web-02-scene-analysis-validation.md)
+- [WEB-03 편집·렌더링 UI 검증](docs/handoff/web-03-edit-render-validation.md)
+- [WEB-04 두 영상 React 실제 E2E 검증](docs/handoff/web-04-react-e2e-validation.md)
+- [EVAL-01 SceneCandidate 품질 평가 준비 진단](docs/handoff/eval-01-scene-candidate-quality.md)
+- [EVAL-02 GT 동결 준비 및 주석 작업표](docs/handoff/eval-02-gt-freeze-preparation.md)
+- [WEB-05 React·Streamlit 사용성 및 기능 공백 분석](docs/handoff/web-05-ux-gap-analysis.md)
+- [WEB-06 원본·SceneCandidate 미리보기 검증](docs/handoff/web-06-source-preview-validation.md)
+- [WEB-07 최종 렌더 결과 미리보기 검증](docs/handoff/web-07-render-preview-validation.md)
+- [WEB-09 모바일 반응형 UI 검증](docs/handoff/web-09-responsive-ui-validation.md)
+- [WEB-09B iPhone 화면 잘림 조사·수정](docs/handoff/web-09b-iphone-layout-validation.md)
+- [SEC-01 PostgreSQL 포트 제한 검증](docs/handoff/sec-01-postgres-network-hardening.md)
+
+## React 개발 화면 실행 (WEB-01)
+
+`web/`은 React 19, TypeScript, Vite, Tailwind CSS, 필요한 shadcn/ui 방식의 컴포넌트, React Router와 TanStack Query를 사용합니다. 기존 FastAPI와 `frontend/`의 Streamlit은 그대로 유지합니다. 프로젝트 목록 API는 구현됐지만 인증·사용자 소유권 검증은 없으므로 **로컬 개발용**이며 외부에 공개 배포하지 않습니다.
+
+Node.js 24와 pnpm 11을 준비하고, FastAPI를 `127.0.0.1:8000`에서 실행한 뒤 별도 터미널에서 다음을 실행합니다. Vite는 `127.0.0.1:5173`에 바인딩하고 `/api` 요청을 FastAPI로 프록시합니다.
+
+개인 Tailscale 네트워크에서는 React만 Tailscale Serve의 HTTPS 443으로 전달하고 FastAPI는 localhost에 둔 적이 있습니다. 공개용 접속 절차는 [Tailscale Serve 개발 기록](docs/development/tailscale-serve.md)에 비식별화해 정리했습니다. 실제 기기 주소와 로컬 설정 파일은 공개 커밋에서 제외합니다. 현재 API에는 사용자 인증이 없어 접근 가능한 tailnet 구성원에게 프로젝트 데이터가 보일 수 있습니다.
+
+SEC-01 이후 Compose PostgreSQL 포트는 호스트의 `127.0.0.1:${POSTGRES_PORT:-5432}`에만 게시합니다. 이전 노출 상태를 기록한 Tailscale 문서는 당시 점검 기록이며, 현재 적용·검증 결과는 [SEC-01 기록](docs/handoff/sec-01-postgres-network-hardening.md)을 따릅니다. DB의 로컬 게시 제한은 React HTTPS 접근 권한이나 API 인증을 추가하지 않습니다.
+
+```sh
+cd web
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+`pnpm build`, `pnpm test`, `pnpm test:e2e`로 각각 타입 검사·빌드, Vitest/React Testing Library, Chrome Playwright 브라우저 테스트를 실행합니다. 브라우저 테스트는 API 응답을 가로채 화면 동작을 검사하므로 실제 백엔드·영상 처리 통합 검증과 구분합니다. 업로드 화면은 4 GiB 이하 MOV/MP4를 먼저 확인하지만 서버의 최종 미디어 검증이 우선입니다. 처리 상태의 숫자는 서버가 반환한 건수이며 실제 처리 퍼센트로 표시하지 않습니다. 개발 환경과 검증 범위는 [WEB-01 기록](docs/handoff/web-01-react-foundation-validation.md)을 참고하세요.
+
+좁은 화면에서는 프로젝트 상단의 5단계 링크로 영상 등록·소스 처리·장면 분석·편집/렌더 섹션으로 바로 이동할 수 있습니다. 모바일에서 링크는 스크롤 중 상단에 유지됩니다. 영상 재생은 `playsInline`과 브라우저 기본 컨트롤을 사용하지만 iPhone Safari의 자동 재생 정책과 MOV/HEVC 코덱 지원은 기기에서 별도로 확인해야 합니다.
+
+WEB-06에서는 프로젝트 화면의 **원본 영상 미리보기**에서 등록 소스를 선택하고, 장면 후보의 **이 구간 미리보기**로 해당 원본 시각으로 이동합니다. `GET /projects/{project_id}/sources/{source_id}/media`는 로컬 접속에서만 DB 등록·프로젝트 소속·저장 경로를 검사한 뒤 MOV는 `video/quicktime`, MP4는 `video/mp4`로 Range 스트리밍합니다. 서버와 Vite를 모두 `127.0.0.1`에 바인딩하세요. 이 검사는 인증·사용자 소유권 검증이 아니며 리버스 프록시를 통한 외부 노출을 허용하지 않습니다. 기존 등록 프로젝트를 이용한 실제 재생 테스트는 `WEB06_PROJECT_ID`를 설정한 뒤 `pnpm exec playwright test --config=playwright.real.config.ts web06.spec.ts`로 실행합니다. Chrome에서 원본 코덱이 지원되지 않으면 재생 오류가 표시되며 해당 환경의 프록시 대응은 후속 검토입니다.
+
+WEB-07 최종 결과 플레이어는 현재 프로세스의 `GET /projects/{id}/rendering`이 제공하는 **완료된 해당 렌더의 검증된 다운로드 URL**만 `<video>`에 연결합니다. 기본·자막 버전 전환과 다운로드는 별개입니다. 자막 파일이 없으면 기본 MP4만 재생합니다. 서버를 재시작해 실행 기록이 사라지면 기존 파일이 남아도 이 화면에서 다시 열리지 않습니다. 읽기 전용 기존 QA 렌더 재생을 재현하는 `backend.tests.web07_preview_fixture_server`는 테스트 프로세스의 메모리에만 완료 상태를 넣는 **검증용 도구**이며 제품의 복구 기능이 아닙니다. 해당 QA 프로젝트·렌더 ID를 `WEB07_QA_PROJECT_ID`·`WEB07_QA_RENDER_ID`로 지정하고 이 도구와 Vite를 로컬에서 실행한 뒤 `pnpm exec playwright test --config=playwright.real.config.ts web07.spec.ts web07-compat.spec.ts`로 테스트합니다. 자세한 조건과 한계는 [WEB-07 기록](docs/handoff/web-07-render-preview-validation.md)을 따릅니다.
+
+WEB-08B의 새 영속화 경로는 기존 DB에 `b8c01e2a4f60` 마이그레이션을 적용하고, 해당 API 프로세스에 `CUTORY_RENDER_PERSISTENCE_ENABLED=1`을 지정해야 활성화됩니다. WEB-08C에서 이 로컬 개발 환경에 둘 다 적용했습니다. 테이블이 없으면 활성화된 API는 시작을 거부합니다. 활성화된 서버의 `GET /projects/{id}/renders?limit=20&before=<render_id>`는 프로젝트별 기록을 돌려줍니다. 새 완료 기록의 재시작 복구는 이 환경에서 아직 확인하지 않았습니다. 기존 QA 파일은 등록되지 않으며 작업 중단은 자동 재렌더하지 않습니다. 인증·소유권이 없어 여전히 로컬 전용입니다.
+
+[WEB-01B 검증](docs/handoff/web-01b-real-backend-e2e-validation.md)에서는 실제 Chrome→Vite 프록시→FastAPI→PostgreSQL을 연결해 P1-S01 원본의 프로젝트 생성·업로드·소스 처리 완료와 새로고침 복구를 확인했습니다. 별도 실제 환경 테스트는 실행 중인 로컬 API·Vite가 필요하며 `cd web; pnpm test:e2e:real`로 실행합니다. 이 명령은 QA 프로젝트와 원본 사본을 새로 생성하므로 검증 기록의 범위를 먼저 확인하세요. 당시 프론트엔드 단위 테스트 10건과 모의 API 브라우저 테스트 2건이 통과했습니다.
+
+[WEB-02](docs/handoff/web-02-scene-analysis-validation.md)에서는 장면 분석 실행·상태 조회와 후보·진단 화면을 추가했습니다. 실제 장면 분석은 처리 완료된 격리 QA 프로젝트의 ID를 `WEB02_QA_PROJECT_ID`로 지정한 뒤 `pnpm exec playwright test --config=playwright.real.config.ts web02.spec.ts`로 별도 실행합니다. ID를 지정하지 않으면 실제 분석 테스트는 건너뜁니다. 같은 분석을 불필요하게 반복하지 않도록 보고서의 준비 조건을 먼저 확인하세요. 장면 실행 상태는 서버 프로세스 메모리에서 관리되므로 재시작 후 `NOT_STARTED`로 보일 수 있지만 저장된 후보·진단은 별도로 조회합니다. 위 WEB-01B 단위·브라우저 수치는 당시 기준선이며 최신 결과는 WEB-02 보고서를 따릅니다.
+
+[WEB-03](docs/handoff/web-03-edit-render-validation.md)에서는 순서가 있는 후보 ID의 편집 계획 저장·재조회, 렌더 접수·상태, 두 MP4 다운로드를 연결했습니다. 무효 후보와 미저장 변경사항이 있으면 저장 또는 렌더를 제한합니다. 서버 재시작 뒤 렌더 실행 기록과 다운로드 권한은 복구되지 않으므로 기존 파일 존재만으로 다운로드 가능하다고 표시하지 않습니다. 실제 브라우저 재검증은 처리·분석이 끝난 격리 QA 프로젝트에 `WEB03_QA_PROJECT_ID`를 지정하고 `pnpm exec playwright test --config=playwright.real.config.ts web03.spec.ts`로 실행합니다. 계획 저장·렌더가 DB와 출력 경로에 새 기록을 남기므로 이미 사용한 프로젝트에 임의로 다시 실행하지 마세요. 실제 API에는 SRT 다운로드가 없어 React에도 버튼이 없습니다.
+
+[WEB-04](docs/handoff/web-04-react-e2e-validation.md)에서는 두 실제 원본의 신규 프로젝트 생성부터 두 MP4 다운로드까지 전용 Chrome·FastAPI·PostgreSQL 환경에서 검증했습니다. `web/e2e-real/web04.spec.ts`는 새 QA 프로젝트를 만들고 원본 복사본·DB 기록·렌더 파일을 남기므로 일상 회귀 명령에 포함하지 않습니다. 재실행 전 기존 프로젝트·출력 공간을 확인하세요. Windows에서 하드 자막을 켜려면 API를 **이미 Docker Desktop CLI와 엔진에 접근 가능한 로컬 사용자 세션**에서 실행하고, 같은 세션에서 `docker version`과 코드에 고정된 이미지의 로컬 존재 여부를 확인한 뒤 글꼴 해시가 일치하는 파일만 `CUTORY_SUBTITLE_FONT_PATH`에 지정합니다. FFmpeg·FFprobe와 Docker CLI 실행 경로는 해당 API 프로세스의 `PATH`에만 추가하며 `.env`, 시스템 PATH, Docker 권한이나 소켓 설정을 임의로 바꾸지 않습니다. 접근이 거부되면 기본 MP4만 성공할 수 있으므로 상태 API의 `hard_subtitle_status`를 확인하세요. 인증·사용자 소유권 검증이 없어 외부 공개 배포는 금지합니다.
 
 ## Current Repository Status
 
@@ -147,7 +265,7 @@ MVP-04는 현재 유효한 후보 중 사용자가 사용할 장면을 선택·�
 
 MVP-05A는 저장된 장면 순서를 다시 검증한 뒤 `SourceStorage.resolve()`로 원본을 읽어 기존 개별 `render_clip()`을 재사용하고, 해상도·프레임레이트·오디오 유무를 정규화해 하나의 H.264/AAC MP4로 결합하는 백엔드 엔진이다. 임시 구간 파일은 정리하고 성공한 최종 MP4만 별도 출력 경로에 남긴다. 재분석으로 무효화된 후보, 비어 있는 계획, 원본 누락 또는 FFmpeg 실패는 명시적 오류이며 다른 후보로 대체하지 않는다. 합성 미디어로 결합을 검증했지만 실제 촬영 영상의 장시간 렌더링·품질은 아직 검증하지 않았다. 사용자용 렌더 API·Streamlit 연결·자막·인증은 MVP-05A에 없다.
 
-MVP-05B는 `POST /projects/{project_id}/render` (202 접수), `GET /projects/{project_id}/rendering` (상태), `GET /projects/{project_id}/renders/{render_id}/download` (완료 MP4)를 추가했다. 기존 단일 worker에서 비동기로 실행하고 프로젝트별 중복 렌더를 막는다. 빈/무효 편집 계획은 접수 전에 오류로 응답하며 실행 시에도 재검증한다. 결과는 `outputs/projects/` 아래에 보존되고 임시 구간은 MVP-05A가 정리한다. 다운로드는 같은 프로세스에서 완료를 확인한 렌더 ID와 안전한 출력 경로에만 허용한다. 실행 상태·완료 ID 목록은 **프로세스 메모리 전용**이므로 서버 재시작 뒤 파일이 남아도 성공으로 간주하거나 다운로드하지 않는다. 실제 진행률 퍼센트는 없고, 사용자 권한·Streamlit 연결·장시간 실제 촬영 영상 검증도 아직 없다.
+MVP-05B는 `POST /projects/{project_id}/render` (202 접수), `GET /projects/{project_id}/rendering` (상태), `GET /projects/{project_id}/renders/{render_id}/download` (완료 MP4)를 추가했다. 당시 실행 상태·완료 ID 목록은 프로세스 메모리 전용이었다. WEB-08B가 구현한 DB 영속화 경로는 WEB-08C에서 현재 로컬 개발 DB/서버에 적용됐다. 기존 QA 파일은 자동 등록하지 않았고, 이 환경의 새 완료 렌더 재시작 복구는 아직 미검증이다. 실제 진행률 퍼센트와 사용자 인증·소유권 검증은 없다.
 
 MVP-05C는 Streamlit 프로젝트 화면에서 **저장된** 편집 계획으로 렌더링을 접수하고, 수동으로 상태를 새로고침해 완료 MP4를 다운로드할 수 있게 한다. 미저장 선택·순서, 빈 계획, 무효 후보는 화면에서 실행을 막으며 백엔드도 다시 검증한다. 진행률 퍼센트나 재시작 후 상태 복구는 없고, 자동 자막·BGM·인증과 실제 촬영 영상 E2E 검증은 아직 구현·확인하지 않았다.
 
