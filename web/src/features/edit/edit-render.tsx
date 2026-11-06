@@ -10,13 +10,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import type { PreviewRange } from "@/features/projects/source-preview";
 import { RenderPreview } from "@/features/edit/render-preview";
 import { SceneReasons } from "@/features/scenes/scene-reasons";
+import type { StoryPlanDraft } from "@/features/story/story-direction";
 
 const moodLabels: Record<string, string> = { calm: "잔잔함", cozy: "아늑함", lively: "활기참", emotional: "감성적", fun: "재미있음" };
 const errorText = (error: unknown) => error instanceof ApiError ? `${error.message}${error.code ? ` (${error.code})` : ""}` : "요청을 완료하지 못했습니다.";
 const renderLabels = { NOT_STARTED: "렌더 실행 기록 없음", QUEUED: "렌더 대기 중", RUNNING: "렌더 진행 중", COMPLETED: "렌더 완료", FAILED: "렌더 실패", INTERRUPTED: "서버 종료로 렌더 중단", RECONCILIATION_REQUIRED: "렌더 파일 확인 필요" };
 const subtitleLabels: Record<string, string> = { AVAILABLE: "한국어 하드 자막 사용 가능", FAILED: "하드 자막 생성 실패", MISSING: "하드 자막 파일 누락", SUBTITLE_FAILED: "SRT 생성 실패", NO_SUBTITLES: "자막 없음", NOT_CONFIGURED: "자막 글꼴 환경 미설정", NOT_STARTED: "자막 생성 기록 없음", CORRUPT: "하드 자막 파일 변형 감지 · 제공 중지", UNVERIFIED: "하드 자막 무결성 기록 없음 · 제공 중지", BASE_UNAVAILABLE: "기본 영상 확인 실패로 자막 영상도 제공 중지" };
 
-export function EditRender({ projectId, processing, onPreview, previewCandidateId }: { projectId: string; processing?: ProcessingStatus; onPreview?: (range: PreviewRange) => void; previewCandidateId?: string | null }) {
+export function EditRender({ projectId, processing, onPreview, previewCandidateId, storyDraft }: { projectId: string; processing?: ProcessingStatus; onPreview?: (range: PreviewRange) => void; previewCandidateId?: string | null; storyDraft?: StoryPlanDraft | null }) {
   const client = useQueryClient();
   const candidates = useQuery({ queryKey: ["scene-candidates", projectId], queryFn: () => getSceneCandidates(projectId) });
   const plan = useQuery({ queryKey: ["scene-edit-plan", projectId], queryFn: () => getEditPlan(projectId) });
@@ -33,6 +34,9 @@ export function EditRender({ projectId, processing, onPreview, previewCandidateI
   const [requestText, setRequestText] = useState("");
   const [suggestion, setSuggestion] = useState<EditSuggestion | null>(null);
   const suggest = useMutation({ mutationFn: (text: string) => suggestEdit(projectId, text), onSuccess: (value) => setSuggestion(value), onError: () => setSuggestion(null) });
+  const [chapterLabels, setChapterLabels] = useState<Record<string, string>>({});
+  const [storyNote, setStoryNote] = useState("");
+  const appliedStory = useRef<number | null>(null);
 
   useEffect(() => { setSelectedRenderId(null); }, [projectId]);
 
@@ -127,6 +131,21 @@ export function EditRender({ projectId, processing, onPreview, previewCandidateI
     onPreview?.({ candidateId: candidate.candidate_id, sourceId: candidate.source_video_id, start: candidate.start_seconds, end: candidate.end_seconds });
   }
 
+  // "이 방향으로 편집 계획 만들기": fill the unsaved draft in chapter order once plan + candidates are loaded.
+  useEffect(() => {
+    if (!storyDraft || appliedStory.current === storyDraft.nonce || !plan.isSuccess || !candidates.isSuccess) return;
+    appliedStory.current = storyDraft.nonce;
+    const known = new Set((candidates.data?.candidates ?? []).map((candidate) => candidate.candidate_id));
+    const ids = storyDraft.candidateIds.filter((id) => known.has(id));
+    const dropped = storyDraft.candidateIds.length - ids.length;
+    const droppedText = dropped ? ` 현재 후보에 없는 장면 ${dropped}개는 뺐습니다.` : "";
+    if (ids.length === 0) { setStoryNote(`추천 장면이 현재 후보 목록에 없어 채우지 못했습니다. 추천을 다시 받아 주세요.`); return; }
+    change(ids);
+    setChapterLabels(storyDraft.chapterById);
+    setStoryNote(`추천 편집 방향의 장면 ${ids.length}개를 챕터 순서대로 채웠습니다.${droppedText} 확인 후 '편집 계획 저장'을 눌러야 렌더에 반영됩니다.`);
+    document.getElementById("scene-selection")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  }, [storyDraft, plan.isSuccess, candidates.isSuccess, candidates.data]);
+
   function change(next: string[]) { setDraft(next); setDirty(JSON.stringify(next) !== JSON.stringify(plan.data?.candidate_ids ?? [])); save.reset(); }
   function move(index: number, direction: -1 | 1) {
     const next = [...draft];
@@ -178,7 +197,7 @@ export function EditRender({ projectId, processing, onPreview, previewCandidateI
         </div>}
       </div>}
       <ul className="space-y-2" aria-label="선택 가능한 장면">{available.map((candidate) => <li key={candidate.candidate_id} className={`flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-xl border bg-[#0b1420] p-3 ${draft.includes(candidate.candidate_id) ? "border-cyan-300/50" : "border-white/10"}`}><div className="min-w-0 max-w-full"><p className="break-all text-sm text-slate-100">{processing?.sources.find((source) => source.source_video_id === candidate.source_video_id)?.original_filename ?? candidate.source_video_id} · {candidate.start_seconds.toFixed(2)}–{candidate.end_seconds.toFixed(2)}초 · {(candidate.end_seconds - candidate.start_seconds).toFixed(1)}초</p><SceneReasons candidate={candidate} compact /><p className="break-all font-mono text-[11px] text-slate-500">{candidate.candidate_id}</p>{draft.includes(candidate.candidate_id) && <span className="mt-1 inline-block rounded-full bg-cyan-300/10 px-2 py-0.5 text-xs font-semibold text-cyan-200">선택됨</span>}</div><div className="flex flex-wrap gap-2"><Button size="sm" variant="secondary" onClick={() => preview(candidate)}>미리보기</Button><Button size="sm" aria-pressed={draft.includes(candidate.candidate_id)} variant={draft.includes(candidate.candidate_id) ? "secondary" : "default"} disabled={!plan.isSuccess || save.isPending} onClick={() => change(draft.includes(candidate.candidate_id) ? draft.filter((id) => id !== candidate.candidate_id) : [...draft, candidate.candidate_id])}>{draft.includes(candidate.candidate_id) ? "선택 해제" : "장면 선택"}</Button></div></li>)}</ul>
-      <div className="border-t border-white/10 pt-4"><p className="mb-3 text-sm font-medium text-white">선택한 장면 · 재생 순서</p><ol className="space-y-2" aria-label="선택한 장면 순서">{draft.map((id, index) => { const candidate = byId.get(id); const broken = invalid.includes(id); return <li key={id} className={`grid min-w-0 grid-cols-[1.5rem_minmax(0,1fr)] gap-2 rounded-xl border p-3 ${broken ? "border-rose-400/40 bg-rose-400/5" : previewCandidateId === id ? "border-cyan-300/40 bg-cyan-300/5" : "border-white/10 bg-white/[.03]"}`}><span className="text-sm text-cyan-200">{index + 1}</span><span className="min-w-0 break-all text-sm text-slate-200">{candidate ? `${processing?.sources.find((source) => source.source_video_id === candidate.source_video_id)?.original_filename ?? candidate.source_video_id} · ${candidate.start_seconds.toFixed(2)}–${candidate.end_seconds.toFixed(2)}초 · 길이 ${(candidate.end_seconds - candidate.start_seconds).toFixed(2)}초` : `무효 후보 · ${id}`}</span><div className="col-span-2 flex flex-wrap gap-2 sm:justify-end">{candidate && <Button size="sm" variant="secondary" onClick={() => preview(candidate)}>미리보기</Button>}<Button size="sm" variant="ghost" className="min-h-11 min-w-11" aria-label={`${index + 1}번 위로`} disabled={index === 0 || save.isPending} onClick={() => move(index, -1)}><ArrowUp size={15} /></Button><Button size="sm" variant="ghost" className="min-h-11 min-w-11" aria-label={`${index + 1}번 아래로`} disabled={index === draft.length - 1 || save.isPending} onClick={() => move(index, 1)}><ArrowDown size={15} /></Button>{candidate && <Button size="sm" variant="secondary" disabled={save.isPending} onClick={() => change(draft.filter((item) => item !== id))}>선택 해제</Button>}{broken && <Button size="sm" variant="secondary" disabled={save.isPending} onClick={() => change(draft.filter((item) => item !== id))}>무효 후보 제외</Button>}</div></li>; })}</ol>{draft.length === 0 && <p className="text-sm text-slate-500">아직 선택한 장면이 없습니다.</p>}</div>
+      <div className="border-t border-white/10 pt-4"><p className="mb-3 text-sm font-medium text-white">선택한 장면 · 재생 순서</p>{storyNote && <p role="status" className="mb-3 rounded-lg border border-violet-300/20 bg-violet-300/[.06] px-3 py-2 text-sm text-violet-100">{storyNote}</p>}<ol className="space-y-2" aria-label="선택한 장면 순서">{draft.map((id, index) => { const candidate = byId.get(id); const broken = invalid.includes(id); return <li key={id} className={`grid min-w-0 grid-cols-[1.5rem_minmax(0,1fr)] gap-2 rounded-xl border p-3 ${broken ? "border-rose-400/40 bg-rose-400/5" : previewCandidateId === id ? "border-cyan-300/40 bg-cyan-300/5" : "border-white/10 bg-white/[.03]"}`}><span className="text-sm text-cyan-200">{index + 1}</span><span className="min-w-0 break-all text-sm text-slate-200">{chapterLabels[id] && <span className="mb-1 mr-2 inline-block rounded-full bg-violet-300/15 px-2 py-0.5 text-xs font-semibold text-violet-200">{chapterLabels[id]}</span>}{candidate ? `${processing?.sources.find((source) => source.source_video_id === candidate.source_video_id)?.original_filename ?? candidate.source_video_id} · ${candidate.start_seconds.toFixed(2)}–${candidate.end_seconds.toFixed(2)}초 · 길이 ${(candidate.end_seconds - candidate.start_seconds).toFixed(2)}초` : `무효 후보 · ${id}`}</span><div className="col-span-2 flex flex-wrap gap-2 sm:justify-end">{candidate && <Button size="sm" variant="secondary" onClick={() => preview(candidate)}>미리보기</Button>}<Button size="sm" variant="ghost" className="min-h-11 min-w-11" aria-label={`${index + 1}번 위로`} disabled={index === 0 || save.isPending} onClick={() => move(index, -1)}><ArrowUp size={15} /></Button><Button size="sm" variant="ghost" className="min-h-11 min-w-11" aria-label={`${index + 1}번 아래로`} disabled={index === draft.length - 1 || save.isPending} onClick={() => move(index, 1)}><ArrowDown size={15} /></Button>{candidate && <Button size="sm" variant="secondary" disabled={save.isPending} onClick={() => change(draft.filter((item) => item !== id))}>선택 해제</Button>}{broken && <Button size="sm" variant="secondary" disabled={save.isPending} onClick={() => change(draft.filter((item) => item !== id))}>무효 후보 제외</Button>}</div></li>; })}</ol>{draft.length === 0 && <p className="text-sm text-slate-500">아직 선택한 장면이 없습니다.</p>}</div>
       {invalid.length > 0 && <Alert>무효 후보 {invalid.length}개가 있습니다. 저장·렌더링 전에 이 후보를 직접 제외하고 유효한 장면을 다시 선택해 주세요. 기존 계획은 자동 변경하지 않습니다.</Alert>}
       {dirty && <p role="status" className="text-sm text-amber-200">저장되지 않은 변경사항이 있습니다.</p>}
       {save.isPending && <p role="status" className="text-sm text-cyan-200">편집 계획 저장 중…</p>}

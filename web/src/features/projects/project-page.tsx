@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { SceneAnalysis } from "@/features/scenes/scene-analysis";
 import { EditRender } from "@/features/edit/edit-render";
-import { StoryDirectionCard } from "@/features/story/story-direction";
+import { StoryDirectionCard, type StoryPlanDraft } from "@/features/story/story-direction";
 import { SourcePreview, type PreviewRange } from "@/features/projects/source-preview";
 
 function errorText(error: unknown): string {
@@ -39,7 +39,8 @@ export function ProjectPage() {
   const project = useQuery({ queryKey: ["project", projectId], queryFn: () => getProject(projectId), enabled: validId });
   const [awaitingStart, setAwaitingStart] = useState(false);
   const [previewRange, setPreviewRange] = useState<PreviewRange | null>(null);
-  useEffect(() => setPreviewRange(null), [projectId]);
+  const [storyDraft, setStoryDraft] = useState<StoryPlanDraft | null>(null);
+  useEffect(() => { setPreviewRange(null); setStoryDraft(null); }, [projectId]);
   function preview(candidate: PreviewRange) {
     setPreviewRange(candidate);
     document.getElementById("source-preview")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
@@ -144,7 +145,7 @@ export function ProjectPage() {
     </div>
     <SourcePreview key={`preview:${projectId}`} projectId={projectId} sources={status?.sources ?? []} range={previewRange?.sourceId && status?.sources.some((source) => source.source_video_id === previewRange.sourceId) ? previewRange : null} onClearRange={() => setPreviewRange(null)} />
     <SceneAnalysis key={`scene:${projectId}`} projectId={projectId} processing={status} onPreview={preview} />
-    <StoryDirectionCard key={`story:${projectId}`} projectId={projectId} onPreview={preview} />
-    <EditRender key={`edit:${projectId}`} projectId={projectId} processing={status} onPreview={preview} previewCandidateId={previewRange?.candidateId ?? null} />
+    <StoryDirectionCard key={`story:${projectId}`} projectId={projectId} onPreview={preview} onApply={setStoryDraft} />
+    <EditRender key={`edit:${projectId}`} projectId={projectId} processing={status} onPreview={preview} previewCandidateId={previewRange?.candidateId ?? null} storyDraft={storyDraft} />
   </>;
 }

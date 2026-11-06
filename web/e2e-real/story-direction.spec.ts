@@ -22,6 +22,13 @@ for (const id of ids) {
     await expect(card.getByText(/챕터 1\./)).toBeVisible({ timeout: 30_000 });
     await expect(card.getByRole("button", { name: "미리보기" }).first()).toBeVisible();
     if (shot) await card.screenshot({ path: path.join(shot, `story-direction-${id.slice(0, 8)}.png`) });
+    // TODO 2: fill the edit plan (unsaved) in chapter order — no save request may be sent.
+    await card.getByRole("button", { name: /이 방향으로 편집 계획 만들기/ }).click();
+    const plan = page.locator("#scene-selection");
+    await expect(plan.getByText(/챕터 순서대로 채웠습니다/)).toBeVisible();
+    await expect(plan.getByRole("list", { name: "선택한 장면 순서" }).getByText(/챕터 1\./).first()).toBeVisible();
+    await expect(plan.getByText("저장되지 않은 변경사항이 있습니다.")).toBeVisible();
+    if (shot) await plan.getByRole("list", { name: "선택한 장면 순서" }).screenshot({ path: path.join(shot, `edit-plan-${id.slice(0, 8)}.png`) });
     expect(writes).toEqual([]);
   });
 }
