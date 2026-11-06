@@ -27,6 +27,7 @@ from backend.app.models.render import ProjectRenderRun
 from backend.app.services.project_processing import process_project
 from backend.app.services.edit_request import MAX_REQUEST_LENGTH
 from backend.app.services.llm_edit_interpreter import interpret_with_llm
+from backend.app.services.story_direction import load_story_inputs, recommend_story_direction
 from backend.app.services.project_scene_vision import start_vision, vision_status
 from backend.app.services.project_scene_execution import SceneRunStatus
 from backend.app.services.project_scene_processing import (
@@ -507,6 +508,63 @@ async def suggest_project_edit(request: Request, project_id: UUID, payload: Edit
         keywords=list(intent.keywords), excluded=list(intent.excluded), categories=list(intent.categories),
         order=intent.order, notes=list(suggestion.notes), engine=result.engine,
         interpretation=result.interpretation, mood=result.mood, fallback_reason=result.fallback_reason,
+    )
+
+
+class StorySceneResponse(BaseModel):
+    candidate_id: UUID
+    source_video_id: UUID
+    source_filename: str
+    start_seconds: float
+    end_seconds: float
+
+
+class StoryChapterResponse(BaseModel):
+    title: str
+    description: str
+    reason: str
+    scenes: list[StorySceneResponse]
+    total_seconds: float
+
+
+class StoryDirectionResponse(BaseModel):
+    project_id: UUID
+    title: str
+    summary: str
+    chapters: list[StoryChapterResponse]
+    engine: str
+    notes: list[str]
+    fallback_reason: str | None = None
+
+
+def _load_story_inputs_sync(factory, project_id):
+    with factory() as session:
+        return load_story_inputs(session, project_id)
+
+
+@router.post("/{project_id}/story-direction", response_model=StoryDirectionResponse)
+async def recommend_project_story_direction(request: Request, project_id: UUID) -> StoryDirectionResponse:
+    """All videos -> recommended story outline (chapters of scenes in play order). Read-only: nothing is saved."""
+    factory = _session_factory(request)
+    try:
+        candidates, filenames = await run_in_threadpool(_load_story_inputs_sync, factory, project_id)
+    except SceneProjectNotFoundError as error:
+        raise _project_not_found() from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail={"code": "SCENE_CANDIDATE_READ_FAILED", "message": "Scene candidates could not be loaded."}) from error
+    if not candidates:
+        raise HTTPException(status_code=409, detail={"code": "NO_SCENE_CANDIDATES", "message": "Run scene analysis before requesting a story direction."})
+    direction = await run_in_threadpool(recommend_story_direction, candidates, filenames)
+    return StoryDirectionResponse(
+        project_id=project_id, title=direction.title, summary=direction.summary, engine=direction.engine,
+        notes=list(direction.notes), fallback_reason=direction.fallback_reason,
+        chapters=[StoryChapterResponse(
+            title=chapter.title, description=chapter.description, reason=chapter.reason,
+            total_seconds=chapter.total_seconds,
+            scenes=[StorySceneResponse(candidate_id=s.candidate.candidate_id, source_video_id=s.candidate.source_video_id,
+                                       source_filename=s.source_filename, start_seconds=float(s.candidate.start_seconds),
+                                       end_seconds=float(s.candidate.end_seconds)) for s in chapter.scenes])
+            for chapter in direction.chapters],
     )
 
 
