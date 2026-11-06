@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -16,6 +17,9 @@ from backend.app.services.project_execution import ProjectRunRegistry
 from backend.app.services.project_scene_execution import ProjectSceneRunRegistry
 from backend.app.services.project_render_execution import ProjectRenderRunRegistry
 from backend.app.services.persistent_render_execution import PersistentProjectRenderRunRegistry
+from backend.app.services.render_events import (
+    RenderEventConfigError, RenderEventDispatcher, RenderEventSettings,
+)
 from backend.app.services.stt_service import load_model
 from backend.app.storage.processing_workspace import LocalProcessingWorkspace
 from backend.app.storage.source_storage import LocalSourceStorage
@@ -25,6 +29,24 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PRODUCT_SOURCE_DIRECTORY = PROJECT_ROOT / "storage" / "originals"
 PRODUCT_TEMPORARY_DIRECTORY = PROJECT_ROOT / "temporary"
 PROJECT_RENDER_OUTPUT_DIRECTORY = PROJECT_ROOT / "outputs" / "projects"
+logger = logging.getLogger("cutory.render_events")
+
+
+def create_render_event_dispatcher(persistence_enabled: bool) -> RenderEventDispatcher | None:
+    """n8n follow-up delivery; disabled unless both webhook variables are set (codes only in logs)."""
+    try:
+        settings = RenderEventSettings.from_environment()
+    except RenderEventConfigError as error:
+        logger.warning("render events disabled: %s", error.code)
+        return None
+    if settings is None:
+        return None
+    if not persistence_enabled:
+        logger.warning("render events disabled: RENDER_EVENT_REQUIRES_PERSISTENCE")
+        return None
+    # Resolved at startup: launchers may repoint PRODUCT_TEMPORARY_DIRECTORY to a data root (Git-ignored).
+    default_log = PRODUCT_TEMPORARY_DIRECTORY / "render-events" / "deliveries.jsonl"
+    return RenderEventDispatcher(settings, log_path=settings.log_path or default_log)
 
 
 @asynccontextmanager
@@ -48,6 +70,7 @@ async def lifespan(application: FastAPI):
 
     load_environment()
     database_engine = None
+    render_event_dispatcher = None
     try:
         settings = DatabaseSettings.from_environment()
     except DatabaseConfigError:
@@ -65,15 +88,22 @@ async def lifespan(application: FastAPI):
             if not {"base_sha256", "srt_sha256", "hard_sha256"} <= render_columns:
                 # QA-03: fail fast instead of 500s on every render status/history query.
                 raise RuntimeError("Render persistence requires the render digest migration (e3a1c9d27b45).")
+            render_event_dispatcher = create_render_event_dispatcher(True)
             application.state.project_render_run_registry = PersistentProjectRenderRunRegistry(
                 project_executor, application.state.project_session_factory,
                 PROJECT_RENDER_OUTPUT_DIRECTORY,
+                on_terminal=render_event_dispatcher.submit if render_event_dispatcher else None,
             )
+        else:
+            create_render_event_dispatcher(False)  # only logs why a configured webhook stays off
+    application.state.render_event_dispatcher = render_event_dispatcher
 
     try:
         yield
     finally:
         await run_in_threadpool(project_executor.shutdown, True)
+        if render_event_dispatcher is not None:
+            await run_in_threadpool(render_event_dispatcher.close)
         if database_engine is not None:
             database_engine.dispose()
 

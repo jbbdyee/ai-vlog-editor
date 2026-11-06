@@ -6,6 +6,7 @@ from concurrent.futures import Executor
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
+import logging
 from pathlib import Path
 from threading import Event, Thread
 from typing import Callable
@@ -21,8 +22,10 @@ from backend.app.services.project_rendering import (
     ProjectRenderError, ProjectRenderResult, _load_segments, plan_snapshot,
 )
 from backend.app.services.render_integrity import OutputIntegrityError, record_output_digest, same_file
+from backend.app.services.render_events import TerminalCallback, event_from_row, terminal_event
 
 
+logger = logging.getLogger("cutory.render_events")
 LEASE_SECONDS = 45
 HEARTBEAT_SECONDS = 5
 ACTIVE = ("QUEUED", "RUNNING")
@@ -88,12 +91,39 @@ class PersistentProjectRenderRunRegistry:
 
     persistent = True
 
-    def __init__(self, executor: Executor, factory: sessionmaker[Session], output_root: Path) -> None:
+    def __init__(self, executor: Executor, factory: sessionmaker[Session], output_root: Path,
+                 on_terminal: TerminalCallback | None = None) -> None:
         self._executor = executor
         self._factory = factory
         self._output_root = Path(output_root)
+        # Follow-up hook (n8n). Called only after a terminal status was committed; never affects the row.
+        self._on_terminal = on_terminal
 
-    def _interrupt_expired(self, session: Session, project_id: UUID) -> None:
+    def _emit(self, build) -> None:
+        if self._on_terminal is None:
+            return
+        try:
+            events = build()
+        except Exception:
+            logger.warning("render_event_build_failed")
+            return
+        for event in events:
+            try:
+                self._on_terminal(event)
+            except Exception as error:
+                logger.warning("render_event_callback_failed event_id=%s error_type=%s",
+                               event.event_id, type(error).__name__)
+
+    def _emit_status(self, project_id: UUID, render_id: UUID, status: str, safe_error_code: str | None,
+                     finished_at: datetime, duration_seconds: float | None = None,
+                     file_size_bytes: int | None = None) -> None:
+        self._emit(lambda: [terminal_event(
+            project_id=project_id, render_id=render_id, status=status, safe_error_code=safe_error_code,
+            finished_at=finished_at, duration_seconds=duration_seconds, file_size_bytes=file_size_bytes)])
+
+    def _interrupt_expired(self, session: Session, project_id: UUID) -> list:
+        """Returns rows moved to RECONCILIATION_REQUIRED; callers emit them after their commit."""
+        reconciliation = []
         now = utcnow()
         expired = session.scalars(select(ProjectRenderRun).where(
             ProjectRenderRun.project_id == project_id,
@@ -115,6 +145,16 @@ class PersistentProjectRenderRunRegistry:
             row.owner_token = None
             row.safe_error_code = "RENDER_RECOVERY_REQUIRED" if partial else "RENDER_WORKER_INTERRUPTED"
             row.interrupted_reason = "LEASE_EXPIRED_OWNER_GONE"
+            if partial and self._on_terminal is not None:
+                try:  # plain data now; emitted by the caller only after its transaction commits
+                    reconciliation.append(event_from_row(row))
+                except Exception:
+                    logger.warning("render_event_build_failed")
+        return reconciliation
+
+    def _emit_events(self, events: list) -> None:
+        if events:
+            self._emit(lambda: events)
 
     @staticmethod
     def _lock_key(project_id: UUID) -> int:
@@ -127,20 +167,23 @@ class PersistentProjectRenderRunRegistry:
             project = session.scalar(select(Project).where(Project.id == project_id).with_for_update())
             if project is None:
                 raise ProjectRenderError("PROJECT_NOT_FOUND", "Project was not found.")
-            self._interrupt_expired(session, project_id)
-            if session.scalar(select(ProjectRenderRun.render_id).where(
-                    ProjectRenderRun.project_id == project_id, ProjectRenderRun.status.in_(ACTIVE))) is not None:
-                return None
-            selection = plan_snapshot(_load_segments(session, project_id))
-            canonical = json.dumps(selection, sort_keys=True, separators=(",", ":"))
-            now = utcnow()
-            session.add(ProjectRenderRun(
-                render_id=render_id, project_id=project_id, status="QUEUED",
-                plan_snapshot=list(selection), plan_fingerprint=sha256(canonical.encode()).hexdigest(),
-                created_at=now,
-                owner_token=token, heartbeat_at=now,
-                lease_expires_at=now + timedelta(seconds=LEASE_SECONDS),
-            ))
+            reconciled = self._interrupt_expired(session, project_id)
+            active = session.scalar(select(ProjectRenderRun.render_id).where(
+                ProjectRenderRun.project_id == project_id, ProjectRenderRun.status.in_(ACTIVE))) is not None
+            if not active:
+                selection = plan_snapshot(_load_segments(session, project_id))
+                canonical = json.dumps(selection, sort_keys=True, separators=(",", ":"))
+                now = utcnow()
+                session.add(ProjectRenderRun(
+                    render_id=render_id, project_id=project_id, status="QUEUED",
+                    plan_snapshot=list(selection), plan_fingerprint=sha256(canonical.encode()).hexdigest(),
+                    created_at=now,
+                    owner_token=token, heartbeat_at=now,
+                    lease_expires_at=now + timedelta(seconds=LEASE_SECONDS),
+                ))
+        self._emit_events(reconciled)  # committed above
+        if active:
+            return None
         stop = Event()
         lock_connection = None
         if self._factory.kw["bind"].dialect.name == "postgresql":
@@ -149,10 +192,13 @@ class PersistentProjectRenderRunRegistry:
                 lock_connection.execute(select(func.pg_advisory_lock(self._lock_key(project_id))))
             except Exception:
                 lock_connection.close()
+                finished = utcnow()
                 with self._factory.begin() as session:
-                    session.execute(update(ProjectRenderRun).where(ProjectRenderRun.render_id == render_id)
-                                    .values(status="FAILED", finished_at=utcnow(), owner_token=None,
-                                            safe_error_code="RENDER_START_FAILED"))
+                    count = session.execute(update(ProjectRenderRun).where(ProjectRenderRun.render_id == render_id)
+                                            .values(status="FAILED", finished_at=finished, owner_token=None,
+                                                    safe_error_code="RENDER_START_FAILED")).rowcount
+                if count:
+                    self._emit_status(project_id, render_id, "FAILED", "RENDER_START_FAILED", finished)
                 raise
 
         def heartbeat() -> None:
@@ -239,12 +285,13 @@ class PersistentProjectRenderRunRegistry:
                 if hard_path is not None and not same_file(hard_path, hard_identity):
                     hard_rel = hard_size = hard_sha = None
                     hard_error = "SUBTITLE_OUTPUT_INVALID"
+                finished = utcnow()
                 with self._factory.begin() as session:
                     count = session.execute(update(ProjectRenderRun).where(
                         ProjectRenderRun.render_id == render_id,
                         ProjectRenderRun.owner_token == token,
                         ProjectRenderRun.status == "RUNNING",
-                    ).values(status="COMPLETED", finished_at=utcnow(), owner_token=None,
+                    ).values(status="COMPLETED", finished_at=finished, owner_token=None,
                              base_relpath=relative_output(project_id, render_id, "final.mp4"),
                              base_size_bytes=result.file_size_bytes, duration_seconds=result.duration_seconds,
                              video_codec=result.video_codec, audio_codec=result.audio_codec,
@@ -255,21 +302,29 @@ class PersistentProjectRenderRunRegistry:
                              hard_subtitle_error_code=hard_error)).rowcount
                     if not count:
                         raise RuntimeError("Render ownership was lost before completion.")
+                # Committed: only now may a follow-up event exist. _emit never raises.
+                self._emit_status(project_id, render_id, "COMPLETED", None, finished,
+                                  result.duration_seconds, result.file_size_bytes)
             except Exception as error:
                 code = error.code if isinstance(error, ProjectRenderError) else "PROJECT_RENDER_FAILED"
                 partial = (self._output_root / relative_output(project_id, render_id, "final.mp4")).is_file()
+                status = "RECONCILIATION_REQUIRED" if partial else "FAILED"
+                safe_code = "RENDER_RECOVERY_REQUIRED" if partial else code
+                finished = utcnow()
+                count = 0
                 try:
                     with self._factory.begin() as session:
-                        session.execute(update(ProjectRenderRun).where(
+                        count = session.execute(update(ProjectRenderRun).where(
                             ProjectRenderRun.render_id == render_id,
                             ProjectRenderRun.owner_token == token,
                             ProjectRenderRun.status.in_(ACTIVE),
-                        ).values(status="RECONCILIATION_REQUIRED" if partial else "FAILED",
-                                 finished_at=utcnow(), owner_token=None,
-                                 safe_error_code="RENDER_RECOVERY_REQUIRED" if partial else code))
+                        ).values(status=status, finished_at=finished, owner_token=None,
+                                 safe_error_code=safe_code)).rowcount
                 except Exception:
                     # Leave active row for lease-based interruption; never claim completion.
-                    pass
+                    count = 0
+                if count:
+                    self._emit_status(project_id, render_id, status, safe_code, finished)
             finally:
                 stop.set()
                 if lock_connection is not None:
@@ -288,29 +343,36 @@ class PersistentProjectRenderRunRegistry:
                     lock_connection.execute(select(func.pg_advisory_unlock(self._lock_key(project_id))))
                 finally:
                     lock_connection.close()
+            finished = utcnow()
+            count = 0
             try:
                 with self._factory.begin() as session:
-                    session.execute(update(ProjectRenderRun).where(
+                    count = session.execute(update(ProjectRenderRun).where(
                         ProjectRenderRun.render_id == render_id,
                         ProjectRenderRun.owner_token == token,
                         ProjectRenderRun.status == "QUEUED",
-                    ).values(status="FAILED", finished_at=utcnow(), owner_token=None,
-                             safe_error_code="RENDER_START_FAILED"))
+                    ).values(status="FAILED", finished_at=finished, owner_token=None,
+                             safe_error_code="RENDER_START_FAILED")).rowcount
             except Exception:
-                pass
+                count = 0
+            if count:
+                self._emit_status(project_id, render_id, "FAILED", "RENDER_START_FAILED", finished)
             raise
         return render_id
 
     def snapshot(self, project_id: UUID) -> RenderRunSnapshot:
         with self._factory.begin() as session:
-            self._interrupt_expired(session, project_id)
+            reconciled = self._interrupt_expired(session, project_id)
             row = session.scalar(select(ProjectRenderRun).where(ProjectRenderRun.project_id == project_id)
                                  .order_by(ProjectRenderRun.created_at.desc(), ProjectRenderRun.render_id.desc()).limit(1))
             if row is None:
-                return RenderRunSnapshot(RenderRunStatus.NOT_STARTED)
-            return RenderRunSnapshot(RenderRunStatus(row.status),
-                                     _result(row, self._output_root) if row.status == "COMPLETED" else None,
-                                     row.safe_error_code, row.render_id)
+                snapshot = RenderRunSnapshot(RenderRunStatus.NOT_STARTED)
+            else:
+                snapshot = RenderRunSnapshot(RenderRunStatus(row.status),
+                                             _result(row, self._output_root) if row.status == "COMPLETED" else None,
+                                             row.safe_error_code, row.render_id)
+        self._emit_events(reconciled)
+        return snapshot
 
     def is_active(self, project_id: UUID) -> bool:
         return self.snapshot(project_id).status in {RenderRunStatus.QUEUED, RenderRunStatus.RUNNING}
@@ -329,20 +391,22 @@ class PersistentProjectRenderRunRegistry:
 
     def history(self, project_id: UUID, limit: int = 20, before: UUID | None = None) -> tuple[list[RenderRunSnapshot], UUID | None]:
         with self._factory.begin() as session:
-            self._interrupt_expired(session, project_id)
+            reconciled = self._interrupt_expired(session, project_id)
             query = select(ProjectRenderRun).where(ProjectRenderRun.project_id == project_id)
-            if before is not None:
-                cursor = session.get(ProjectRenderRun, before)
-                if cursor is None or cursor.project_id != project_id:
-                    return [], None
-                query = query.where(or_(ProjectRenderRun.created_at < cursor.created_at,
-                                        and_(ProjectRenderRun.created_at == cursor.created_at,
-                                             ProjectRenderRun.render_id < cursor.render_id)))
-            rows = session.scalars(query.order_by(ProjectRenderRun.created_at.desc(),
-                                                   ProjectRenderRun.render_id.desc()).limit(limit + 1)).all()
-            more = len(rows) > limit
-            rows = rows[:limit]
-            return ([RenderRunSnapshot(RenderRunStatus(row.status),
-                                       _result(row, self._output_root) if row.status == "COMPLETED" else None,
-                                       row.safe_error_code, row.render_id) for row in rows],
-                    rows[-1].render_id if more else None)
+            page: tuple[list[RenderRunSnapshot], UUID | None] = ([], None)
+            cursor = session.get(ProjectRenderRun, before) if before is not None else None
+            if before is None or (cursor is not None and cursor.project_id == project_id):
+                if cursor is not None:
+                    query = query.where(or_(ProjectRenderRun.created_at < cursor.created_at,
+                                            and_(ProjectRenderRun.created_at == cursor.created_at,
+                                                 ProjectRenderRun.render_id < cursor.render_id)))
+                rows = session.scalars(query.order_by(ProjectRenderRun.created_at.desc(),
+                                                       ProjectRenderRun.render_id.desc()).limit(limit + 1)).all()
+                more = len(rows) > limit
+                rows = rows[:limit]
+                page = ([RenderRunSnapshot(RenderRunStatus(row.status),
+                                           _result(row, self._output_root) if row.status == "COMPLETED" else None,
+                                           row.safe_error_code, row.render_id) for row in rows],
+                        rows[-1].render_id if more else None)
+        self._emit_events(reconciled)
+        return page

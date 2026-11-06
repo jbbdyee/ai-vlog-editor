@@ -166,7 +166,7 @@ WEB-08B의 새 영속화 경로는 기존 DB에 `b8c01e2a4f60` 마이그레이�
 
 [WEB-02](docs/handoff/web-02-scene-analysis-validation.md)에서는 장면 분석 실행·상태 조회와 후보·진단 화면을 추가했습니다. 실제 장면 분석은 처리 완료된 격리 QA 프로젝트의 ID를 `WEB02_QA_PROJECT_ID`로 지정한 뒤 `pnpm exec playwright test --config=playwright.real.config.ts web02.spec.ts`로 별도 실행합니다. ID를 지정하지 않으면 실제 분석 테스트는 건너뜁니다. 같은 분석을 불필요하게 반복하지 않도록 보고서의 준비 조건을 먼저 확인하세요. 장면 실행 상태는 서버 프로세스 메모리에서 관리되므로 재시작 후 `NOT_STARTED`로 보일 수 있지만 저장된 후보·진단은 별도로 조회합니다. 위 WEB-01B 단위·브라우저 수치는 당시 기준선이며 최신 결과는 WEB-02 보고서를 따릅니다.
 
-[WEB-03](docs/handoff/web-03-edit-render-validation.md)에서는 순서가 있는 후보 ID의 편집 계획 저장·재조회, 렌더 접수·상태, 두 MP4 다운로드를 연결했습니다. 무효 후보와 미저장 변경사항이 있으면 저장 또는 렌더를 제한합니다. 서버 재시작 뒤 렌더 실행 기록과 다운로드 권한은 복구되지 않으므로 기존 파일 존재만으로 다운로드 가능하다고 표시하지 않습니다. 실제 브라우저 재검증은 처리·분석이 끝난 격리 QA 프로젝트에 `WEB03_QA_PROJECT_ID`를 지정하고 `pnpm exec playwright test --config=playwright.real.config.ts web03.spec.ts`로 실행합니다. 계획 저장·렌더가 DB와 출력 경로에 새 기록을 남기므로 이미 사용한 프로젝트에 임의로 다시 실행하지 마세요. 실제 API에는 SRT 다운로드가 없어 React에도 버튼이 없습니다.
+[WEB-03](docs/handoff/web-03-edit-render-validation.md)에서는 순서가 있는 후보 ID의 편집 계획 저장·재조회, 렌더 접수·상태, 두 MP4 다운로드를 연결했습니다. 무효 후보와 미저장 변경사항이 있으면 저장 또는 렌더를 제한합니다. 서버 재시작 뒤 렌더 실행 기록과 다운로드 권한은 복구되지 않으므로 기존 파일 존재만으로 다운로드 가능하다고 표시하지 않습니다. 실제 브라우저 재검증은 처리·분석이 끝난 격리 QA 프로젝트에 `WEB03_QA_PROJECT_ID`를 지정하고 `pnpm exec playwright test --config=playwright.real.config.ts web03.spec.ts`로 실행합니다. 계획 저장·렌더가 DB와 출력 경로에 새 기록을 남기므로 이미 사용한 프로젝트에 임의로 다시 실행하지 마세요. 당시 실제 API에는 SRT 다운로드가 없어 React에도 버튼이 없었습니다(2026-11-05 SRT 다운로드 추가, 아래 참고).
 
 [WEB-04](docs/handoff/web-04-react-e2e-validation.md)에서는 두 실제 원본의 신규 프로젝트 생성부터 두 MP4 다운로드까지 전용 Chrome·FastAPI·PostgreSQL 환경에서 검증했습니다. `web/e2e-real/web04.spec.ts`는 새 QA 프로젝트를 만들고 원본 복사본·DB 기록·렌더 파일을 남기므로 일상 회귀 명령에 포함하지 않습니다. 재실행 전 기존 프로젝트·출력 공간을 확인하세요. Windows에서 하드 자막을 켜려면 API를 **이미 Docker Desktop CLI와 엔진에 접근 가능한 로컬 사용자 세션**에서 실행하고, 같은 세션에서 `docker version`과 코드에 고정된 이미지의 로컬 존재 여부를 확인한 뒤 글꼴 해시가 일치하는 파일만 `CUTORY_SUBTITLE_FONT_PATH`에 지정합니다. FFmpeg·FFprobe와 Docker CLI 실행 경로는 해당 API 프로세스의 `PATH`에만 추가하며 `.env`, 시스템 PATH, Docker 권한이나 소켓 설정을 임의로 바꾸지 않습니다. 접근이 거부되면 기본 MP4만 성공할 수 있으므로 상태 API의 `hard_subtitle_status`를 확인하세요. 인증·사용자 소유권 검증이 없어 외부 공개 배포는 금지합니다.
 
@@ -271,7 +271,7 @@ MVP-05C는 Streamlit 프로젝트 화면에서 **저장된** 편집 계획으로
 
 MVP-06B는 저장된 Transcript의 segment/word 시각과 순서가 있는 SceneCandidate 구간에서 한국어 SRT 문자열을 생성하는 **순수 로직**을 추가했다. 선택 구간만 포함하고 클립 길이를 누적한 계획상 시간축을 사용한다. 렌더링된 MP4의 실제 PTS/길이와 동기화하거나 자막을 영상에 삽입하는 기능은 아직 없다. 현재 저장형 편집 계획은 동일 Candidate의 중복 선택을 허용하지 않지만 자막 매핑 함수는 반복 입력을 처리할 수 있다.
 
-MVP-06C-1은 자막이 있는 렌더에서 병합 영상 필터와 동일한 30fps 정규화 조건으로 클립별 영상 시간축을 측정하고, 그 실제 길이를 반영한 `final.srt`를 MP4 옆에 보관한다. 요청 구간과 출력 길이의 차이는 클립 안에서 비례 매핑하며, 최종 영상 길이와 측정값이 맞지 않거나 SRT 생성이 실패하면 **MP4는 유지하고 SRT는 생략**한다. 기존 MP4 다운로드 API는 변경하지 않았으며 SRT 다운로드·영상 내 자막 삽입은 아직 없다.
+MVP-06C-1은 자막이 있는 렌더에서 병합 영상 필터와 동일한 30fps 정규화 조건으로 클립별 영상 시간축을 측정하고, 그 실제 길이를 반영한 `final.srt`를 MP4 옆에 보관한다. 요청 구간과 출력 길이의 차이는 클립 안에서 비례 매핑하며, 최종 영상 길이와 측정값이 맞지 않거나 SRT 생성이 실패하면 **MP4는 유지하고 SRT는 생략**한다. 기존 MP4 다운로드 API는 변경하지 않았으며 당시에는 SRT 다운로드·영상 내 자막 삽입이 없었다. 2026-11-05 P1에서 무결성 검증된 SRT 다운로드 API `GET /projects/{id}/renders/{render_hex}/subtitles/download`와 React ‘자막(SRT) 다운로드’ 버튼을 추가했고, 같은 날 8000에 반영해 실제 Chrome 클릭 다운로드(`final.srt`, SHA-256 = DB = ETag)를 확인했다. [P1 SRT 다운로드 기록](docs/handoff/p1-srt-download-2026-11-05.md)을 참고한다.
 
 End-to-End Pipeline은 선택 Window를 자동 판단하지 않는다. 호출자가 `FixedWindowSceneSelector(window_seconds=...)`처럼 선택 전략과 값을 명시해야 하며, Ground Truth와 Evaluator는 사용자 실행 경로에 포함하지 않는다.
 

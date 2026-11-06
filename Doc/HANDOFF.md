@@ -1,12 +1,12 @@
 # Cutory 현재 인수인계
 
-> 확인일: 2026-11-04. 이 문서는 최신 상태의 진입점이다. 시점별 실행 증거와 오류 경위는 [docs/handoff/](../docs/handoff/)에 보존한다.
+> 확인일: 2026-11-05(10:36 이후). 이 문서는 최신 상태의 진입점이다. 시점별 실행 증거와 오류 경위는 [docs/handoff/](../docs/handoff/)에 보존한다.
 
 ## 저장소와 실행 환경
 
-- 저장소 `main`, HEAD `1a2d7d7`. 2026-11-04 공개 준비 점검 시 미커밋 파일 항목은 158개(수정 23·추적 전 135)이며, 보호 대상 백엔드 테스트 3개를 포함해 사용자 변경을 초기화·덮어쓰지 않는다. GitHub 공개 전 파일별 분류·민감 정보 검토가 필요하다.
+- 저장소 `main`, HEAD `e96652f`(= `origin/main`). 2026-11-04 백업 작업 시점에 작업 트리는 이 문서 갱신 전까지 깨끗했다. 이전에 기록한 미커밋 158개 항목은 커밋 `4a0e797`~`e96652f`로 정리됐고, 보호 대상 백엔드 테스트 3개의 변경도 커밋에 포함됐다.
 - 점검 시 `127.0.0.1:8000/health`와 `127.0.0.1:5173/`은 각각 HTTP 200이었다. Vite는 `/api`를 FastAPI에 프록시한다. PostgreSQL은 localhost 게시 상태를 유지한다. Tailscale Serve 설정은 이번 작업에서 건드리지 않았다.
-- 현재 8000은 `temporary/qa07-recovery/start_server.py`로 기동한 **PID 13384**(`Pro` 계정)이다. 런처는 저장소를 코드·데이터 루트로 쓰고 영속 모드, 번들 FFmpeg, `.env` DB 설정 및 자막 글꼴을 설정한다. **P0 수정은 8000에 반영됐다.** 비밀을 제외한 실행·검증 근거는 아래 2026-11-04 기록을 따른다.
+- 현재 8000은 2026-11-05 10:36 환경 변수 allowlist 적용 `temporary/qa07-recovery/run-8000.ps1`(→ `start_server.py`)로 기동한 **PID 55828**(`Pro` 계정, 2026-11-05 14:31 VLM 상태 복원 반영)이다(이전 13384 → 45336 → 38684 → 49648 → 55828). 에이전트 세션 변수·메시징 토큰은 없다(P0-6 완료). 정지는 `stop_server.py`(Ctrl+C 무시 시 Ctrl+Break). 런처는 저장소를 코드·데이터 루트로 쓰고 영속 모드, 번들 FFmpeg, `.env` DB 설정 및 자막 글꼴을 설정한다. **P0 수정은 8000에 반영됐다.** 비밀을 제외한 실행·검증 근거와 정지·기동 절차는 아래 2026-11-05 기록을 따른다.
 
 ## 구현·검증 상태
 
@@ -21,6 +21,66 @@
 1. 현재 8000의 P0 적용 상태를 유지하고, 필요할 때만 새 실사 렌더와 자막 전체 구간을 격리 검증한다. 합성 영상의 Docker 하드 자막 생성은 확인했다.
 2. 제출 전 실사 데모의 STT/VLM 추천 이유·무음 표시와 캡처를 짧게 확인한다. 불필요한 업로드·DB 쓰기·재렌더를 피한다.
 3. 11월 14일 제출 자료에는 실제 확인한 화면과 제한 범위를 적는다. 사용자 영상·키·로컬 절대경로는 Git에 추가하지 않는다.
+
+## 2026-11-06 n8n HMAC 인증 전환 설계·격리 검증 (구현·적용 안 함)
+
+- Bearer 토큰 대신 `HMAC-SHA256(키, "v1:" + ts + ":" + 원본 본문 바이트)`를 쓴다. 키는 n8n에 읽기 전용으로 마운트한 키 링 파일과 Cutory `.env`에만 둔다.
+- 일회용 probe n8n(2.46.6, 5680, 볼륨 없음, 확인 후 삭제) 결과:
+  - 현재 `fs,path`에서는 `crypto`가 막혀 있고 `crypto,fs,path`면 동작한다.
+  - `rawBody`로 원본 바이트를 받을 수 있다.
+  - JSON을 다시 직렬화하면 바이트가 달라진다(`12.0`→`12`).
+  - 실행 이력에는 서명만 남고 키는 0회다.
+- 시제품(Git 밖) 결과:
+  - Node 하네스 23/23. 거부 17가지 모두 `fs` 쓰기 0회
+  - probe 종단 15/15. 401·200·409, ±310초 거부, ±290초 허용
+  - 허용 오차는 실제로 300초 ± 1초(정수 초 경계)다.
+- 권장: nonce 저장소 없이 시간 창 + 기존 이벤트 ID·내용 비교로 재전송을 막는다. kid 키 링으로 교체한다.
+- 기존 `cutory-n8n`·토큰·자격증명·실행 이력·볼륨·`.env`·8000은 변경하지 않았다.
+- 상세: [HMAC 설계](../docs/handoff/n8n-hmac-design-2026-11-06.md)
+
+## 2026-11-06 n8n 실행 이력 토큰 정리 (8000 미연동)
+
+- 원인(2.46.6 소스): 실행 데이터는 저장 설정과 관계없이 실행 중에 DB에 먼저 쓰이고, 끝나면 삭제 표시 → 정리 작업이 실제 삭제한다(기본: 1시간 대기, 15분 주기).
+- 적용:
+  - 워크플로우: 성공·실패 `none`, 수동·진행 저장 false
+  - compose: `EXECUTIONS_DATA_SAVE_ON_SUCCESS/ERROR=none`, `..._MANUAL_EXECUTIONS/ON_PROGRESS=false`, `HARD_DELETE_BUFFER=0`, `PRUNE_HARD_DELETE_INTERVAL=1`
+  - 계약 테스트 1건 추가(28건 OK)
+- 테스트 토큰을 교체했다(운영 토큰은 미생성, 옛 토큰은 403). 재검증 17/17 통과, 새 토큰이 든 실행 18건은 약 40초 안에 테이블에서 삭제됐고 로그류에는 0회.
+- **남은 것:** SQLite WAL·빈 페이지의 바이트 잔존, 1단계에서 생긴 오류 실행 13건(옛 토큰). 정리 방법은 제안만 했다(미실행).
+- 상세: [보안 정리 기록](../docs/handoff/n8n-security-cleanup-2026-11-06.md)
+
+## 2026-11-06 n8n 1단계 실제 검증 (합성 이벤트, 8000 미연동)
+
+- 격리 compose `deploy/n8n/docker-compose.yml`: n8n **2.46.6** digest 고정(같은 날 `stable`과 동일), 컨테이너 `cutory-n8n` **실행 중**, `127.0.0.1:5678`만, 볼륨 `cutory-n8n-home`, 전용 네트워크. 기존 컨테이너 11개 기동 시각·재시작 횟수 불변, 8000·8001·5173·DB·`.env` 미변경.
+- 소유자 계정 없이 CLI로 테스트 Header Auth 자격증명·워크플로우 import·게시. 실제 HTTP: 인증 실패 403, 정상 200 `recorded`(응답 시점에 파일 존재·바이트 일치), 중복 200 `duplicate`, 같은 ID·다른 본문 409(파일 불변), 검증 실패 400, JSON 아님 422, 기록 실패 500, 8건 동시 → 기록 1개, `docker restart`·컨테이너 재생성 후 중복·충돌·인증 유지. `fs`·`path`·hard link 동작 확인.
+- 오류 수정: task runner 샌드박스에 `process` 전역이 없어 첫 실행이 모두 500 → JS 임시 파일 이름에서 `process.pid` 제거, Node 검사를 샌드박스처럼 바꿈(예전 코드는 이제 검사 실패).
+- **보안 발견**: n8n 실행 이력에 Webhook 헤더가 저장돼 토큰이 평문으로 남는다(성공 실행은 삭제 표시 후 1시간 뒤 실제 삭제, 오류 실행은 14일 보존). 자격증명·로그·Cutory 전송 기록에는 없음. 실제 토큰 사용 전 보존 정책 결정이 필요하다.
+- 상세: [n8n 1단계 기록](../docs/handoff/n8n-live-stage1-2026-11-06.md)
+
+## 2026-11-06 n8n 렌더 완료 자동화 MVP (구현·격리 테스트 완료, 8000 미반영)
+
+- 구현: 렌더 행이 `COMPLETED`·`FAILED`·`RECONCILIATION_REQUIRED`로 **커밋되고 1행이 바뀐 뒤에만** 이벤트를 만든다(`persistent_render_execution.py`의 선택 콜백, 기본 꺼짐). 전송은 별도 스레드의 `httpx` POST(타임아웃 3초, 연결 오류·408·429·5xx만 1·4·15초 간격 최대 3회 재시도). 설정은 `.env`의 `CUTORY_N8N_WEBHOOK_URL`(루프백만)·`CUTORY_N8N_WEBHOOK_TOKEN`(Bearer 헤더)이며 둘 다 비면 꺼진다. 전송 결과는 `temporary/render-events/deliveries.jsonl`에 URL·토큰·본문 없이 남는다. 이벤트 ID `render-<hex>-<status>`는 재전송에도 같다. 재전송 CLI `python -m backend.app.render_event_replay`(기본 목록만, `--send` 시 전송, DB 읽기 전용).
+- n8n 워크플로우(`deploy/n8n/`, import 전): Header Auth → 검증 → 임시 파일+`link`로 원자적 기록 → 디스크 재확인 → 200 `recorded`/`duplicate`, 409 내용 불일치, 400 검증 실패, 500 저장 실패.
+- 검증: 신규 백엔드 27건(SQLite·MockTransport·127.0.0.1 가짜 수신 서버), 백엔드 전체 670건 OK(skip 38: DB 통합 29·QA-01/03 PG 4·symlink 3·하드 자막 Docker 2 — 신규 테스트 skip 0). Node로 Code 노드 로직 17항목 + 8개 프로세스 동시 중복(하나만 `recorded`) 통과, 실제 개발 DB의 완료 렌더 4건 페이로드(읽기 전용 조회)도 검증 통과.
+- 미검증: ~~실제 n8n import·실행~~(1단계에서 확인, 위), 8000 반영 후 실시간 전송, 실제 렌더와 연결된 E2E. 8000·5173·8001·DB·Docker·`.env` 미변경. 상세: [n8n 렌더 이벤트](../docs/handoff/n8n-render-events-design-2026-11-06.md)
+
+## 2026-11-06 정지 스크립트 WinError 6 수정 (구현·격리 검증 완료, 실제 8000 정지 미검증)
+
+- 원인: `stop_server.py`가 자기 프로세스에서 대상 콘솔에 붙었다 떨어지면서(`AttachConsole`→`FreeConsole`), stdin이 NUL/콘솔일 때 표준 핸들이 무효가 되어 이후 `subprocess`가 `WinError 6`로 실패했다. stdin이 파이프인 이전 Bash 실행에서는 재현되지 않았다. 실제 터미널 창에서는 출력 flush 실패(exit 120)도 생긴다.
+- 수정(Git 제외 `temporary/qa07-recovery/stop_server.py`, 사본 `stop_server.py.bak-20261105`): 콘솔 연결·신호·분리를 콘솔 없는 도우미 자식 프로세스로 옮기고, 본 프로세스는 자기 콘솔을 분리하지 않는다. 검사 순서·신호 1회·강제 종료 없음은 유지.
+- 검증: 8099 더미 서버로 8가지 경우(PowerShell 직접·파이프·콘솔 stdin·실제 콘솔·Ctrl+Break 자동·Ctrl+C 거부·콘솔 공유 거부·PID 불일치 거부) 모두 기대대로. 수정 전 사본은 콘솔 stdin에서 WinError 6, 실제 콘솔에서 exit 120. 8000·5173·8001·DB·파일 미변경.
+- 미검증: 실제 8000 정지(운영 중단 금지로 미실행). VLM 분석 진행 여부는 스크립트가 검사하지 않으므로 재시작 전 별도 확인 필요. 상세: [정지 스크립트 WinError 6 수정](../docs/handoff/stop-server-winerror6-2026-11-06.md)
+
+## 2026-11-05 P1 VLM 실행 상태 재시작 후 복원 (완료, 14:31 8000 반영)
+
+- 원인: VLM 실행 상태는 `project_scene_vision.py`의 프로세스 메모리 딕셔너리(`_runs`)에만 있고, 조회 함수는 항목이 없으면 기본값 `NOT_STARTED`를 반환했다. DB의 `VLM_SCENE_CAPTION` 근거는 보지 않았다. 실제 8000에서 실사 데모 후보 8개 모두 화면 설명이 있는데 `/scene-vision`은 `NOT_STARTED`·`total 0`(GET으로 재현).
+- 수정(migration 없음): 메모리 기록이 있으면 그대로(`state_source=PROCESS`), 없으면 DB를 읽기만 해 복원(`state_source=DATABASE`). 활성 후보 전부에 현재 모델 결과가 있으면 `COMPLETED`, 일부면 `PARTIAL`, 없으면 `NOT_STARTED`. 실패 건수·오류 코드는 저장되지 않으므로 복원하지 않는다. POST 시작·화면 코드는 그대로이며, 시작 시 기존 결과는 이미 건너뛴다.
+- 검증: 신규 7건(복원·부분·다른 모델·비활성 후보·재시작 후 시작 시 VLM 미호출·메모리 실패 우선·404/DB 오류 비은폐). 수정 전 코드에서 5건 실패를 확인했다. 백엔드 전체 643건 OK(skip 36). 보호 테스트 3개는 변경하지 않았다. 실제 개발 DB 읽기 전용 트랜잭션에서 실사 데모 `COMPLETED` 8/8, 나머지 13개 `NOT_STARTED`. 전후 행 수(프로젝트 14·후보 58·근거 201·계획 6)·revision `e3a1c9d27b45`·데모 렌더 파일 9개 SHA-256 동일.
+- 8000 반영(승인 1회): 전 프로젝트 14개 처리·장면·렌더·VLM 활성 0, 8000 연결 0, DB 활성 쿼리 0, `-CheckOnly` 통과. `stop_server.py`가 Ctrl+Break 1회로 49648을 정상 종료(로그 ‘Application shutdown complete’)했으나, 종료 **후** 스크립트 자체의 포트 재확인 단계가 콘솔 분리 뒤 PowerShell 하위 프로세스를 만들지 못해 `OSError [WinError 6]`로 끝났다(서버 정지에는 영향 없음, 재시도 안 함). 포트 비어 있음을 직접 확인하고 `run-8000.ps1` 1회 → **PID 55828**, health OK, 중단 약 20초.
+- 반영 후 실제 API(GET): 데모 `COMPLETED`·`gemma3:4b`·total 8·captioned 8·failed 0·`state_source=DATABASE`. 나머지 13개 `NOT_STARTED`(후보 있는 6개 프로젝트는 total 5~17·captioned 0). 응답 필드 이름은 `captioned`(‘processed’ 필드는 없음).
+- 5173 Chrome(`web/e2e-real/vlm-status.spec.ts`, 2건 통과, 비GET 0건, 분석 버튼 미클릭): 데모 ‘gemma3:4b · 분석 8/8’·버튼 활성, 분석 없는 프로젝트는 기존 안내 문구. 데모 캡처만 `temporary/vlm-status-20261105/`(Git 제외).
+- 보존: 재시작 전·후·브라우저 확인 후 DB 17개 테이블 491행 md5, revision `e3a1c9d27b45`, 파일 40개 SHA-256, VLM 근거 8건, 계획 2장면, 렌더 `a0984ae2…` VERIFIED, 두 MP4 다운로드 해시·ETag 동일. 5173(41712)·8001(4052)·PostgreSQL·Ollama 미변경.
+- 후속: `stop_server.py`의 종료 후 포트 확인 단계 오류는 2026-11-06 수정(아래, 실제 8000 정지는 미검증). 실패 건수·오류 코드는 복원되지 않는다. 상세: [VLM 상태 복원 기록](../docs/handoff/p1-vlm-status-restore-2026-11-05.md)
 
 ## 2026-11-03 P0 격리 실행 검증 추가
 
@@ -72,3 +132,58 @@
 - 기존 사용자 프로젝트·DB·렌더와 분리한 Git 제외 `temporary/`의 새 테스트 디렉터리에 2초짜리 색상 화면 H.264/AAC MP4와 UTF-8 한국어 SRT를 만들었다. 기존 글꼴 해시와 Docker 엔진 29.9.2, 고정 LinuxServer FFmpeg 이미지 캐시를 확인한 뒤, 현재 8000과 같은 `Pro` 계정·번들 FFmpeg/Docker PATH에서 제품 코드 `burn_hard_subtitles`를 **한 번** 호출했다. DB 프로젝트·API 렌더 요청은 만들지 않았다.
 - Docker/libass 호출이 성공해 별도 `final-subtitled.mp4`가 생성됐다. FFprobe에서 기본·자막 MP4 모두 2.000초, H.264 영상·AAC 오디오 스트림을 확인했다. 1.0초 프레임을 추출해 ‘안녕하세요, Cutory!’ 한글 자막 표시를 시각적으로 확인했다. 자막 MP4 SHA-256 `c3b4bc3c29044ce81d4185f78a87aa11ca8a6de9dde3d57290b4739652c79f1c`는 PowerShell과 Python의 독립 계산에서 일치했다. 기본 MP4 SHA-256은 `92180c666baebfb7bd9dc432f57cc1bfce4622b4d0b12190708adbde6e223d43`이었다.
 - 검증 후 대상 디렉터리와 그 안의 4개 파일만 확인해 삭제했다. 8000 PID 13384·5173 PID 41712는 계속 수신 중이다. **검증 범위는 합성 입력의 하드 자막 생성 함수·FFprobe·샘플 프레임이며, 실제 촬영 영상의 신규 렌더·API E2E·전체 구간 자막 품질은 미검증**이다. 사용자 DB·원본·기존 렌더, migration·커밋·Push는 변경하지 않았다.
+
+## 2026-11-04 사용자 데이터 백업·격리 복원 검증 (P0)
+
+- 백업 위치: 저장소 밖 `C:\Users\Pro\Documents\Cutory-Backups\backup-20261104-165721\` (1.9 GB, Git 추적 밖·외부 업로드 없음·`.env`/비밀번호 미포함, 복원 절차 `RESTORE.md`).
+- DB: revision `e3a1c9d27b45`의 `pg_dump -Fc` 113,444 B, SHA-256 `684d1171…0d01`, `pg_restore -l` TABLE DATA 17. 당시 프로젝트 14·소스 11·후보 58·편집 계획 6·렌더 COMPLETED 3·VLM 근거 8, 활성 작업·쿼리 0.
+- 파일: `storage/`·`outputs/` 37개 2,031,083,308 B(원본 11, 렌더 MP4 9, 하드 자막 MP4 8, SRT 9)를 SHA-256 매니페스트와 함께 복사하고 복사본 해시 일치를 확인했다. DB 교차 확인에서 소스 11/11 지문 일치, 렌더 기록 3건의 세 파일 모두 경로·크기·SHA-256 일치.
+- 격리 복원(55432 새 DB): 성공, revision 동일, 17개 테이블 490행의 전체 컬럼 md5 일치, 제약조건 85/85·인덱스 47/47. 사용자 데이터 사본이므로 검증 후 복원 DB를 삭제했다.
+- 운영 DB·원본·렌더 변경 없음, 8000(PID 13384)·5173(PID 41712) 유지. Docker 접근은 `Pro` 계정에서 정상이었고 우회하지 않았다. 상세: [백업·복원 기록](../docs/handoff/backup-restore-2026-11-04.md).
+- 남은 작업: 신규 렌더·분석 뒤 재백업, 외부 매체 보관 여부 결정, 55432에 남은 과거 검증용 복원 DB 8개(일부 사용자 데이터 사본) 정리 승인.
+
+## 2026-11-04 현재 8000의 실사 데모 신규 렌더 E2E (P0)
+
+- 대상 `4e096f2d-0793-473f-a7ce-c1981eed124c`, 기존 VLM 근거 8건·저장 계획(장면 2개, 6.74 s) 재사용. 사전 확인: 백업·restore-check 정상, 8000 PID 13384(PATH에 번들 FFmpeg·Docker CLI), 5173 PID 41712, revision `e3a1c9d27b45`, Ollama·Docker 29.9.2, 활성 작업 0.
+- `POST /render` **1회** → COMPLETED(7.2 s), 렌더 ID `a0984ae2-6675-417b-8866-4283179cca04`. MP4 944,150 B·SRT 153 B·하드 자막 MP4 982,536 B의 경로·크기·SHA-256이 DB와 일치, 무결성 VERIFIED. 두 MP4 API 다운로드 해시 = DB = ETag. 길이 6.767 s(계획 +0.027 s), 장면 순서는 원본 프레임 비교로 일치, 하드 자막 프레임의 한국어 2개 큐 육안 확인.
+- 변화는 `project_render_runs` 1행과 렌더 파일 3개뿐(오전 백업과 비교해 기존 데이터 동일). 증분 백업 `Cutory-Backups\backup-20261104-171428-after-render-a0984ae2`: 전체 DB 덤프(`2d8f4194…`) + 신규 파일 3개, 격리 복원본 491행 md5 일치.
+- 미검증: 서버 재시작 후 영속성(별도 P0), 자막 전체 품질(STT 오인식 "대박→대단"이 자막에 반영), SRT 다운로드 경로 없음, React 클릭 경로의 렌더. 상세: [렌더 E2E 기록](../docs/handoff/render-e2e-8000-2026-11-04.md).
+
+## 2026-11-05 8000 계획 재시작 후 영속성 검증·실행 절차 (P0-5)
+
+- 사전 점검 통과: 증분 백업 덤프 해시·restore-check, 파일 40개 = 백업 매니페스트, 기존 PID 13384의 계정·명령·작업 디렉터리·환경 변수 이름·PATH(번들 FFmpeg·Docker CLI), 글꼴 해시, Docker 29.9.2·고정 자막 이미지, Ollama `gemma3:4b`, revision `e3a1c9d27b45`, 활성 작업·DB 쿼리·8000 연결 0건.
+- `stop_server.py`로 해당 콘솔에만 Ctrl+C를 보내 정상 종료하고 `run-8000.ps1`로 **1회** 기동: **새 PID 45336**, 중단 약 12초, 재시도 없음. 새 프로세스의 계정·명령·CUTORY/POSTGRES/OLLAMA 값·PATH·로캘이 이전과 같다.
+- 재시작 후 렌더 `a0984ae2…` COMPLETED·세 파일 VERIFIED, 두 MP4 다운로드 SHA-256·ETag가 재시작 전과 동일, VLM 근거 8건·편집 계획 2장면 동일, DB 17개 테이블 491행 md5·revision·파일 40개 해시가 재시작 전과 동일하다. 5173(41712)·8001(4052)·격리 DB 8개 유지.
+- 한계: `/scene-vision` 실행 상태는 메모리라 `NOT_STARTED`로 초기화(저장 근거는 유지). 새 프로세스가 기동 셸의 에이전트 세션 변수(토큰 포함, 값 미기록)를 상속했다. 이후 기동에서 제외하도록 스크립트를 고쳤지만 실제 기동으로는 미검증. 재부팅 직후 기동, 자동 시작 등록은 미실행.
+- 절차와 해시: [재시작·영속성 기록](../docs/handoff/restart-persistence-8000-2026-11-05.md). 스크립트는 Git 제외 `temporary/qa07-recovery/`에 있다.
+
+## 2026-11-05 환경 변수 allowlist·세션 토큰 상속 수정 (P0-6, 10:13 시점 미해결 → 10:36 완료)
+
+- 원인: `Start-Process`가 호출 셸의 환경 전체를 복사해 45336이 Claude Code 세션 변수 16개(토큰·소켓 포함)를 상속했다. 이름 패턴 denylist는 다른 세션 변수를 놓치는 구조였다.
+- 수정: `run-8000.ps1`을 표준 Windows 변수 33개 + 재구성 PATH + C.UTF-8 로캘만 남기는 allowlist로 바꾸고, 남은 이름 검사 실패 시 기동을 거부한다. 앱 설정은 런처 인자와 `.env`에서만 온다. **구현·격리 검증 완료:** `-EnvProbe`로 같은 기동 경로의 자식이 이름 37개만 받고 금지 패턴 0건, FFmpeg·Docker·DB(읽기 전용)·Ollama 목록·글꼴 10/10 통과. 가짜 토큰·POSTGRES 값 주입도 제거됐다.
+- 재시작 시도 실패: 10:11 Ctrl+C 정지 요청에 45336이 반응하지 않았다. Claude Code 셸에서 띄운 프로세스는 Ctrl+C 무시 플래그(ConsoleFlags bit0)를 상속하기 때문이다(13384는 Codex 기동이라 0). 8000은 계속 동작하며 health·렌더 VERIFIED·다운로드 해시·DB/파일 스냅숏이 시도 전과 동일하다. 재시도하지 않았다.
+- 정지 도우미를 Ctrl+C 무시 대상에 Ctrl+Break를 1회 보내도록 고치고, 같은 조건의 격리 더미 서버(8099)에서 정상 종료를 확인했다. 8000에는 아직 적용하지 않았다.
+- 남은 일: 승인 후 8000 1회 교체와 세션 변수 부재 확인. 상세: [allowlist 기록](../docs/handoff/env-allowlist-8000-2026-11-05.md).
+
+## 2026-11-05 P0-6 실제 8000 교체 (완료)
+
+- 사전 점검(health·활성 작업 0·연결 0·백업 해시·restore-check·파일 40개 = 매니페스트·`-CheckOnly`·`-EnvProbe` 10/10·Ctrl+Break 대상 확인)을 모두 통과한 뒤 `stop_server.py`로 PID 45336에 Ctrl+Break **1회** → 정상 종료·포트 해제, `run-8000.ps1` **1회** → **새 PID 38684**, health 200(중단 약 9초).
+- 38684 환경 변수 53개(이름만 확인)에 Claude Code·Codex·에이전트 세션 변수와 메시징 토큰 이름 0건. DB·Ollama·FFmpeg·Docker·글꼴 설정은 이전과 동일.
+- revision `e3a1c9d27b45`, 렌더 `a0984ae2…` COMPLETED·VERIFIED, 두 MP4 다운로드 SHA-256·ETag, VLM 근거 8건·계획 2장면, DB 17개 테이블 491행·파일 40개가 교체 전과 동일.
+- 5173(41712): Claude Code 변수·토큰 없음, Codex 세션 변수 17개·`GIT_CONFIG_*` 상속(변경하지 않음). 38684·41712 모두 Ctrl+C 무시 → 정지는 Ctrl+Break(신호 미전송, 플래그만 확인).
+- 미검증: 재부팅 직후 기동, 자동 시작. 상세·절차: [allowlist 기록](../docs/handoff/env-allowlist-8000-2026-11-05.md).
+
+## 2026-11-05 P1 SRT 다운로드 (구현·테스트 완료 → 11:05 8000 반영, 아래)
+
+- API `GET /projects/{id}/renders/{render_hex}/subtitles/download`: 기존 MP4 다운로드와 같은 렌더 ID·프로젝트·완료 상태·허용 경로·SHA-256 검증과 검증된 핸들 응답(ETag `"sha256-…"`)을 재사용. `application/x-subrip; charset=utf-8`, attachment `<render_hex>.srt`. 누락 404 `SUBTITLE_FILE_NOT_FOUND`, 변조 409 `SUBTITLE_FILE_CORRUPT`, 해시 없음 409 `SUBTITLE_FILE_UNVERIFIED`, 미완료 409. 상태·기록 응답에 `subtitle_download_available`·`subtitle_download_url` 추가. 기존 MP4·하드 자막 경로·응답 변경 없음. migration 없음.
+- React 결과 영역에 ‘자막(SRT) 다운로드’ 버튼. 완료·검증된 SRT URL이 기대 경로와 같을 때만 활성, 이전 서버(필드 없음)에서는 비활성.
+- 테스트: 백엔드 신규 9건, 전체 636건 OK(skip 36), `tests/` 72건, React 신규 3건·전체 58건, `tsc` 통과. 실제 개발 DB를 읽기 전용 세션으로 연 인프로세스 새 코드에서 실사 데모의 기존 렌더 3건 SRT 다운로드 해시 = DB = 디스크 = ETag, 같은 렌더의 MP4 해시도 일치. 검증 전후 DB·파일 무변경.
+- 미검증: 실행 중 8000(PID 38684)은 이전 코드라 새 경로가 없고, 5173의 버튼은 비활성으로 보인다. 8000 교체(승인 필요) 후 실제 API·브라우저 클릭을 확인해야 완료다. 상세: [P1 SRT 다운로드 기록](../docs/handoff/p1-srt-download-2026-11-05.md).
+
+## 2026-11-05 SRT 다운로드 8000 반영·실제 UI 검증 (완료)
+
+- 사전 점검: 38684·5173 정상, 활성 작업 0·연결 0, 백업 덤프 해시·restore-check, 파일 40개 = 매니페스트, `-CheckOnly`·`-EnvProbe`(이름 37·금지 0) 통과, 신규 테스트 통과, Git 작업 트리 기록(변경 없이 보존). 반영 전 8000은 새 경로에 422(미반영 확인).
+- `stop_server.py` Ctrl+Break 1회 → 38684 정상 종료, `run-8000.ps1` 1회 → **PID 49648**, 중단 약 9초. 새 프로세스 환경 이름 53개, 세션 변수·토큰 이름 0건.
+- 실제 API(GET만): 실사 데모 COMPLETED 렌더 3건 SRT 200 `application/x-subrip; charset=utf-8`, 본문 SHA-256 = DB `srt_sha256`, ETag 일치, Range 206. 없는 렌더 404 `RENDER_NOT_FOUND`, 잘못된 ID 422, 없는 프로젝트 404. 같은 렌더의 MP4·하드 자막 MP4 200·해시·ETag 일치.
+- 5173 Chrome(`web/e2e-real/srt-download.spec.ts`, 2건 통과): ‘자막(SRT) 다운로드’ 활성 → 클릭 시 `final.srt` 다운로드 시작, 해시 `d3cbde5f…ac5b` = ETag. 일반 MP4(`7cff1dae…`)·하드 자막 MP4(`5ab71461…`) 버튼 다운로드 해시 = ETag. 브라우저 측 응답 변형으로 이전 서버 형태 → 버튼 비활성, 409 `SUBTITLE_FILE_CORRUPT` → 차단 문구 표시. 테스트 중 비GET API 요청 0건.
+- 재시작 전후·브라우저 검증 후 revision `e3a1c9d27b45`, DB 17개 테이블 491행 md5, 파일 40개 SHA-256, 렌더·VLM·계획 API 응답 동일. 5173(41712)·8001(4052) 유지. 실제 파일 변조·삭제 오류 시나리오는 실데이터에서 만들지 않았다(단위 테스트로만 검증).

@@ -24,6 +24,9 @@ export interface RenderStatus {
   integrity_status?: IntegrityStatus | null;
   subtitle_integrity_status?: IntegrityStatus | null;
   hard_subtitle_integrity_status?: IntegrityStatus | null;
+  /** P1 SRT download. Optional: older API servers omit these fields (button stays disabled). */
+  subtitle_download_available?: boolean;
+  subtitle_download_url?: string | null;
 }
 
 export type IntegrityStatus = "VERIFIED" | "MISSING" | "CORRUPT" | "UNVERIFIED";
@@ -52,9 +55,9 @@ export function renderFileProblem(status: RenderStatus): { short: string; detail
 }
 
 const subtitleIntegrityNotes: Partial<Record<IntegrityStatus, string>> = {
-  CORRUPT: "SRT 파일이 렌더 완료 때와 다릅니다(진단 표시만, SRT 다운로드는 제공하지 않음).",
-  MISSING: "SRT 파일을 찾을 수 없습니다(진단 표시만).",
-  UNVERIFIED: "SRT 무결성 기록이 없습니다(진단 표시만).",
+  CORRUPT: "SRT 파일이 렌더 완료 때와 다릅니다. 자막(SRT) 다운로드를 차단했습니다.",
+  MISSING: "SRT 파일을 찾을 수 없어 자막(SRT)을 다운로드할 수 없습니다.",
+  UNVERIFIED: "SRT 무결성 기록이 없어 자막(SRT) 다운로드를 제공하지 않습니다.",
 };
 
 export function subtitleIntegrityNote(status: RenderStatus): string | null {
@@ -66,6 +69,9 @@ const downloadErrorMessages: Record<string, string> = {
   RENDER_FILE_UNVERIFIED: "무결성 기록이 없는 과거 렌더라 다운로드를 제공하지 않습니다.",
   SUBTITLED_RENDER_CORRUPT: "자막 MP4 파일이 렌더 완료 때와 달라 다운로드를 차단했습니다.",
   SUBTITLED_RENDER_UNVERIFIED: "무결성 기록이 없는 자막 MP4라 다운로드를 제공하지 않습니다.",
+  SUBTITLE_FILE_CORRUPT: "SRT 파일이 렌더 완료 때와 달라 다운로드를 차단했습니다.",
+  SUBTITLE_FILE_UNVERIFIED: "무결성 기록이 없는 SRT라 다운로드를 제공하지 않습니다.",
+  SUBTITLE_FILE_NOT_FOUND: "SRT 파일을 찾을 수 없어 다운로드할 수 없습니다.",
 };
 
 export interface RenderHistory {
@@ -143,28 +149,35 @@ export async function startRendering(id: string): Promise<void> {
   if (!value || value.project_id !== id || value.accepted !== true) throw new ApiError("렌더 접수 응답을 확인할 수 없습니다.");
 }
 
-export type DownloadKind = "plain" | "subtitled";
+export type DownloadKind = "plain" | "subtitled" | "srt";
+
+const downloadSuffix: Record<DownloadKind, string> = { plain: "download", subtitled: "subtitled/download", srt: "subtitles/download" };
 
 export function downloadPath(status: RenderStatus, projectId: string, kind: DownloadKind): string | null {
   if (status.project_id !== projectId || status.status !== "COMPLETED" || !status.succeeded || !status.render_id) return null;
   const hex = status.render_id.replaceAll("-", "").toLowerCase();
   if (!/^[0-9a-f]{32}$/.test(hex)) return null;
-  const expected = `/projects/${projectId}/renders/${hex}/${kind === "plain" ? "download" : "subtitled/download"}`;
-  const available = kind === "plain" ? status.download_available : status.hard_subtitle_download_available;
-  const url = kind === "plain" ? status.output?.download_url : status.hard_subtitle_download_url;
+  const expected = `/projects/${projectId}/renders/${hex}/${downloadSuffix[kind]}`;
+  const available = kind === "plain" ? status.download_available
+    : kind === "subtitled" ? status.hard_subtitle_download_available : status.subtitle_download_available === true;
+  const url = kind === "plain" ? status.output?.download_url
+    : kind === "subtitled" ? status.hard_subtitle_download_url : status.subtitle_download_url;
   return available && url === expected ? expected : null;
 }
 
-export async function fetchRenderFile(path: string): Promise<Blob> {
+/** Downloads one render file; the response type must match the requested kind (MP4 or SRT). */
+export async function fetchRenderFile(path: string, kind: DownloadKind = path.endsWith("/subtitles/download") ? "srt" : "plain"): Promise<Blob> {
   let response: Response;
   try { response = await fetch(`/api${path}`); }
   catch { throw new ApiError("다운로드 중 서버에 연결할 수 없습니다."); }
   if (!response.ok) {
     let code: string | null = null;
     try { const body = await response.json() as { detail?: { code?: string } }; code = body.detail?.code ?? null; } catch { /* Body may not be JSON. */ }
-    throw new ApiError(downloadErrorMessages[code ?? ""] ?? "영상 다운로드에 실패했습니다. 렌더 상태를 다시 확인해 주세요.", response.status, code);
+    const fallback = kind === "srt" ? "자막(SRT) 다운로드에 실패했습니다. 렌더 상태를 다시 확인해 주세요." : "영상 다운로드에 실패했습니다. 렌더 상태를 다시 확인해 주세요.";
+    throw new ApiError(downloadErrorMessages[code ?? ""] ?? fallback, response.status, code);
   }
-  if (response.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "video/mp4") throw new ApiError("다운로드 응답이 MP4가 아닙니다.");
+  const type = response.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
+  if (kind === "srt" ? type !== "application/x-subrip" : type !== "video/mp4") throw new ApiError(kind === "srt" ? "다운로드 응답이 SRT 자막 파일이 아닙니다." : "다운로드 응답이 MP4가 아닙니다.");
   const blob = await response.blob();
   if (!blob.size) throw new ApiError("다운로드 파일이 비어 있습니다.");
   return blob;

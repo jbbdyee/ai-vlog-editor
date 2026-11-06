@@ -249,6 +249,9 @@ class ProjectRenderingStatusResponse(BaseModel):
     integrity_status: IntegrityStatus | None = None
     subtitle_integrity_status: IntegrityStatus | None = None
     hard_subtitle_integrity_status: IntegrityStatus | None = None
+    # P1 SRT download: offered only for a completed render whose SRT matches its recorded SHA-256.
+    subtitle_download_available: bool = False
+    subtitle_download_url: str | None = None
 
 
 class ProjectRenderHistoryResponse(BaseModel):
@@ -463,6 +466,7 @@ class SceneVisionStatusResponse(BaseModel):
     skipped: int
     failed: int
     error_codes: list[str]
+    state_source: str = "PROCESS"
 
 
 @router.post("/{project_id}/scene-vision", response_model=SceneVisionStatusResponse, status_code=202)
@@ -477,7 +481,8 @@ async def start_project_scene_vision(request: Request, project_id: UUID) -> Scen
 @router.get("/{project_id}/scene-vision", response_model=SceneVisionStatusResponse)
 async def get_project_scene_vision(request: Request, project_id: UUID) -> SceneVisionStatusResponse:
     await _snapshot_or_404(request, project_id)
-    return SceneVisionStatusResponse(project_id=project_id, **{k: v for k, v in vision_status(project_id).items() if k != "latency_seconds"})
+    state = await run_in_threadpool(vision_status, project_id, _session_factory(request))
+    return SceneVisionStatusResponse(project_id=project_id, **{k: v for k, v in state.items() if k != "latency_seconds"})
 
 
 @router.post("/{project_id}/edit-suggestions", response_model=EditSuggestionResponse)
@@ -587,6 +592,8 @@ def _render_status_response(request: Request, project_id: UUID, snapshot) -> Pro
     srt_integrity = None
     if result is not None and result.subtitle_path is not None and not result.subtitle_error_code:
         srt_integrity = _verify_srt_file(request, project_id, result).status
+    # The SRT is generated independently of the MP4 encode, so it is offered on its own verification.
+    srt_available = (snapshot.status is RenderRunStatus.COMPLETED and srt_integrity is IntegrityStatus.VERIFIED)
     hard_integrity = None
     # Current dependency contract: the subtitled MP4 is offered only with a verified base MP4.
     if (result is not None and available and result.hard_subtitle_path is not None
@@ -631,6 +638,9 @@ def _render_status_response(request: Request, project_id: UUID, snapshot) -> Pro
         integrity_status=base_integrity,
         subtitle_integrity_status=srt_integrity,
         hard_subtitle_integrity_status=hard_integrity,
+        subtitle_download_available=srt_available,
+        subtitle_download_url=(f"/projects/{project_id}/renders/{result.render_id.hex}/subtitles/download"
+                               if srt_available else None),
     )
 
 
@@ -704,6 +714,32 @@ async def download_project_subtitled_render(request: Request, project_id: UUID, 
                                 content_disposition_type="attachment")
 
 
+def _srt_integrity_error(status: IntegrityStatus) -> HTTPException:
+    if status is IntegrityStatus.CORRUPT:
+        return HTTPException(status_code=409, detail={"code": "SUBTITLE_FILE_CORRUPT",
+                                                      "message": "Subtitle file content does not match its recorded digest."})
+    if status is IntegrityStatus.UNVERIFIED:
+        return HTTPException(status_code=409, detail={"code": "SUBTITLE_FILE_UNVERIFIED",
+                                                      "message": "Subtitle file has no recorded digest and is not served."})
+    return HTTPException(status_code=404, detail={"code": "SUBTITLE_FILE_NOT_FOUND", "message": "Subtitle file is unavailable."})
+
+
+# Registered before the generic "{render_id:path}/download" route, which would otherwise capture this path.
+@router.get("/{project_id}/renders/{render_id:path}/subtitles/download", response_class=FileResponse)
+async def download_project_render_subtitles(request: Request, project_id: UUID, render_id: str) -> FileResponse:
+    if _RENDER_ID_PATTERN.fullmatch(render_id) is None:
+        raise HTTPException(status_code=422, detail={"code": "INVALID_RENDER_ID", "message": "Render ID must be a lowercase 32-character hex value."})
+    await _snapshot_or_404(request, project_id)
+    result = _completed_result_or_error(request, project_id, render_id)
+    if result.subtitle_path is None or result.subtitle_error_code:
+        raise _srt_integrity_error(IntegrityStatus.MISSING)
+    srt = await run_in_threadpool(_verify_srt_file, request, project_id, result, True)
+    if srt.status is not IntegrityStatus.VERIFIED:
+        raise _srt_integrity_error(srt.status)
+    return VerifiedFileResponse(srt, media_type="application/x-subrip; charset=utf-8", filename=f"{render_id}.srt",
+                                content_disposition_type="attachment")
+
+
 @router.get("/{project_id}/renders/{render_id:path}/download", response_class=FileResponse)
 async def download_project_render(request: Request, project_id: UUID, render_id: str) -> FileResponse:
     if _RENDER_ID_PATTERN.fullmatch(render_id) is None:
@@ -751,9 +787,10 @@ def _verify_hard_file(request: Request, project_id: UUID, result: ProjectRenderR
     return verify_file(path, result.hard_subtitle_size_bytes, result.hard_subtitle_sha256, keep_open=keep_open)
 
 
-def _verify_srt_file(request: Request, project_id: UUID, result: ProjectRenderResult) -> VerifiedFile:
+def _verify_srt_file(request: Request, project_id: UUID, result: ProjectRenderResult,
+                     keep_open: bool = False) -> VerifiedFile:
     path = _render_output_path(request, project_id, result, "final.srt", result.subtitle_path)
-    return verify_file(path, result.subtitle_size_bytes, result.subtitle_sha256)
+    return verify_file(path, result.subtitle_size_bytes, result.subtitle_sha256, keep_open=keep_open)
 
 
 def _completed_render_file(request: Request, project_id: UUID, result: ProjectRenderResult) -> Path | None:

@@ -1,0 +1,84 @@
+{
+  "name": "Cutory render events (MVP)",
+  "nodes": [
+    {
+      "name": "Render event webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "cutory-render-events",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cutory-render-events",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "name": "Validate and record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Cutory render event → validate, record once (atomic create), verify, then answer the webhook.\n// n8n Code node, \"Run Once for All Items\". Needs NODE_FUNCTION_ALLOW_BUILTIN=fs,path.\n// The webhook node already checked the Authorization header (Header Auth credential).\n// Event ids are stable but NOT trusted alone: a duplicate is accepted only if the stored record is identical.\nconst fs = require('fs');\nconst path = require('path');\n\nconst DIR = '/home/node/.n8n-files/cutory-render-events';\nconst KEYS = ['schema_version', 'event_id', 'event_type', 'project_id', 'render_id', 'status',\n  'safe_error_code', 'finished_at', 'duration_seconds', 'file_size_bytes', 'status_url'];\nconst SUFFIX = { COMPLETED: 'completed', FAILED: 'failed', RECONCILIATION_REQUIRED: 'reconciliation_required' };\nconst UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;\nconst CODE_RE = /^[A-Z0-9_]{1,64}$/;\nconst TIME_RE = /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z$/;\n\nfunction answer(httpStatus, response) {\n  return [{ json: { httpStatus, response } }];\n}\n\nfunction invalidReason(b) {\n  if (!b || typeof b !== 'object' || Array.isArray(b)) return 'BODY_NOT_OBJECT';\n  const keys = Object.keys(b);\n  if (keys.length !== KEYS.length || keys.some((k) => !KEYS.includes(k))) return 'FIELDS';\n  if (b.schema_version !== 1) return 'SCHEMA_VERSION';\n  const suffix = SUFFIX[b.status];\n  if (!suffix) return 'STATUS';\n  if (typeof b.render_id !== 'string' || !UUID_RE.test(b.render_id)) return 'RENDER_ID';\n  if (typeof b.project_id !== 'string' || !UUID_RE.test(b.project_id)) return 'PROJECT_ID';\n  if (b.event_id !== `render-${b.render_id.replace(/-/g, '')}-${suffix}`) return 'EVENT_ID';\n  if (b.event_type !== `render.${suffix}`) return 'EVENT_TYPE';\n  if (typeof b.finished_at !== 'string' || !TIME_RE.test(b.finished_at)) return 'FINISHED_AT';\n  if (b.status_url !== `/projects/${b.project_id}/rendering`) return 'STATUS_URL';\n  if (b.status === 'COMPLETED') {\n    if (b.safe_error_code !== null) return 'SAFE_ERROR_CODE';\n    if (typeof b.duration_seconds !== 'number' || !Number.isFinite(b.duration_seconds) || b.duration_seconds < 0) return 'DURATION';\n    if (!Number.isSafeInteger(b.file_size_bytes) || b.file_size_bytes <= 0) return 'FILE_SIZE';\n  } else {\n    if (typeof b.safe_error_code !== 'string' || !CODE_RE.test(b.safe_error_code)) return 'SAFE_ERROR_CODE';\n    if (b.duration_seconds !== null || b.file_size_bytes !== null) return 'FAILED_WITH_OUTPUT';\n  }\n  return null;\n}\n\nconst items = $input.all();\nif (items.length !== 1) return answer(400, { result: 'invalid', error: 'ITEM_COUNT' });\nconst body = items[0].json.body;\nconst reason = invalidReason(body);\nif (reason) return answer(400, { result: 'invalid', error: reason });\n\n// Canonical record: fixed key order, no receive time, so every duplicate produces the same bytes.\nconst record = JSON.stringify(Object.fromEntries(KEYS.map((k) => [k, body[k]]))) + '\\n';\nconst finalPath = path.join(DIR, `${body.event_id}.json`);\n// n8n 2.x task-runner sandbox has no `process` global; a random name is enough because 'wx' refuses collisions.\nconst rand = () => Math.random().toString(16).slice(2);\nconst tmpPath = path.join(DIR, `.${body.event_id}.${Date.now()}.${rand()}${rand()}.tmp`);\nlet result;\ntry {\n  fs.mkdirSync(DIR, { recursive: true });\n  fs.writeFileSync(tmpPath, record, { flag: 'wx' });\n  try {\n    fs.linkSync(tmpPath, finalPath); // atomic create-if-absent, also under concurrent duplicates\n    result = 'recorded';\n  } catch (error) {\n    if (error.code !== 'EEXIST') throw error;\n    result = 'duplicate';\n  } finally {\n    try { fs.unlinkSync(tmpPath); } catch (ignored) { /* best effort */ }\n  }\n  const stored = fs.readFileSync(finalPath, 'utf8'); // verify what is actually on disk\n  if (stored !== record) {\n    return result === 'duplicate'\n      ? answer(409, { result: 'conflict', error: 'EVENT_CONTENT_MISMATCH', event_id: body.event_id })\n      : answer(500, { result: 'error', error: 'RECORD_VERIFY_FAILED', event_id: body.event_id });\n  }\n} catch (error) {\n  return answer(500, { result: 'error', error: 'RECORD_WRITE_FAILED', event_id: body.event_id });\n}\nreturn answer(200, { result, event_id: body.event_id });\n"
+      }
+    },
+    {
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        520,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.response) }}",
+        "options": {
+          "responseCode": "={{ $json.httpStatus }}"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Render event webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate and record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate and record": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false,
+    "saveExecutionProgress": false
+  },
+  "active": false
+}

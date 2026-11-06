@@ -1,0 +1,44 @@
+# Cutory 렌더 이벤트 수신용 n8n (로컬 전용, 격리 compose 프로젝트)
+# 실행: docker compose -f deploy/n8n/docker-compose.yml up -d
+# - 이미지: n8n 2.46.6 (2026-11-04 stable 태그와 같은 digest)로 고정
+# - 포트: 127.0.0.1:5678 에만 공개 (LAN·Tailscale 공개 금지)
+# - 볼륨: /home/node 전체(설정·SQLite·기록 파일). 이미지의 /home/node 소유자(node)를 그대로 물려받는다.
+# - 비밀값(Webhook 토큰)은 이 파일에 두지 않는다. n8n 자격증명에만 저장된다.
+name: cutory-n8n
+
+services:
+  n8n:
+    image: n8nio/n8n:2.46.6@sha256:8602f5dfacbe2c931eeafd010de0e68182310e9f309921e780ab69182e92b3ae
+    container_name: cutory-n8n
+    restart: "no"
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      GENERIC_TIMEZONE: Asia/Seoul
+      TZ: Asia/Seoul
+      N8N_HOST: 127.0.0.1
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: http
+      N8N_WEBHOOK_URL: http://127.0.0.1:5678/
+      # Code 노드에서 기록 파일을 쓰기 위해 필요한 내장 모듈만 허용
+      NODE_FUNCTION_ALLOW_BUILTIN: fs,path
+      # 외부 통신 최소화
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+      N8N_TEMPLATES_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      # 실행 데이터에는 Webhook 요청 헤더(Authorization 토큰)가 들어간다. 인스턴스 기본값도 저장 안 함으로 둔다.
+      # 2.46.6은 실행 중에 데이터를 쓰고, 끝나면 삭제 표시 → 정리 작업이 실제 삭제한다.
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
+      EXECUTIONS_DATA_SAVE_ON_ERROR: none
+      EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS: "false"
+      EXECUTIONS_DATA_SAVE_ON_PROGRESS: "false"
+      # 삭제 표시된 실행을 기다리지 않고(0시간) 1분마다 실제 삭제
+      EXECUTIONS_DATA_HARD_DELETE_BUFFER: "0"
+      EXECUTIONS_DATA_PRUNE_HARD_DELETE_INTERVAL: "1"
+    volumes:
+      - n8n_home:/home/node
+
+volumes:
+  n8n_home:
+    name: cutory-n8n-home

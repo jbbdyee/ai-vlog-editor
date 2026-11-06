@@ -128,6 +128,9 @@ def _reference(model: str) -> str:
     return f"vlm:{model}:{PRODUCER_VERSION}"
 
 
+caption_reference = _reference  # public alias for status restoration
+
+
 def store_caption(session: Session, candidate: SceneCandidate, result: CaptionResult) -> SceneEvidence:
     """Persist as non-authoritative VISUAL evidence over the candidate's own (Python-owned) interval."""
     payload = {"caption": result.caption.caption, "tags": result.caption.tags, "categories": result.caption.categories,

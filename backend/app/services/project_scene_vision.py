@@ -7,9 +7,13 @@ from dataclasses import asdict, dataclass, field
 from threading import Lock
 from uuid import UUID
 
-from backend.app.models import SceneCandidate, SourceVideo
+from sqlalchemy import distinct, func, select
+
+from backend.app.models import SceneCandidate, SceneEvidence, SourceVideo
 from backend.app.services.project_scene_candidates import list_active_project_candidates
-from backend.app.services.vlm_scene_captioner import VLMCaptionError, caption_interval, existing_caption, store_caption, vlm_model
+from backend.app.services.scene_processing_state import active_candidate_ids
+from backend.app.services.vlm_scene_captioner import (
+    EVIDENCE_TYPE, VLMCaptionError, caption_interval, caption_reference, existing_caption, store_caption, vlm_model)
 
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cutory-vlm")
 _lock = Lock()
@@ -18,7 +22,7 @@ _runs: dict[UUID, "VisionRun"] = {}
 
 @dataclass
 class VisionRun:
-    status: str = "NOT_STARTED"  # QUEUED | RUNNING | COMPLETED | COMPLETED_WITH_WARNINGS | FAILED
+    status: str = "NOT_STARTED"  # QUEUED | RUNNING | COMPLETED | COMPLETED_WITH_WARNINGS | FAILED | PARTIAL (DB only)
     model: str = ""
     total: int = 0
     captioned: int = 0
@@ -26,12 +30,35 @@ class VisionRun:
     failed: int = 0
     error_codes: list[str] = field(default_factory=list)
     latency_seconds: list[float] = field(default_factory=list)
+    state_source: str = "PROCESS"  # PROCESS = this server's run record | DATABASE = restored from stored captions
 
 
-def vision_status(project_id: UUID) -> dict:
+def vision_status(project_id: UUID, session_factory=None) -> dict:
+    """This process's run if any; otherwise (e.g. after a restart) a read-only summary of captions already in the DB."""
     with _lock:
         run = _runs.get(project_id)
-        return asdict(run) if run else asdict(VisionRun())
+        if run:
+            return asdict(run)
+    if session_factory is None:
+        return asdict(VisionRun())
+    with session_factory() as session:
+        return asdict(stored_vision_state(session, project_id))
+
+
+def stored_vision_state(session, project_id: UUID) -> VisionRun:
+    """Counts active candidates that already carry a caption from the current model (same rule start_vision skips on).
+
+    Failure counts and error codes are never persisted, so a partial set is PARTIAL, not COMPLETED_WITH_WARNINGS.
+    """
+    model = vlm_model()
+    active = active_candidate_ids(session, project_id)
+    captioned = session.scalar(select(func.count(distinct(SceneEvidence.scene_candidate_id))).where(
+        SceneEvidence.scene_candidate_id.in_(active), SceneEvidence.evidence_type == EVIDENCE_TYPE,
+        SceneEvidence.source_reference == caption_reference(model))) if active else 0
+    if not captioned:
+        return VisionRun(state_source="DATABASE", total=len(active))
+    status = "COMPLETED" if captioned == len(active) else "PARTIAL"
+    return VisionRun(status=status, model=model, total=len(active), captioned=captioned, state_source="DATABASE")
 
 
 def start_vision(project_id: UUID, session_factory, source_storage, ffmpeg: str = "ffmpeg") -> bool:

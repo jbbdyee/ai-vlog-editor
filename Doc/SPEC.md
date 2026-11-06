@@ -11,9 +11,12 @@
 | 프로젝트 목록·생성, MOV/MP4 업로드, 소스 처리(STT 포함) | 구현 | React·FastAPI·PostgreSQL 실제 영상 제한 검증. 인증·소유권 검증 없음 |
 | 장면 분석, SceneCandidate·Evidence·진단, 원본·후보 미리보기 | 구현 | 실제 Chrome·P1 일부 영상 검증. 후보는 품질 순위나 동결 GT 합격 결과가 아님 |
 | VLM 화면 설명·태그·분류 | 구현 | 로컬 Ollama 모델 경로와 실사 데모의 저장 결과 확인. 설명은 모델 추론이며 정답 아님 |
+| VLM 실행 상태 조회 `GET /projects/{id}/scene-vision` 재시작 후 복원 | 구현·8000 반영(2026-11-05 14:31, PID 55828) | 현재 프로세스의 실행 기록이 있으면 그대로 반환(`state_source=PROCESS`). 없으면(재시작 직후 등) DB를 읽기만 해 활성 후보 중 현재 VLM 모델 결과(`VLM_SCENE_CAPTION`, `vlm:<모델>:v0.2`)가 있는 후보 수를 센다(`state_source=DATABASE`): 전부 `COMPLETED`, 일부 `PARTIAL`, 없음 `NOT_STARTED`. 실패 건수·오류 코드는 DB에 저장되지 않아 복원하지 않는다(`failed=0`). VLM 호출·DB 쓰기·migration 없음. 실제 API·5173 Chrome에서 데모 `COMPLETED` 8/8 확인. [VLM 상태 복원 기록](../docs/handoff/p1-vlm-status-restore-2026-11-05.md) |
 | LLM 자연어 편집 제안 | 구현 | Ollama `gemma3:4b` 사용 사례 확인. STT 대사와 VLM 화면 근거를 구분한다. 음식·동물·풍경 등 지원하는 명시적 화면 조건은 Python이 VLM 설명·태그·분류로 최종 걸러낸다. 화면 근거가 없거나 설명이 불확실하면 빈 제안과 안내를 반환하며, 규칙 기반 fallback에도 같은 검사를 적용한다. 선택·제외·순서·길이 제약과 사용자 적용·저장 계약은 유지한다. |
 | 후보 선택·순서 변경·편집 계획 저장·렌더 전 검토 | 구현 | 실제 DB 읽기·격리 저장 검증. 화면의 예상 길이는 구간 길이 합으로 실제 MP4 길이 보장 아님 |
 | 기본 MP4·SRT·한국어 하드 자막 MP4, 재생·다운로드 | 구현 | 제한된 실제 영상·Chrome 검증. 자막 생성 실패 시 기본 MP4를 보존. 하드 자막은 로컬 글꼴·FFmpeg/Docker 환경에 의존 |
+| SRT 다운로드 `GET /projects/{id}/renders/{render_hex}/subtitles/download` | 구현·8000 반영(2026-11-05 11:05, PID 49648) | 완료 렌더의 SRT가 기록 SHA-256과 일치할 때만 `application/x-subrip; charset=utf-8` attachment·ETag `"sha256-…"`로 제공. 누락 404 `SUBTITLE_FILE_NOT_FOUND`, 변조 409 `SUBTITLE_FILE_CORRUPT`, 해시 없음 409 `SUBTITLE_FILE_UNVERIFIED`, 미완료 409. 상태 응답 `subtitle_download_available`·`subtitle_download_url`. 단위·React 테스트, 실행 중 8000의 실제 렌더 3건 SRT 해시·ETag, 5173 Chrome 버튼 클릭 다운로드 검증. [P1 SRT 다운로드 기록](../docs/handoff/p1-srt-download-2026-11-05.md) |
+| 렌더 종료 이벤트(n8n 후속 처리) | 코드 구현·격리 테스트, n8n 2.46.6 합성 이벤트 검증, 8000 미반영 | 렌더 상태의 기준은 DB. `COMPLETED`·`FAILED`·`RECONCILIATION_REQUIRED` 커밋 후에만 루프백 Webhook으로 POST(Bearer 토큰, 설정 없으면 꺼짐). 실패해도 렌더 결과·API 응답 불변. 페이로드에 경로·이름·자막 없음. 이벤트 ID `render-<render_hex>-<status>` 고정, 수신 측은 내용 비교로 중복 판단. `INTERRUPTED`는 대상 아님. [기록](../docs/handoff/n8n-render-events-design-2026-11-06.md) |
 | 렌더 기록 영속화·무결성 검증 | 코드 구현 | 파일별 경로·크기·SHA-256과 상태를 확인하고 Range/다운로드에도 적용. 누락은 404, 변형 또는 해시 없는 결과는 409로 제공 차단; 기록은 보존. 적용·검증의 정확한 범위는 [HANDOFF](HANDOFF.md) 참조 |
 | SceneCandidate 정량 추천 품질 | 미검증 | P1 초안 GT만 있고 freeze-ready `PENDING` 28건. 동결 GT 평가는 미실행 |
 
