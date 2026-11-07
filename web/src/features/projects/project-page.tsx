@@ -1,18 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Check, CloudUpload, FileVideo2, Folder, LoaderCircle, RefreshCw, RotateCcw } from "lucide-react";
+import { ArrowLeft, Check, CloudUpload, Folder, LoaderCircle, RefreshCw, RotateCcw } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
-import { ApiError, getProcessing, getProject, isProjectId, startProcessing, uploadSource, validateVideo, type SourceStatus } from "@/api/projects";
+import { ApiError, getProcessing, getProject, isProjectId, startProcessing, type SourceStatus } from "@/api/projects";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
 import { SceneAnalysis } from "@/features/scenes/scene-analysis";
 import { EditRender } from "@/features/edit/edit-render";
 import { StoryDirectionCard, type StoryPlanDraft } from "@/features/story/story-direction";
 import { SourcePreview, type PreviewRange } from "@/features/projects/source-preview";
+import { UploadQueue } from "@/features/projects/upload-queue";
 
 function errorText(error: unknown): string {
   return error instanceof ApiError ? `${error.message}${error.code ? ` (${error.code})` : ""}` : "요청을 완료하지 못했습니다.";
@@ -59,14 +57,6 @@ export function ProjectPage() {
     if (processing.data && terminal.has(processing.data.project_status)) setAwaitingStart(false);
   }, [processing.data]);
 
-  const [file, setFile] = useState<File | null>(null);
-  const [fileError, setFileError] = useState("");
-  const [uploadError, setUploadError] = useState("");
-  const [uploadMessage, setUploadMessage] = useState("");
-  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [waitingForRegistration, setWaitingForRegistration] = useState(false);
-  const controller = useRef<AbortController | null>(null);
 
   const process = useMutation({
     mutationFn: () => startProcessing(projectId),
@@ -77,29 +67,9 @@ export function ProjectPage() {
     },
   });
 
-  async function onUpload() {
-    if (!file) { setFileError("업로드할 영상을 선택해 주세요."); return; }
-    const invalid = validateVideo(file);
-    if (invalid) { setFileError(invalid); return; }
-    const abort = new AbortController();
-    controller.current = abort;
-    setUploadError(""); setUploadMessage(""); setUploadProgress(0); setUploading(true); setWaitingForRegistration(false);
-    try {
-      const registered = await uploadSource(projectId, file, abort.signal, (percent) => {
-        setUploadProgress(percent);
-        if (percent === 100) setWaitingForRegistration(true);
-      });
-      setUploadMessage(`서버 등록 완료 · ${registered.original_filename} · 소스 ID ${registered.source_video_id}`);
-      setFile(null);
-    } catch (error) {
-      setUploadError(error instanceof DOMException && error.name === "AbortError"
-        ? "업로드를 취소했습니다. 서버 등록 여부는 아래 소스 목록을 다시 확인해 주세요."
-        : errorText(error));
-    } finally {
-      controller.current = null; setUploading(false); setWaitingForRegistration(false);
-      await queryClient.invalidateQueries({ queryKey: ["processing", projectId] });
-      await queryClient.invalidateQueries({ queryKey: ["project", projectId] });
-    }
+  function refreshSources() {
+    void queryClient.invalidateQueries({ queryKey: ["processing", projectId] });
+    void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
   }
 
   if (!validId) return <div className="mx-auto max-w-2xl py-24"><Alert>올바른 프로젝트 ID가 아닙니다.</Alert><Link className="mt-5 inline-block text-cyan-300" to="/">처음으로 돌아가기</Link></div>;
@@ -118,15 +88,8 @@ export function ProjectPage() {
     </div>
     <div className="sticky top-0 z-20 min-w-0 bg-[#080e17]/95 py-2 backdrop-blur sm:static sm:mb-10 sm:bg-transparent sm:py-0 sm:backdrop-blur-none"><Steps /></div>
     <div className="grid min-w-0 gap-3 sm:gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,.95fr)]">
-      <Card id="upload" className="scroll-mt-24 sm:scroll-mt-3"><CardHeader><div className="mb-2 flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-300/10 text-cyan-300 sm:mb-4 sm:h-11 sm:w-11"><CloudUpload size={20} /></div><CardTitle>촬영 영상 등록</CardTitle><CardDescription>MOV·MP4 등록. 전송과 서버 처리는 별도 단계입니다.</CardDescription></CardHeader><CardContent className="space-y-3 sm:space-y-5">
-        <div><Label htmlFor="video-file">영상 파일</Label><Input id="video-file" type="file" accept=".mov,.mp4,video/quicktime,video/mp4" disabled={uploading} onChange={(event) => { const next = event.target.files?.[0] ?? null; setFile(next); setFileError(next ? validateVideo(next) ?? "" : ""); setUploadMessage(""); event.target.value = ""; }} /></div>
-        {file && <div className="min-w-0 rounded-xl border border-white/10 bg-white/[.03] px-3 py-2 sm:px-4 sm:py-3"><p className="flex min-w-0 items-start gap-2 break-all text-sm text-slate-200"><FileVideo2 size={16} className="mt-0.5 shrink-0 text-cyan-300" />{file.name}</p><p className="mt-1 pl-6 text-xs text-slate-500">{(file.size / 1024 / 1024).toFixed(1)} MiB · 최대 4 GiB</p></div>}
-        {fileError && <Alert>{fileError}</Alert>}
-        {uploadError && <Alert>{uploadError}</Alert>}
-        {uploadMessage && <p role="status" className="break-all rounded-xl border border-cyan-300/20 bg-cyan-300/6 px-3 py-2 text-sm text-cyan-100 sm:px-4 sm:py-3">{uploadMessage}</p>}
-        {uploading && <div role="status" className="space-y-2"><div className="flex justify-between text-xs text-slate-300"><span>{waitingForRegistration ? "전송 완료 · 서버 등록 응답 대기" : "파일 바이트 전송 중"}</span><span>{uploadProgress === null ? "측정 중" : `${uploadProgress}%`}</span></div><Progress value={uploadProgress} /></div>}
-        <div className="flex flex-wrap gap-2 sm:gap-3"><Button onClick={() => void onUpload()} disabled={!file || !!fileError || uploading}>파일 등록</Button>{uploading && <Button variant="secondary" onClick={() => controller.current?.abort()}>업로드 취소</Button>}</div>
-        <p className="text-xs leading-5 text-slate-500">파일 형식·크기를 브라우저에서 먼저 확인합니다. 최종 유효성은 서버가 판단합니다.</p>
+      <Card id="upload" className="scroll-mt-24 sm:scroll-mt-3"><CardHeader><div className="mb-2 flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-300/10 text-cyan-300 sm:mb-4 sm:h-11 sm:w-11"><CloudUpload size={20} /></div><CardTitle>촬영 영상 등록</CardTitle><CardDescription>MOV·MP4 여러 개를 한 번에 등록. 전송과 서버 처리는 별도 단계입니다.</CardDescription></CardHeader><CardContent className="space-y-3 sm:space-y-5">
+        <UploadQueue projectId={projectId} onUploaded={refreshSources} />
       </CardContent></Card>
       <Card id="processing" className="scroll-mt-24 sm:scroll-mt-3"><CardHeader><div className="mb-2 flex h-9 w-9 items-center justify-center rounded-xl bg-white/8 text-slate-300 sm:mb-4 sm:h-11 sm:w-11"><Folder size={20} /></div><CardTitle>소스 처리</CardTitle><CardDescription>메타데이터·오디오·전사를 처리합니다. 진행률은 서버가 제공하지 않습니다.</CardDescription></CardHeader><CardContent className="space-y-3 sm:space-y-5">
         {processing.isPending && <p className="text-sm text-slate-400">서버 상태를 불러오는 중입니다…</p>}
