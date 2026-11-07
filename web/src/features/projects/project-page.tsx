@@ -11,6 +11,7 @@ import { EditRender } from "@/features/edit/edit-render";
 import { StoryDirectionCard, type StoryPlanDraft } from "@/features/story/story-direction";
 import { SourcePreview, type PreviewRange } from "@/features/projects/source-preview";
 import { UploadQueue } from "@/features/projects/upload-queue";
+import { AnalyzeAll } from "@/features/projects/analyze-all";
 
 function errorText(error: unknown): string {
   return error instanceof ApiError ? `${error.message}${error.code ? ` (${error.code})` : ""}` : "요청을 완료하지 못했습니다.";
@@ -106,6 +107,7 @@ export function ProjectPage() {
         {awaitingStart && Date.now() - startedAt >= 30000 && status?.project_status !== "PROCESSING" && <p className="text-xs text-amber-200">접수 후 실행 상태를 확인하지 못했습니다. 상태를 다시 조회해 주세요.</p>}
       </CardContent></Card>
     </div>
+    <AnalyzeAll key={`analyze:${projectId}`} projectId={projectId} />
     <SourcePreview key={`preview:${projectId}`} projectId={projectId} sources={status?.sources ?? []} range={previewRange?.sourceId && status?.sources.some((source) => source.source_video_id === previewRange.sourceId) ? previewRange : null} onClearRange={() => setPreviewRange(null)} />
     <SceneAnalysis key={`scene:${projectId}`} projectId={projectId} processing={status} onPreview={preview} />
     <StoryDirectionCard key={`story:${projectId}`} projectId={projectId} onPreview={preview} onApply={setStoryDraft} />

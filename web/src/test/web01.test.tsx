@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -104,7 +104,7 @@ describe("source processing screen", () => {
   it("loads an existing project and persisted source state after a fresh page load", async () => {
     const fetcher = vi.fn().mockImplementation((url: string) => Promise.resolve(json(200, url.endsWith("/processing") ? { ...processing, project_status: "COMPLETED", completed_count: 1, sources: [{ ...source, processing_status: "COMPLETED" }] } : project)));
     vi.stubGlobal("fetch", fetcher); renderAt(`/projects/${id}`);
-    expect(await screen.findByText("clip.MOV")).toBeInTheDocument();
+    expect(await within(await screen.findByRole("list", { name: "등록된 소스" })).findByText("clip.MOV")).toBeInTheDocument();
     expect(screen.getByText("처리 완료")).toBeInTheDocument();
     expect(fetcher).toHaveBeenCalledWith(`/api/projects/${id}/processing`, undefined);
   });
@@ -115,7 +115,7 @@ describe("source processing screen", () => {
       if (url.endsWith("/processing")) { reads++; return Promise.resolve(json(200, reads < 2 ? processing : { ...processing, project_status: "COMPLETED", completed_count: 1, sources: [{ ...source, processing_status: "COMPLETED" }] })); }
       return Promise.resolve(json(200, project));
     }));
-    renderAt(`/projects/${id}`); await screen.findByText("clip.MOV");
+    renderAt(`/projects/${id}`); await within(await screen.findByRole("list", { name: "등록된 소스" })).findByText("clip.MOV");
     await userEvent.click(screen.getByRole("button", { name: /영상 처리 시작/ }));
     await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2));
     expect(screen.getByText("처리 완료")).toBeInTheDocument();
@@ -125,7 +125,7 @@ describe("source processing screen", () => {
       if (options?.method === "POST") return Promise.resolve(json(409, { detail: { code: "PROJECT_PROCESSING_ALREADY_ACTIVE" } }));
       return Promise.resolve(json(200, url.endsWith("/processing") ? processing : project));
     }));
-    renderAt(`/projects/${id}`); await screen.findByText("clip.MOV");
+    renderAt(`/projects/${id}`); await within(await screen.findByRole("list", { name: "등록된 소스" })).findByText("clip.MOV");
     await userEvent.click(screen.getByRole("button", { name: /영상 처리 시작/ }));
     expect(await screen.findByText(/PROJECT_PROCESSING_ALREADY_ACTIVE/)).toBeInTheDocument();
   });
