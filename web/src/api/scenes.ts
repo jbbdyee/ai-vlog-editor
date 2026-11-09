@@ -110,6 +110,24 @@ export async function getSceneVision(id: string): Promise<SceneVisionStatus> {
 export async function startSceneVision(id: string): Promise<SceneVisionStatus> {
   return request<SceneVisionStatus>(`/projects/${id}/scene-vision`, { method: "POST" }, 202);
 }
+export type AnalyzeAllPhase = "idle" | "transcript" | "scenes" | "vision" | "done" | "failed";
+/** The server-side "전체 분석" run: it keeps going even after the page is closed. */
+export interface AnalyzeAllStatus {
+  project_id: string;
+  phase: AnalyzeAllPhase;
+  running: boolean;
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+export async function getAnalyzeAll(id: string): Promise<AnalyzeAllStatus> {
+  const value = await request<AnalyzeAllStatus>(`/projects/${id}/analyze-all`);
+  if (!value || value.project_id !== id || typeof value.phase !== "string") throw new ApiError("전체 분석 상태 응답을 확인할 수 없습니다.");
+  return value;
+}
+export async function startAnalyzeAll(id: string): Promise<AnalyzeAllStatus> {
+  return request<AnalyzeAllStatus>(`/projects/${id}/analyze-all`, { method: "POST" }, 202);
+}
 export async function getSceneDiagnostics(id: string): Promise<SceneDiagnostics> {
   return checkList(await request<SceneDiagnostics>(`/projects/${id}/scene-diagnostics`), id, "sources", "장면 진단");
 }

@@ -28,7 +28,8 @@ from backend.app.services.project_processing import process_project
 from backend.app.services.edit_request import MAX_REQUEST_LENGTH
 from backend.app.services.llm_edit_interpreter import interpret_with_llm
 from backend.app.services.story_direction import load_story_inputs, recommend_story_direction
-from backend.app.services.project_scene_vision import start_vision, vision_status
+from backend.app.services.project_scene_vision import start_vision, stored_vision_state, vision_status
+from backend.app.services.project_analyze_all import AnalyzeAllSteps
 from backend.app.services.project_scene_execution import SceneRunStatus
 from backend.app.services.project_scene_processing import (
     SceneSourceOutcome,
@@ -484,6 +485,82 @@ async def get_project_scene_vision(request: Request, project_id: UUID) -> SceneV
     await _snapshot_or_404(request, project_id)
     state = await run_in_threadpool(vision_status, project_id, _session_factory(request))
     return SceneVisionStatusResponse(project_id=project_id, **{k: v for k, v in state.items() if k != "latency_seconds"})
+
+
+class AnalyzeAllStatusResponse(BaseModel):
+    project_id: UUID
+    phase: str
+    running: bool
+    error: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+def _analyze_all_response(request: Request, project_id: UUID) -> AnalyzeAllStatusResponse:
+    state = request.app.state.project_analyze_all_registry.state(project_id)
+    return AnalyzeAllStatusResponse(project_id=project_id, phase=state.phase, running=state.running, error=state.error,
+                                    started_at=state.started_at, finished_at=state.finished_at)
+
+
+def _analyze_all_steps(request: Request, project_id: UUID) -> AnalyzeAllSteps:
+    """Wires the server-side "전체 분석" to the same three steps the separate buttons start."""
+    state = request.app.state
+    factory = _session_factory(request)
+
+    def sources():
+        return _get_snapshot_sync(factory, project_id).sources
+
+    def transcript_needed() -> bool:
+        return state.project_run_registry.is_active(project_id) or any(
+            item.processing_status in (SourceVideoStatus.READY, SourceVideoStatus.PROCESSING) for item in sources())
+
+    def start_transcript() -> None:
+        state.project_run_registry.start(project_id, lambda: process_project(
+            session_factory=factory, storage=state.source_storage, workspace=state.processing_workspace,
+            project_id=project_id, stt_model=state.stt_model, max_concurrency=1))
+
+    def scenes_needed() -> bool:
+        transcribed = {item.source_video_id for item in sources() if item.processing_status is SourceVideoStatus.COMPLETED}
+        analyzed = {item.source_video_id for item in _list_scene_diagnostics_sync(factory, project_id) if item.status != "NOT_ANALYZED"}
+        return bool(transcribed - analyzed)
+
+    def start_scenes() -> None:
+        state.project_scene_run_registry.start(project_id, lambda on_source_result: process_project_scenes(
+            session_factory=factory, storage=state.source_storage, scene_workspace=state.scene_processing_workspace,
+            project_id=project_id, on_source_result=on_source_result))
+
+    def vision_needed() -> bool:
+        with factory() as session:
+            stored = stored_vision_state(session, project_id)
+        return stored.total > 0 and stored.captioned < stored.total
+
+    return AnalyzeAllSteps(
+        transcript_needed=transcript_needed,
+        start_transcript=start_transcript,
+        transcript_busy=lambda: state.project_run_registry.is_active(project_id),
+        transcribed_count=lambda: sum(item.processing_status is SourceVideoStatus.COMPLETED for item in sources()),
+        scenes_needed=scenes_needed,
+        start_scenes=start_scenes,
+        scene_status=lambda: state.project_scene_run_registry.snapshot(project_id).run_status.value,
+        vision_needed=vision_needed,
+        start_vision=lambda: start_vision(project_id, factory, state.source_storage),
+        vision_status=lambda: vision_status(project_id)["status"],
+    )
+
+
+@router.post("/{project_id}/analyze-all", response_model=AnalyzeAllStatusResponse, status_code=202)
+async def start_project_analyze_all(request: Request, project_id: UUID) -> AnalyzeAllStatusResponse:
+    """Starts transcript → scenes → vision on the server, so closing the page no longer stops the hand-off."""
+    await _snapshot_or_404(request, project_id)
+    if not request.app.state.project_analyze_all_registry.start(project_id, _analyze_all_steps(request, project_id)):
+        raise HTTPException(status_code=409, detail={"code": "ANALYZE_ALL_ALREADY_ACTIVE", "message": "전체 분석이 이미 진행 중입니다."})
+    return _analyze_all_response(request, project_id)
+
+
+@router.get("/{project_id}/analyze-all", response_model=AnalyzeAllStatusResponse)
+async def get_project_analyze_all(request: Request, project_id: UUID) -> AnalyzeAllStatusResponse:
+    await _snapshot_or_404(request, project_id)
+    return _analyze_all_response(request, project_id)
 
 
 @router.post("/{project_id}/edit-suggestions", response_model=EditSuggestionResponse)

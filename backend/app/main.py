@@ -15,6 +15,7 @@ from backend.app.routers.projects import router as project_router
 from backend.app.routers.videos import router as video_router
 from backend.app.services.project_execution import ProjectRunRegistry
 from backend.app.services.project_scene_execution import ProjectSceneRunRegistry
+from backend.app.services.project_analyze_all import AnalyzeAllRegistry
 from backend.app.services.project_render_execution import ProjectRenderRunRegistry
 from backend.app.services.persistent_render_execution import PersistentProjectRenderRunRegistry
 from backend.app.services.render_events import (
@@ -67,6 +68,9 @@ async def lifespan(application: FastAPI):
     application.state.project_scene_run_registry = ProjectSceneRunRegistry(project_executor)
     application.state.project_render_run_registry = ProjectRenderRunRegistry(project_executor)
     application.state.project_render_output_root = PROJECT_RENDER_OUTPUT_DIRECTORY
+    # Separate threads: the "전체 분석" runner only waits on the steps, which themselves run on project_executor.
+    analyze_all_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="cutory-analyze-all")
+    application.state.project_analyze_all_registry = AnalyzeAllRegistry(analyze_all_executor)
 
     load_environment()
     database_engine = None
@@ -101,6 +105,8 @@ async def lifespan(application: FastAPI):
     try:
         yield
     finally:
+        application.state.project_analyze_all_registry.close()
+        await run_in_threadpool(analyze_all_executor.shutdown, True)
         await run_in_threadpool(project_executor.shutdown, True)
         if render_event_dispatcher is not None:
             await run_in_threadpool(render_event_dispatcher.close)

@@ -1,20 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ListChecks, LoaderCircle, Play } from "lucide-react";
-import { ApiError, getProcessing, startProcessing, type Source } from "@/api/projects";
+import { ApiError, getProcessing, type Source } from "@/api/projects";
 import {
-  getSceneCandidates, getSceneDiagnostics, getSceneProcessing, getSceneVision, startSceneProcessing, startSceneVision,
-  type SceneCandidate, type SceneDiagnostic, type SceneSourceStatus, type SceneVisionStatus,
+  getAnalyzeAll, getSceneCandidates, getSceneDiagnostics, getSceneProcessing, startAnalyzeAll,
+  type AnalyzeAllPhase, type SceneCandidate, type SceneDiagnostic, type SceneSourceStatus,
 } from "@/api/scenes";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-/** Runs the three existing analysis steps (transcript → scenes → vision) one after another from the browser. */
-type Phase = "idle" | "transcript" | "scenes" | "vision" | "done" | "failed";
+/** Shows the server-side "전체 분석" run (transcript → scenes → vision); the server hands each step to the next. */
+type Phase = AnalyzeAllPhase;
 type Tone = "ok" | "run" | "warn" | "bad" | "idle";
 
-const GRACE_MS = 30000;
 const phaseLabels: Record<Phase, string> = {
   idle: "아직 전체 분석을 시작하지 않았습니다.",
   transcript: "① 대사 받아쓰는 중",
@@ -33,18 +32,8 @@ const toneClass: Record<Tone, string> = {
 };
 const order: Phase[] = ["transcript", "scenes", "vision"];
 
-class StepError extends Error {}
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const visionRunning = (status?: string) => status === "QUEUED" || status === "RUNNING";
-
 function errorText(error: unknown): string {
-  if (error instanceof StepError) return error.message;
   return error instanceof ApiError ? `${error.message}${error.code ? ` (${error.code})` : ""}` : "요청을 완료하지 못했습니다.";
-}
-/** A step that is already running on the server answers 409; then we simply wait for it. */
-async function accept(start: () => Promise<unknown>) {
-  try { await start(); }
-  catch (error) { if (!(error instanceof ApiError && error.status === 409)) throw error; }
 }
 
 function Chip({ tone, children }: { tone: Tone; children: string }) {
@@ -92,97 +81,45 @@ function visionCell(candidates: SceneCandidate[], phase: Phase): [Tone, string] 
 
 export function AnalyzeAll({ projectId, pollMs = 2000 }: { projectId: string; pollMs?: number }) {
   const client = useQueryClient();
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [error, setError] = useState<string | null>(null);
-  const runToken = useRef<{ cancelled: boolean } | null>(null);
-  useEffect(() => () => { if (runToken.current) runToken.current.cancelled = true; }, []);
+  const [startError, setStartError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
 
-  const processing = useQuery({ queryKey: ["processing", projectId], queryFn: () => getProcessing(projectId) });
-  const sceneRun = useQuery({ queryKey: ["scene-processing", projectId], queryFn: () => getSceneProcessing(projectId) });
-  const diagnostics = useQuery({ queryKey: ["scene-diagnostics", projectId], queryFn: () => getSceneDiagnostics(projectId) });
-  const candidates = useQuery({ queryKey: ["scene-candidates", projectId], queryFn: () => getSceneCandidates(projectId) });
-
+  // The server owns the run; this card only asks "where are we?" — also right after the page is (re)opened.
+  const run = useQuery({
+    queryKey: ["analyze-all", projectId], queryFn: () => getAnalyzeAll(projectId),
+    refetchInterval: (query) => (query.state.data?.running ? pollMs : false),
+  });
+  const phase: Phase = run.data?.phase ?? "idle";
   const running = order.includes(phase);
+  const live = running ? pollMs : false;
+  const processing = useQuery({ queryKey: ["processing", projectId], queryFn: () => getProcessing(projectId), refetchInterval: live });
+  const sceneRun = useQuery({ queryKey: ["scene-processing", projectId], queryFn: () => getSceneProcessing(projectId), refetchInterval: live });
+  const diagnostics = useQuery({ queryKey: ["scene-diagnostics", projectId], queryFn: () => getSceneDiagnostics(projectId), refetchInterval: live });
+  const candidates = useQuery({ queryKey: ["scene-candidates", projectId], queryFn: () => getSceneCandidates(projectId), refetchInterval: live });
   const sources = processing.data?.sources ?? [];
 
+  // When the server finishes, refresh the other cards on the page once.
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (wasRunning.current && !running) {
+      for (const key of ["project", "processing", "scene-processing", "scene-diagnostics", "scene-candidates", "scene-vision"]) void client.invalidateQueries({ queryKey: [key, projectId] });
+    }
+    wasRunning.current = running;
+  }, [running, client, projectId]);
+
   async function runAll() {
-    const token = { cancelled: false };
-    runToken.current = token;
-    const alive = () => !token.cancelled;
-    // fetchQuery writes into the shared cache, so the other cards on the page update too.
-    const load = <T,>(key: string, fn: () => Promise<T>) => client.fetchQuery({ queryKey: [key, projectId], queryFn: fn, staleTime: 0 });
-    const loadProcessing = () => load("processing", () => getProcessing(projectId));
-    const loadScenes = () => load("scene-processing", () => getSceneProcessing(projectId));
-    const loadDiagnostics = () => load("scene-diagnostics", () => getSceneDiagnostics(projectId));
-    const loadCandidates = () => load("scene-candidates", () => getSceneCandidates(projectId));
-    const loadVision = () => load<SceneVisionStatus>("scene-vision", () => getSceneVision(projectId));
-    setError(null);
+    setStartError(null);
+    setStarting(true);
     try {
-      // ① 대사: metadata, audio, transcript
-      setPhase("transcript");
-      let status = await loadProcessing();
-      const pending = (items: Source[]) => items.some((item) => item.processing_status === "READY" || item.processing_status === "PROCESSING");
-      if (status.project_status === "PROCESSING" || pending(status.sources)) {
-        if (status.project_status !== "PROCESSING") await accept(() => startProcessing(projectId));
-        const startedAt = Date.now();
-        while (alive()) {
-          await sleep(pollMs);
-          if (!alive()) return;
-          status = await loadProcessing();
-          const working = status.project_status === "PROCESSING" || status.sources.some((item) => item.processing_status === "PROCESSING");
-          const waiting = status.sources.some((item) => item.processing_status === "READY");
-          if (!working && (!waiting || Date.now() - startedAt > GRACE_MS)) break;
-        }
-        void client.invalidateQueries({ queryKey: ["project", projectId] });
-      }
-      if (!alive()) return;
-      const ready = status.sources.filter((item) => item.processing_status === "COMPLETED");
-      if (ready.length === 0) throw new StepError("대사 단계를 마친 영상이 없어 장면 분석으로 넘어갈 수 없습니다.");
-
-      // ② 장면
-      setPhase("scenes");
-      let run = await loadScenes();
-      const analyzed = new Set((await loadDiagnostics()).sources.filter((item) => item.status !== "NOT_ANALYZED").map((item) => item.source_video_id));
-      const sceneActive = run.run_status === "QUEUED" || run.run_status === "RUNNING";
-      if (sceneActive || ready.some((item) => !analyzed.has(item.source_video_id))) {
-        if (!sceneActive) await accept(() => startSceneProcessing(projectId));
-        const startedAt = Date.now();
-        while (alive()) {
-          await sleep(pollMs);
-          if (!alive()) return;
-          [run] = await Promise.all([loadScenes(), loadDiagnostics()]);
-          if (["COMPLETED", "COMPLETED_WITH_WARNINGS", "FAILED"].includes(run.run_status)) break;
-          if (run.run_status === "NOT_STARTED" && Date.now() - startedAt > GRACE_MS) throw new StepError("장면 분석이 시작됐는지 확인하지 못했습니다. 다시 눌러 주세요.");
-        }
-        if (!alive()) return;
-        if (run.run_status === "FAILED") throw new StepError(`장면 분석이 실패했습니다.${run.safe_error_code ? ` (${run.safe_error_code})` : ""}`);
-      }
-
-      // ③ 화면 설명
-      setPhase("vision");
-      let list = await loadCandidates();
-      if (list.candidates.length > 0) {
-        let vision = await loadVision();
-        if (visionRunning(vision.status) || list.candidates.some((item) => !item.visual_caption)) {
-          if (!visionRunning(vision.status)) await accept(() => startSceneVision(projectId));
-          while (alive()) {
-            await sleep(pollMs);
-            if (!alive()) return;
-            [vision, list] = await Promise.all([loadVision(), loadCandidates()]);
-            if (!visionRunning(vision.status)) break;
-          }
-          if (!alive()) return;
-          if (vision.status === "FAILED") throw new StepError("화면 설명이 실패했습니다. 내 컴퓨터의 Ollama가 켜져 있는지 확인해 주세요.");
-        }
-      }
-      if (!alive()) return;
-      setPhase("done");
+      client.setQueryData(["analyze-all", projectId], await startAnalyzeAll(projectId));
     } catch (caught) {
-      if (!alive()) return;
-      setError(errorText(caught));
-      setPhase("failed");
+      if (!(caught instanceof ApiError && caught.status === 409)) setStartError(errorText(caught));
+      void client.invalidateQueries({ queryKey: ["analyze-all", projectId] });
+    } finally {
+      setStarting(false);
     }
   }
+  const error = startError ?? (phase === "failed" ? run.data?.error ?? "전체 분석이 중간에 멈췄습니다." : null);
 
   const completed = sources.filter((item) => item.processing_status === "COMPLETED").length;
   const byScene = new Map((sceneRun.data?.sources ?? []).map((item) => [item.source_video_id, item]));
@@ -205,10 +142,10 @@ export function AnalyzeAll({ projectId, pollMs = 2000 }: { projectId: string; po
       {error && <Alert>{error}</Alert>}
       {processing.isError && <Alert>{errorText(processing.error)}</Alert>}
       <div className="flex flex-wrap gap-3">
-        <Button onClick={() => void runAll()} disabled={running || sources.length === 0}><span className="flex items-center gap-2">{running ? <LoaderCircle size={16} className="animate-spin" /> : <Play size={16} />}{running ? "전체 분석 중…" : phase === "idle" ? "전체 분석 시작" : "전체 분석 다시 시작"}</span></Button>
+        <Button onClick={() => void runAll()} disabled={running || starting || sources.length === 0}><span className="flex items-center gap-2">{running ? <LoaderCircle size={16} className="animate-spin" /> : <Play size={16} />}{running ? "전체 분석 중…" : phase === "idle" ? "전체 분석 시작" : "전체 분석 다시 시작"}</span></Button>
       </div>
       {sources.length === 0 && <p className="text-sm text-slate-400">먼저 영상을 올려 주세요.</p>}
-      {running && <p className="text-xs text-slate-500">이 화면이 단계를 이어 줍니다. 페이지를 닫으면 지금 단계까지만 끝나고, 다시 누르면 남은 단계부터 이어서 합니다.</p>}
+      {running && <p className="text-xs text-slate-500">서버가 단계를 이어 줍니다. 이 페이지를 닫거나 다른 탭을 봐도 계속 진행되고, 다시 열면 지금 단계가 보입니다.</p>}
       {sources.length > 0 && <div className="overflow-x-auto rounded-xl border border-white/10">
         <table className="w-full min-w-[520px] text-left text-sm" aria-label="영상별 분석 진행">
           <thead><tr className="text-xs text-slate-500"><th className="px-3 py-2 font-normal">영상</th><th className="px-3 py-2 font-normal">① 대사</th><th className="px-3 py-2 font-normal">② 장면</th><th className="px-3 py-2 font-normal">③ 화면 설명</th></tr></thead>

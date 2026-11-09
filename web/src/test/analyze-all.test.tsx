@@ -26,23 +26,34 @@ function candidates(captioned: boolean) {
 }
 function vision(status: string) { return { project_id: id, status, model: "gemma3", total: 2, captioned: status === "COMPLETED" ? 2 : 0, skipped: 0, failed: 0, error_codes: [] }; }
 
-/** A fake server whose answers move forward once each step has been requested. */
-function fakeServer(initial: { processed: boolean; scened: boolean; captioned: boolean }) {
-  const state = { ...initial };
+function analyzeAll(phase: string, error: string | null = null) {
+  return { project_id: id, phase, running: ["transcript", "scenes", "vision"].includes(phase), error, started_at: null, finished_at: null };
+}
+
+/** A fake server: after "전체 분석" is started it reports the next phase on each status request, like the real server-side run. */
+function fakeServer(options: { phases: string[]; error?: string | null; finished?: boolean }) {
   const posts: string[] = [];
+  let started = false;
+  let index = 0;
+  const done = () => options.finished || (started && index >= options.phases.length - 1);
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
     const path = url.replace(`/api/projects/${id}`, "");
     if (init?.method === "POST") {
       posts.push(path);
-      if (path === "/process") { state.processed = true; return json(202, { project_id: id, accepted: true, status_url: "" }); }
-      if (path === "/scene-process") { state.scened = true; return json(202, { project_id: id, accepted: true, status_url: "" }); }
-      if (path === "/scene-vision") { state.captioned = true; return json(202, vision("QUEUED")); }
+      if (path === "/analyze-all") { started = true; return json(202, analyzeAll(options.phases[0])); }
+      return json(404, {});
     }
-    if (path === "/processing") return json(200, processing(state.processed ? "COMPLETED" : "CREATED", state.processed ? "COMPLETED" : "READY"));
-    if (path === "/scene-processing") return json(200, state.scened && posts.includes("/scene-process") ? sceneRun("COMPLETED", true) : sceneRun("NOT_STARTED", false));
-    if (path === "/scene-diagnostics") return json(200, diagnostics(state.scened ? "COMPLETED" : "NOT_ANALYZED"));
-    if (path === "/scene-candidates") return json(200, state.scened ? candidates(state.captioned) : { project_id: id, candidates: [] });
-    if (path === "/scene-vision") return json(200, vision(state.captioned ? "COMPLETED" : "NOT_STARTED"));
+    if (path === "/analyze-all") {
+      if (!started) return json(200, analyzeAll(options.finished ? options.phases.at(-1)! : "idle", options.error ?? null));
+      index = Math.min(index + 1, options.phases.length - 1);
+      const phase = options.phases[index];
+      return json(200, analyzeAll(phase, phase === "failed" ? options.error ?? null : null));
+    }
+    if (path === "/processing") return json(200, processing("COMPLETED", done() ? "COMPLETED" : "READY"));
+    if (path === "/scene-processing") return json(200, done() ? sceneRun("COMPLETED", true) : sceneRun("NOT_STARTED", false));
+    if (path === "/scene-diagnostics") return json(200, diagnostics(done() ? "COMPLETED" : "NOT_ANALYZED"));
+    if (path === "/scene-candidates") return json(200, done() ? candidates(true) : { project_id: id, candidates: [] });
+    if (path === "/scene-vision") return json(200, vision(done() ? "COMPLETED" : "NOT_STARTED"));
     return json(404, {});
   });
   vi.stubGlobal("fetch", fetcher);
@@ -56,31 +67,43 @@ function renderCard() {
 beforeEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("analyze all videos with one button", () => {
-  it("runs transcript, scenes and vision in order and shows each video's progress", async () => {
-    const posts = fakeServer({ processed: false, scened: false, captioned: false });
+  it("asks the server to run every step and follows its progress", async () => {
+    const posts = fakeServer({ phases: ["transcript", "scenes", "vision", "done"] });
     renderCard();
     await userEvent.click(await screen.findByRole("button", { name: /전체 분석 시작/ }));
     expect(await screen.findByText("전체 분석이 끝났습니다.")).toBeTruthy();
-    expect(posts).toEqual(["/process", "/scene-process", "/scene-vision"]);
+    expect(posts).toEqual(["/analyze-all"]);
     const table = screen.getByRole("table", { name: "영상별 분석 진행" });
     const row = within(table).getByText("IMG_0001.MOV").closest("tr")!;
-    expect(within(row).getByText("완료")).toBeTruthy();
-    expect(within(row).getByText("장면 1개")).toBeTruthy();
-    expect(within(row).getByText("1 / 1")).toBeTruthy();
+    expect(await within(row).findByText("완료")).toBeTruthy();
+    expect(await within(row).findByText("장면 1개")).toBeTruthy();
+    expect(await within(row).findByText("1 / 1")).toBeTruthy();
   });
 
-  it("skips steps that are already finished", async () => {
-    const posts = fakeServer({ processed: true, scened: true, captioned: true });
+  it("shows the current step when the page is opened while the server is already running", async () => {
+    const posts: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const path = url.replace(`/api/projects/${id}`, "");
+      if (init?.method === "POST") posts.push(path);
+      if (path === "/analyze-all") return json(200, analyzeAll("scenes"));
+      if (path === "/processing") return json(200, processing("COMPLETED", "COMPLETED"));
+      if (path === "/scene-processing") return json(200, sceneRun("RUNNING", false));
+      if (path === "/scene-diagnostics") return json(200, diagnostics("RUNNING"));
+      if (path === "/scene-candidates") return json(200, { project_id: id, candidates: [] });
+      return json(404, {});
+    }));
     renderCard();
-    await userEvent.click(await screen.findByRole("button", { name: /전체 분석 시작/ }));
-    expect(await screen.findByText("전체 분석이 끝났습니다.")).toBeTruthy();
+    expect(await screen.findByText("② 장면 찾는 중")).toBeTruthy();
+    expect((screen.getByRole("button", { name: /전체 분석 중/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/이 페이지를 닫거나 다른 탭을 봐도 계속 진행/)).toBeTruthy();
     expect(posts).toEqual([]);
   });
 
-  it("stops with a clear message when no video finished the transcript step", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => json(200, processing("COMPLETED", "FAILED"))));
+  it("shows the server's message when the run stops", async () => {
+    fakeServer({ phases: ["transcript", "failed"], error: "대사 단계를 마친 영상이 없어 장면 분석으로 넘어갈 수 없습니다." });
     renderCard();
     await userEvent.click(await screen.findByRole("button", { name: /전체 분석 시작/ }));
     expect(await screen.findByText("대사 단계를 마친 영상이 없어 장면 분석으로 넘어갈 수 없습니다.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /전체 분석 다시 시작/ })).toBeTruthy();
   });
 });
