@@ -12,9 +12,10 @@ const b = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const c = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const gone = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
-const scene = (id: string, start: number) => ({ candidate_id: id, source_video_id: source, source_filename: "IMG_0001.MOV", start_seconds: start, end_seconds: start + 2 });
+const scene = (id: string, start: number) => ({ candidate_id: id, source_video_id: source, source_filename: "IMG_0001.MOV", start_seconds: start, end_seconds: start + 2, clip_start_seconds: start, clip_end_seconds: start + 2 });
 const direction = {
   project_id: project, title: "도쿄 여행", summary: "도착부터 야경까지", engine: "rule", notes: [], fallback_reason: null,
+  target_minutes: 1, recommended_minutes: 1, length_reason: "기본", length_options: [1, 3], total_seconds: 6, max_seconds: 6, footage_seconds: 60,
   chapters: [
     { title: "도착", description: "공항", reason: "시작", scenes: [scene(c, 9), scene(a, 1)], total_seconds: 4 },
     { title: "야경", description: "밤", reason: "마무리", scenes: [scene(b, 4)], total_seconds: 2 },

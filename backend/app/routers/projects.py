@@ -27,7 +27,9 @@ from backend.app.models.render import ProjectRenderRun
 from backend.app.services.project_processing import process_project
 from backend.app.services.edit_request import MAX_REQUEST_LENGTH
 from backend.app.services.llm_edit_interpreter import interpret_with_llm
-from backend.app.services.story_direction import load_story_inputs, recommend_story_direction
+from backend.app.services.story_direction import load_story_inputs, rebuild_direction, recommend_story_direction
+from backend.app.services.story_length import (LENGTH_OPTIONS, Moment, accept_minutes, fit_to_length, footage_seconds,
+                                               length_notes, load_source_timing, rule_minutes)
 from backend.app.services.project_scene_vision import start_vision, stored_vision_state, vision_status
 from backend.app.services.project_analyze_all import AnalyzeAllSteps
 from backend.app.services.project_scene_execution import SceneRunStatus
@@ -592,8 +594,10 @@ class StorySceneResponse(BaseModel):
     candidate_id: UUID
     source_video_id: UUID
     source_filename: str
-    start_seconds: float
+    start_seconds: float  # the found moment (unchanged candidate)
     end_seconds: float
+    clip_start_seconds: float  # the moment widened to fit the target length
+    clip_end_seconds: float
 
 
 class StoryChapterResponse(BaseModel):
@@ -601,7 +605,7 @@ class StoryChapterResponse(BaseModel):
     description: str
     reason: str
     scenes: list[StorySceneResponse]
-    total_seconds: float
+    total_seconds: float  # widened clips
 
 
 class StoryDirectionResponse(BaseModel):
@@ -612,36 +616,101 @@ class StoryDirectionResponse(BaseModel):
     engine: str
     notes: list[str]
     fallback_reason: str | None = None
+    target_minutes: int
+    recommended_minutes: int
+    length_reason: str
+    length_options: list[int]
+    total_seconds: float
+    max_seconds: float
+    footage_seconds: float
+
+
+class StoryReuseChapter(BaseModel):
+    title: str = Field(min_length=1, max_length=40)
+    description: str = Field(max_length=160)
+    reason: str = Field(max_length=160)
+    candidate_ids: list[UUID] = Field(min_length=1, max_length=200)
+
+
+class StoryReuse(BaseModel):
+    """An earlier recommendation sent back to change only its length (no new AI call)."""
+    title: str = Field(min_length=1, max_length=60)
+    summary: str = Field(max_length=240)
+    engine: str = Field(max_length=120)
+    recommended_minutes: int = Field(ge=1, le=60)
+    length_reason: str = Field(max_length=200)
+    chapters: list[StoryReuseChapter] = Field(min_length=1, max_length=12)
+
+
+class StoryDirectionRequest(BaseModel):
+    target_minutes: int | None = Field(default=None, ge=1, le=60)
+    reuse: StoryReuse | None = None
 
 
 def _load_story_inputs_sync(factory, project_id):
     with factory() as session:
-        return load_story_inputs(session, project_id)
+        candidates, filenames = load_story_inputs(session, project_id)
+        return candidates, filenames, load_source_timing(session, project_id)
 
 
 @router.post("/{project_id}/story-direction", response_model=StoryDirectionResponse)
-async def recommend_project_story_direction(request: Request, project_id: UUID) -> StoryDirectionResponse:
-    """All videos -> recommended story outline (chapters of scenes in play order). Read-only: nothing is saved."""
+async def recommend_project_story_direction(request: Request, project_id: UUID,
+                                            payload: StoryDirectionRequest | None = None) -> StoryDirectionResponse:
+    """All videos -> recommended story outline fitted to a target length. Read-only: nothing is saved.
+
+    Without a body the AI also recommends the length. With `reuse` only the length changes: the earlier chapters
+    are re-fitted without asking the AI again.
+    """
+    payload = payload or StoryDirectionRequest()
     factory = _session_factory(request)
     try:
-        candidates, filenames = await run_in_threadpool(_load_story_inputs_sync, factory, project_id)
+        candidates, filenames, timing = await run_in_threadpool(_load_story_inputs_sync, factory, project_id)
     except SceneProjectNotFoundError as error:
         raise _project_not_found() from error
     except Exception as error:
         raise HTTPException(status_code=500, detail={"code": "SCENE_CANDIDATE_READ_FAILED", "message": "Scene candidates could not be loaded."}) from error
     if not candidates:
         raise HTTPException(status_code=409, detail={"code": "NO_SCENE_CANDIDATES", "message": "Run scene analysis before requesting a story direction."})
-    direction = await run_in_threadpool(recommend_story_direction, candidates, filenames)
+    footage = footage_seconds(timing)
+    if payload.reuse is not None:
+        reuse = payload.reuse
+        try:
+            direction = rebuild_direction(
+                candidates, filenames, title=reuse.title, summary=reuse.summary, engine=reuse.engine,
+                chapters=[(c.title, c.description, c.reason, c.candidate_ids) for c in reuse.chapters],
+                recommended_minutes=reuse.recommended_minutes, length_reason=reuse.length_reason)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail={"code": "STORY_SCENES_GONE", "message": "The earlier recommendation has no scenes left."}) from error
+    else:
+        direction = await run_in_threadpool(recommend_story_direction, candidates, filenames, None, footage / 60 or None)
+    if accept_minutes(direction.recommended_minutes, footage):
+        recommended = direction.recommended_minutes
+        length_reason = direction.length_reason or "AI가 영상 내용을 보고 추천한 길이입니다."
+    else:
+        recommended = rule_minutes(footage)
+        length_reason = (direction.length_reason if payload.reuse is not None and direction.length_reason
+                         else f"원본 약 {footage / 60:.0f}분의 1/4 정도로 계산한 기본 길이입니다.")
+    target = payload.target_minutes or recommended
+    scenes = [s for chapter in direction.chapters for s in chapter.scenes]
+    fit = fit_to_length([Moment(s.candidate.source_video_id, float(s.candidate.start_seconds), float(s.candidate.end_seconds))
+                         for s in scenes], timing, target * 60)
+    clip_of = {s.candidate.candidate_id: clip for s, clip in zip(scenes, fit.clips)}
+    chapters = []
+    for chapter in direction.chapters:
+        scene_rows = [StorySceneResponse(
+            candidate_id=s.candidate.candidate_id, source_video_id=s.candidate.source_video_id,
+            source_filename=s.source_filename, start_seconds=float(s.candidate.start_seconds),
+            end_seconds=float(s.candidate.end_seconds), clip_start_seconds=clip_of[s.candidate.candidate_id][0],
+            clip_end_seconds=clip_of[s.candidate.candidate_id][1]) for s in chapter.scenes]
+        chapters.append(StoryChapterResponse(
+            title=chapter.title, description=chapter.description, reason=chapter.reason, scenes=scene_rows,
+            total_seconds=round(sum(r.clip_end_seconds - r.clip_start_seconds for r in scene_rows), 3)))
     return StoryDirectionResponse(
         project_id=project_id, title=direction.title, summary=direction.summary, engine=direction.engine,
-        notes=list(direction.notes), fallback_reason=direction.fallback_reason,
-        chapters=[StoryChapterResponse(
-            title=chapter.title, description=chapter.description, reason=chapter.reason,
-            total_seconds=chapter.total_seconds,
-            scenes=[StorySceneResponse(candidate_id=s.candidate.candidate_id, source_video_id=s.candidate.source_video_id,
-                                       source_filename=s.source_filename, start_seconds=float(s.candidate.start_seconds),
-                                       end_seconds=float(s.candidate.end_seconds)) for s in chapter.scenes])
-            for chapter in direction.chapters],
+        notes=list(direction.notes) + list(length_notes(fit)), fallback_reason=direction.fallback_reason,
+        chapters=chapters, target_minutes=target, recommended_minutes=recommended, length_reason=length_reason,
+        length_options=sorted({*LENGTH_OPTIONS, recommended}), total_seconds=fit.total_seconds,
+        max_seconds=fit.max_seconds, footage_seconds=round(footage, 3),
     )
 
 

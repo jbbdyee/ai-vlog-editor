@@ -38,6 +38,8 @@ class LLMStoryPlan(BaseModel):
     title: str = Field(min_length=1, max_length=60, description="브이로그 전체 제목")
     summary: str = Field(min_length=1, max_length=240, description="전체 흐름을 한두 문장으로")
     chapters: list[LLMChapter] = Field(min_length=1, max_length=MAX_CHAPTERS)
+    recommended_minutes: int | None = Field(default=None, ge=1, le=60, description="이 영상에 알맞은 완성 길이(분)")
+    length_reason: str | None = Field(default=None, max_length=160, description="그 길이를 추천한 이유")
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,8 @@ class StoryDirection:
     engine: str
     notes: tuple[str, ...] = ()
     fallback_reason: str | None = None
+    recommended_minutes: int | None = None
+    length_reason: str | None = None
 
 
 SYSTEM_PROMPT = (
@@ -77,6 +81,9 @@ SYSTEM_PROMPT = (
     "한 장면은 한 챕터에만 넣고, 이야기에 맞지 않는 장면은 빼도 된다. 챕터 순서가 곧 영상의 흐름이다. "
     "보통은 시작(도착·준비) → 전개(주요 활동) → 마무리(정리·소감) 흐름이 자연스럽다. "
     "화면 설명이 없으면 대사와 시간 순서로 판단하고, 대사도 없으면 촬영 순서를 따른다. "
+    "장면은 나중에 앞뒤로 넓혀서 쓰므로, 이야기에 쓸 만한 장면은 되도록 많이 넣는다. "
+    "영상 내용과 목적을 보고 완성 영상에 알맞은 길이를 분 단위로 recommended_minutes에, 그 이유를 length_reason에 적는다 "
+    "(보통 원본의 1/5~1/3, 예: 30분짜리 레슨은 5~10분). "
     "목록에 있는 번호만 쓴다. 모든 글은 한국어로 쓴다. JSON만 출력하라."
 )
 
@@ -115,6 +122,10 @@ def _scene_table(scenes: Sequence[StoryScene]) -> str:
 def _constrained_schema(count: int) -> dict:
     schema = LLMStoryPlan.model_json_schema()
     schema["$defs"]["LLMChapter"]["properties"]["scenes"]["items"] = {"type": "integer", "enum": list(range(1, count + 1))}
+    # Ask the model for a length every time; validation still accepts an answer without one (rule fallback).
+    schema["properties"]["recommended_minutes"] = {"type": "integer", "minimum": 1, "maximum": 60}
+    schema["properties"]["length_reason"] = {"type": "string", "maxLength": 160}
+    schema["required"] = [*schema.get("required", []), "recommended_minutes", "length_reason"]
     return schema
 
 
@@ -161,19 +172,49 @@ def _rule_direction(scenes: Sequence[StoryScene], note: str, fallback_reason: st
                           tuple(chapters), "rule", (note,), fallback_reason)
 
 
+def rebuild_direction(candidates: Sequence[ActiveCandidateSummary], filenames: dict[UUID, str], *, title: str,
+                      summary: str, engine: str, chapters: Sequence[tuple[str, str, str, Sequence[UUID]]],
+                      notes: Sequence[str] = (), recommended_minutes: int | None = None,
+                      length_reason: str | None = None) -> StoryDirection:
+    """Re-creates an earlier recommendation from its scene IDs, without asking the AI again (length change only)."""
+    by_id = {s.candidate.candidate_id: s for s in _ordered_scenes(candidates, filenames)}
+    used: set[UUID] = set()
+    rebuilt, missing = [], 0
+    for chapter_title, description, reason, candidate_ids in chapters:
+        scenes = []
+        for candidate_id in candidate_ids:
+            if candidate_id in used:
+                continue
+            if candidate_id not in by_id:
+                missing += 1
+                continue
+            used.add(candidate_id)
+            scenes.append(by_id[candidate_id])
+        if scenes:
+            rebuilt.append(StoryChapter(chapter_title, description, reason, tuple(scenes)))
+    if not rebuilt:
+        raise ValueError("No scene of the earlier recommendation is still available.")
+    extra = (f"지금은 없는 장면 {missing}개를 뺐습니다.",) if missing else ()
+    return StoryDirection(title, summary, tuple(rebuilt), engine, tuple(notes) + extra, None,
+                          recommended_minutes, length_reason)
+
+
 def recommend_story_direction(candidates: Sequence[ActiveCandidateSummary], filenames: dict[UUID, str],
-                              engine: tuple[str, str, Completion] | None = None) -> StoryDirection:
+                              engine: tuple[str, str, Completion] | None = None,
+                              footage_minutes: float | None = None) -> StoryDirection:
     scenes = _ordered_scenes(candidates, filenames)
     engine = engine if engine is not None else configured_engine()
     if engine is None:
         return _rule_direction(scenes, "AI 설정이 없어 영상 순서대로 묶었습니다.", None)
     provider, model, complete = engine
     try:
-        raw = complete(SYSTEM_PROMPT, f"장면 목록(번호 1~{len(scenes)}, 영상 {len({s.source_index for s in scenes})}개):\n"
+        footage = f"원본 영상 전체 길이: 약 {footage_minutes:.0f}분\n" if footage_minutes else ""
+        raw = complete(SYSTEM_PROMPT, f"{footage}장면 목록(번호 1~{len(scenes)}, 영상 {len({s.source_index for s in scenes})}개):\n"
                                       f"{_scene_table(scenes)}", _constrained_schema(len(scenes)))
         plan = LLMStoryPlan.model_validate_json(raw)
         chapters, notes = _apply(plan, scenes)
-        return StoryDirection(plan.title.strip(), plan.summary.strip(), chapters, f"llm:{provider}/{model}", notes)
+        return StoryDirection(plan.title.strip(), plan.summary.strip(), chapters, f"llm:{provider}/{model}", notes,
+                              None, plan.recommended_minutes, (plan.length_reason or "").strip() or None)
     except LLMEditError as error:
         reason = error.code
     except ValidationError:
