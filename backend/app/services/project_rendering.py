@@ -174,26 +174,36 @@ def render_project_edit_plan(
             # publish a video based on a now-invalid or reordered selection.
             _assert_plan_current(session_factory, project_id, segments)
             # Subtitle probing is optional: a failure must not discard a valid MP4.
+            # TODO 9: always measure each normalized clip's video length. The concat trims each clip's
+            # audio to it so a segment never runs longer than its video; otherwise the container length
+            # (often a few ms longer) adds up over many clips and breaks the subtitle timeline check.
+            timeline_durations: list[float] | None = None
+            try:
+                timeline_durations = []
+                for index, clip in enumerate(rendered):
+                    normalized = Path(temporary) / f"subtitle-timeline-{index}.mp4"
+                    command = _subtitle_timeline_command(clip.clip_path, normalized, ffmpeg_executable)
+                    probe_result = run_ffmpeg(
+                        command, capture_output=True, text=True, encoding="utf-8",
+                        errors="replace", check=False,
+                    )
+                    if probe_result.returncode != 0 or not normalized.is_file():
+                        raise ValueError("Clip normalization for subtitles failed.")
+                    measured = inspect_timeline(normalized)
+                    if not isfinite(measured) or measured <= 0:
+                        raise ValueError("Normalized clip timeline is invalid.")
+                    timeline_durations.append(measured)
+            except (OSError, ValueError):
+                timeline_durations = None
             subtitle_durations: list[float] | None = None
             subtitle_error_code: str | None = None
             if any(segment.transcript_segments for segment in segments):
-                try:
-                    subtitle_durations = []
-                    for index, clip in enumerate(rendered):
-                        normalized = Path(temporary) / f"subtitle-timeline-{index}.mp4"
-                        command = _subtitle_timeline_command(clip.clip_path, normalized, ffmpeg_executable)
-                        probe_result = run_ffmpeg(
-                            command, capture_output=True, text=True, encoding="utf-8",
-                            errors="replace", check=False,
-                        )
-                        if probe_result.returncode != 0 or not normalized.is_file():
-                            raise ValueError("Clip normalization for subtitles failed.")
-                        subtitle_durations.append(inspect_timeline(normalized))
-                except (OSError, ValueError):
-                    subtitle_durations = None
+                subtitle_durations = timeline_durations
+                if subtitle_durations is None:
                     subtitle_error_code = "SUBTITLE_TIMELINE_FAILED"
 
-            command = _concat_command(rendered, has_audio, final_path, ffmpeg_executable)
+            command = _concat_command(rendered, has_audio, final_path, ffmpeg_executable,
+                                      audio_durations=timeline_durations)
             try:
                 result = run_ffmpeg(
                     command, capture_output=True, text=True, encoding="utf-8",
@@ -342,7 +352,8 @@ def _assert_plan_current(
 
 
 def _concat_command(
-    clips: list[RenderedClip], has_audio: list[bool], destination: Path, executable: str
+    clips: list[RenderedClip], has_audio: list[bool], destination: Path, executable: str,
+    audio_durations: list[float] | None = None,
 ) -> list[str]:
     command = [executable, "-v", "error", "-nostdin", "-y"]
     for clip in clips:
@@ -361,10 +372,11 @@ def _concat_command(
             f"setsar=1,format=yuv420p,setpts=PTS-STARTPTS[v{index}]"
         )
         audio_input = f"{index}:a:0" if has_audio[index] else str(silence_index[index])
+        audio_length = audio_durations[index] if audio_durations else clip.duration_seconds
         filters.append(
             f"[{audio_input}]aresample={OUTPUT_AUDIO_RATE},"
             "aformat=sample_fmts=fltp:channel_layouts=stereo,"
-            f"asetpts=PTS-STARTPTS,apad,atrim=duration={clip.duration_seconds:.6f}[a{index}]"
+            f"asetpts=PTS-STARTPTS,apad,atrim=duration={audio_length:.6f}[a{index}]"
         )
     filters.append("".join(f"[v{i}][a{i}]" for i in range(len(clips))) +
                    f"concat=n={len(clips)}:v=1:a=1[v][a]")
