@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, UniqueConstraint, Uuid
+from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, Numeric, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.database import Base
@@ -24,6 +24,11 @@ class ProjectSceneEditPlanItem(Base):
     __tablename__ = "project_scene_edit_plan_items"
     __table_args__ = (
         CheckConstraint("position >= 0", name="ck_scene_edit_plan_position_nonnegative"),
+        CheckConstraint(
+            "(clip_start_seconds IS NULL AND clip_end_seconds IS NULL) OR "
+            "(clip_start_seconds >= 0 AND clip_end_seconds > clip_start_seconds)",
+            name="ck_scene_edit_plan_clip_range",
+        ),
         UniqueConstraint("project_id", "candidate_id", name="uq_scene_edit_plan_candidate"),
         Index("ix_scene_edit_plan_items_candidate_id", "candidate_id"),
     )
@@ -33,5 +38,8 @@ class ProjectSceneEditPlanItem(Base):
     )
     position: Mapped[int] = mapped_column(Integer, primary_key=True)
     candidate_id: Mapped[UUID] = mapped_column(ForeignKey("scene_candidates.id"), nullable=False)
+    # Optional widened range in the source video (TODO 8). NULL = use the candidate's own range.
+    clip_start_seconds: Mapped[float | None] = mapped_column(Numeric(12, 3), nullable=True)
+    clip_end_seconds: Mapped[float | None] = mapped_column(Numeric(12, 3), nullable=True)
 
     plan: Mapped[ProjectSceneEditPlan] = relationship(back_populates="items")

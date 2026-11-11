@@ -46,6 +46,7 @@ from backend.app.services.project_scene_diagnostics import (
     list_project_scene_diagnostics,
 )
 from backend.app.services.project_scene_edit_plan import (
+    SceneEditPlanInvalidRangeError,
     SceneEditPlanInvalidSelectionError,
     SceneEditPlanSnapshot,
     get_scene_edit_plan,
@@ -209,14 +210,23 @@ class ProjectSceneDiagnosticsResponse(BaseModel):
     sources: list[SceneSourceDiagnosticResponse]
 
 
+class SceneClipRange(BaseModel):
+    """Where in the source video a chosen scene starts and ends (the widened clip)."""
+    start_seconds: float
+    end_seconds: float
+
+
 class SceneEditPlanSaveRequest(BaseModel):
     candidate_ids: Annotated[list[UUID], Field(max_length=10000)]
+    # Optional, same order as candidate_ids; null entries (or no list) keep the scene's own range.
+    clip_ranges: Annotated[list[SceneClipRange | None] | None, Field(max_length=10000)] = None
 
 
 class SceneEditPlanResponse(BaseModel):
     project_id: UUID
     candidate_ids: list[UUID]
     invalid_candidate_ids: list[UUID]
+    clip_ranges: list[SceneClipRange | None] = []
 
 
 class ProjectRenderAcceptedResponse(BaseModel):
@@ -423,10 +433,14 @@ async def update_project_scene_edit_plan(
 ) -> SceneEditPlanResponse:
     try:
         snapshot = await run_in_threadpool(
-            _save_scene_edit_plan_sync, _session_factory(request), project_id, tuple(payload.candidate_ids)
+            _save_scene_edit_plan_sync, _session_factory(request), project_id, tuple(payload.candidate_ids),
+            None if payload.clip_ranges is None else
+            [None if r is None else (r.start_seconds, r.end_seconds) for r in payload.clip_ranges],
         )
     except SceneProjectNotFoundError as error:
         raise _project_not_found() from error
+    except SceneEditPlanInvalidRangeError as error:
+        raise HTTPException(status_code=422, detail={"code": "SCENE_EDIT_PLAN_RANGE_INVALID", "message": "A scene range is outside its video. Get the recommendation again."}) from error
     except SceneEditPlanInvalidSelectionError as error:
         raise HTTPException(status_code=409, detail={"code": "SCENE_EDIT_PLAN_CANDIDATE_CONFLICT", "message": "Selected scenes are no longer valid or contain duplicates. Refresh candidates and resolve the selection."}) from error
     except Exception as error:
@@ -719,9 +733,9 @@ def _read_scene_edit_plan_sync(factory, project_id):
         return get_scene_edit_plan(session, project_id)
 
 
-def _save_scene_edit_plan_sync(factory, project_id, candidate_ids):
+def _save_scene_edit_plan_sync(factory, project_id, candidate_ids, clip_ranges=None):
     with factory() as session:
-        return save_scene_edit_plan(session, project_id, candidate_ids)
+        return save_scene_edit_plan(session, project_id, candidate_ids, clip_ranges)
 
 
 def _scene_edit_plan_response(snapshot: SceneEditPlanSnapshot) -> SceneEditPlanResponse:
@@ -729,6 +743,8 @@ def _scene_edit_plan_response(snapshot: SceneEditPlanSnapshot) -> SceneEditPlanR
         project_id=snapshot.project_id,
         candidate_ids=list(snapshot.candidate_ids),
         invalid_candidate_ids=list(snapshot.invalid_candidate_ids),
+        clip_ranges=[None if r is None else SceneClipRange(start_seconds=r[0], end_seconds=r[1])
+                     for r in snapshot.clip_ranges],
     )
 
 

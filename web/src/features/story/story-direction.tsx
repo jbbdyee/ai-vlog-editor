@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Compass, ListOrdered, LoaderCircle } from "lucide-react";
 import { ApiError } from "@/api/projects";
+import type { ClipRange } from "@/api/edit-render";
 import { formatDuration, getStoryDirection, type StoryDirection } from "@/api/story-direction";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -16,18 +17,22 @@ function errorText(error: unknown): string {
 export interface StoryPlanDraft {
   candidateIds: string[];
   chapterById: Record<string, string>;
+  /** Widened clip per scene, fitted to the chosen length (TODO 8: saved and rendered). */
+  rangeById?: Record<string, ClipRange>;
   nonce: number;
 }
 
 export function toPlanDraft(direction: StoryDirection): StoryPlanDraft {
   const candidateIds: string[] = [];
   const chapterById: Record<string, string> = {};
+  const rangeById: Record<string, ClipRange> = {};
   direction.chapters.forEach((chapter, index) => chapter.scenes.forEach((scene) => {
     if (scene.candidate_id in chapterById) return;
     candidateIds.push(scene.candidate_id);
     chapterById[scene.candidate_id] = `챕터 ${index + 1}. ${chapter.title}`;
+    rangeById[scene.candidate_id] = { start_seconds: scene.clip_start_seconds, end_seconds: scene.clip_end_seconds };
   }));
-  return { candidateIds, chapterById, nonce: Date.now() };
+  return { candidateIds, chapterById, rangeById, nonce: Date.now() };
 }
 
 export function StoryDirectionCard({ projectId, onPreview, onApply }: { projectId: string; onPreview?: (range: PreviewRange) => void; onApply?: (draft: StoryPlanDraft) => void }) {
@@ -90,7 +95,7 @@ export function StoryDirectionCard({ projectId, onPreview, onApply }: { projectI
         </ol>
         {onApply && <div className="space-y-1 border-t border-white/10 pt-3">
           <Button onClick={() => onApply(toPlanDraft(value))}><span className="flex items-center gap-2"><ListOrdered size={16} />이 방향으로 편집 계획 만들기</span></Button>
-          <p className="text-xs text-slate-500">아래 편집 계획에 챕터 순서대로 장면을 채웁니다. 저장은 편집 계획에서 직접 눌러야 합니다.</p>
+          <p className="text-xs text-slate-500">아래 편집 계획에 챕터 순서대로, 고른 길이에 맞춰 넓힌 구간 그대로 장면을 채웁니다. 저장은 편집 계획에서 직접 눌러야 합니다.</p>
         </div>}
       </div>}
     </CardContent>

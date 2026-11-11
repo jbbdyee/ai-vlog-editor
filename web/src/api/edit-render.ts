@@ -4,6 +4,14 @@ export interface SceneEditPlan {
   project_id: string;
   candidate_ids: string[];
   invalid_candidate_ids: string[];
+  /** Same order as candidate_ids; null = the scene's own found range. Older servers omit it. */
+  clip_ranges?: (ClipRange | null)[];
+}
+
+/** Where in the source video a chosen scene starts and ends (widened to fit a target length). */
+export interface ClipRange {
+  start_seconds: number;
+  end_seconds: number;
 }
 
 export interface RenderStatus {
@@ -98,12 +106,25 @@ export async function getEditPlan(id: string): Promise<SceneEditPlan> {
   return validPlan(await request<SceneEditPlan>(`/projects/${id}/scene-edit-plan`), id);
 }
 
-export async function saveEditPlan(id: string, candidateIds: string[]): Promise<SceneEditPlan> {
-  const saved = validPlan(await request<SceneEditPlan>(`/projects/${id}/scene-edit-plan`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ candidate_ids: candidateIds }) }), id);
+export async function saveEditPlan(id: string, candidateIds: string[], ranges: Record<string, ClipRange> = {}): Promise<SceneEditPlan> {
+  const clipRanges = candidateIds.map((candidateId) => ranges[candidateId] ?? null);
+  const widened = clipRanges.some((range) => range !== null);
+  const body = widened ? { candidate_ids: candidateIds, clip_ranges: clipRanges } : { candidate_ids: candidateIds };
+  const saved = validPlan(await request<SceneEditPlan>(`/projects/${id}/scene-edit-plan`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }), id);
   if (JSON.stringify(saved.candidate_ids) !== JSON.stringify(candidateIds) || saved.invalid_candidate_ids.length > 0) {
     throw new ApiError("서버가 요청한 장면 순서를 저장했는지 확인할 수 없습니다.");
   }
+  if (widened && JSON.stringify(saved.clip_ranges ?? []) !== JSON.stringify(clipRanges)) {
+    throw new ApiError("서버가 넓힌 장면 구간을 저장했는지 확인할 수 없습니다. 서버를 최신 코드로 다시 켜 주세요.");
+  }
   return saved;
+}
+
+/** Saved widened ranges keyed by candidate id (only scenes that have one). */
+export function planRanges(plan: SceneEditPlan | undefined): Record<string, ClipRange> {
+  const ranges: Record<string, ClipRange> = {};
+  plan?.candidate_ids.forEach((candidateId, index) => { const range = plan.clip_ranges?.[index]; if (range) ranges[candidateId] = range; });
+  return ranges;
 }
 
 export interface EditSuggestion {

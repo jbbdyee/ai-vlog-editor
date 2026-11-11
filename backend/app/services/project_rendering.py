@@ -149,10 +149,13 @@ def render_project_edit_plan(
                         raise ProjectRenderError("SOURCE_INVALID", "A selected SourceVideo has no video stream.")
                     if segment.end_seconds > source_info.duration_seconds + 1e-3:
                         raise ProjectRenderError("INTERVAL_INVALID", "A selected interval exceeds its SourceVideo duration.")
+                    # A widened clip may end at the stored duration, which is rounded to 1 ms and can sit a
+                    # fraction of a millisecond past the probed end; cut at the real end instead of failing.
+                    clip_end = min(segment.end_seconds, source_info.duration_seconds)
                     candidate = ClipSceneCandidate(
-                        window_seconds=segment.end_seconds - segment.start_seconds,
+                        window_seconds=clip_end - segment.start_seconds,
                         start_seconds=segment.start_seconds,
-                        end_seconds=segment.end_seconds,
+                        end_seconds=clip_end,
                     )
                     clip = render_one(source_path, candidate, Path(temporary), ffmpeg_executable=ffmpeg_executable)
                     if not clip.clip_path.resolve().is_relative_to(Path(temporary).resolve()):
@@ -305,14 +308,16 @@ def _load_segments(session: Session, project_id: UUID) -> tuple[_Segment, ...]:
     if plan.invalid_candidate_ids:
         raise ProjectRenderError("PLAN_CANDIDATE_CONFLICT", "The edit plan contains a candidate that is no longer active.")
     segments = []
-    for candidate_id in plan.candidate_ids:
+    ranges = plan.clip_ranges or (None,) * len(plan.candidate_ids)
+    for candidate_id, clip in zip(plan.candidate_ids, ranges):
         candidate = session.get(StoredSceneCandidate, candidate_id)
         if candidate is None:
             raise ProjectRenderError("PLAN_CANDIDATE_CONFLICT", "A selected candidate no longer exists.")
         source = session.get(SourceVideo, candidate.source_video_id)
         if source is None or source.project_id != project_id:
             raise ProjectRenderError("SOURCE_MISSING", "A selected SourceVideo is missing or outside this Project.")
-        start, end = float(candidate.start_seconds), float(candidate.end_seconds)
+        # TODO 8: a saved widened range (from the story length fit) replaces the short found moment.
+        start, end = clip if clip is not None else (float(candidate.start_seconds), float(candidate.end_seconds))
         duration = float(source.duration_seconds) if source.duration_seconds is not None else None
         if (not isfinite(start) or not isfinite(end) or start < 0 or end <= start
             or duration is None or not isfinite(duration) or end > duration + 1e-3):

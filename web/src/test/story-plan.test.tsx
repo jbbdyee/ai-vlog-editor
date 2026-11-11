@@ -64,4 +64,28 @@ describe("story direction -> edit plan", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "편집 계획 저장" })).toBeEnabled());
     expect(fetcher.mock.calls.some(([, options]) => options?.method === "PUT")).toBe(false);
   });
+
+  it("keeps the widened ranges from the chosen length, saves them and reviews the widened total (TODO 8)", async () => {
+    let saved: { candidate_ids: string[]; clip_ranges?: unknown[] } = { candidate_ids: [] };
+    const fetcher = vi.fn((url: string, options?: RequestInit) => {
+      if (url.endsWith("/scene-candidates")) return Promise.resolve(response({ project_id: project, candidates: [a, b].map((id, i) => ({ candidate_id: id, source_video_id: source, start_seconds: 10 + i * 40, end_seconds: 14 + i * 40, evidence: [] })) }));
+      if (url.endsWith("/scene-edit-plan") && options?.method === "PUT") { saved = JSON.parse(String(options.body)); return Promise.resolve(response({ project_id: project, invalid_candidate_ids: [], ...saved })); }
+      if (url.endsWith("/scene-edit-plan")) return Promise.resolve(response({ project_id: project, invalid_candidate_ids: [], clip_ranges: [], ...saved }));
+      if (url.includes("/renders?")) return Promise.resolve(response({ project_id: project, items: [], next_cursor: null }));
+      return Promise.resolve(response({ project_id: project, status: "NOT_STARTED", render_id: null, is_active: false, succeeded: false, failed: false, safe_error_code: null, download_available: false, output: null, hard_subtitle_status: "NOT_STARTED", hard_subtitle_error_code: null, hard_subtitle_download_available: false, hard_subtitle_download_url: null }));
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const draft: StoryPlanDraft = { candidateIds: [b, a], chapterById: { [a]: "챕터 1. 연습", [b]: "챕터 1. 연습" }, rangeById: { [a]: { start_seconds: 0, end_seconds: 30 }, [b]: { start_seconds: 35, end_seconds: 65 } }, nonce: 2 };
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><EditRender projectId={project} storyDraft={draft} /></QueryClientProvider>);
+    expect(await screen.findByText(/넓힌 구간 그대로이며 합계 약 1분입니다/)).toBeInTheDocument();
+    const rows = within(screen.getByRole("list", { name: "선택한 장면 순서" })).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("35.00–65.00초 · 길이 30.00초");
+    expect(rows[0]).toHaveTextContent("찾은 순간 50.0–54.0초");
+    await waitFor(() => expect(screen.getByRole("button", { name: "편집 계획 저장" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "편집 계획 저장" }));
+    await waitFor(() => expect(saved.clip_ranges).toEqual([{ start_seconds: 35, end_seconds: 65 }, { start_seconds: 0, end_seconds: 30 }]));
+    expect(await screen.findByText("저장된 장면 2개 · 예상 길이 60.00초")).toBeInTheDocument();
+    expect(screen.getByText("완성 영상 약 1분")).toBeInTheDocument();
+  });
 });
