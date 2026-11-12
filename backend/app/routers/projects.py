@@ -28,6 +28,9 @@ from backend.app.services.project_processing import process_project
 from backend.app.services.edit_request import MAX_REQUEST_LENGTH
 from backend.app.services.llm_edit_interpreter import interpret_with_llm
 from backend.app.services.story_direction import load_story_inputs, rebuild_direction, recommend_story_direction
+from backend.app.services.project_reel import ReelOptions, ReelProjectNotFound, job_state, saved_draft, start_reel_draft
+from backend.app.services.reel_modes import (AUTO_MODE, DEFAULT_PACE, DEFAULT_SHORT_SECONDS, MODE_BY_KEY, MODES, PACES,
+                                             SHORT_LENGTHS)
 from backend.app.services.story_length import (LENGTH_OPTIONS, Moment, accept_minutes, fit_to_length, footage_seconds,
                                                length_notes, load_source_timing, rule_minutes)
 from backend.app.services.project_scene_vision import start_vision, stored_vision_state, vision_status
@@ -726,6 +729,114 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
         length_options=sorted({*LENGTH_OPTIONS, recommended}), total_seconds=fit.total_seconds,
         max_seconds=fit.max_seconds, footage_seconds=round(footage, 3),
     )
+
+
+class ReelOptionItem(BaseModel):
+    key: str
+    label: str
+
+
+class ReelOptionsResponse(BaseModel):
+    formats: list[ReelOptionItem]
+    modes: list[ReelOptionItem]
+    paces: list[ReelOptionItem]
+    lengths: list[int]
+    default_length: int
+
+
+@router.get("/reel-options", response_model=ReelOptionsResponse)
+async def get_reel_options() -> ReelOptionsResponse:
+    """Short-form choices from one settings file (reel_modes), so the screen never has its own copy."""
+    return ReelOptionsResponse(
+        formats=[ReelOptionItem(key="short", label="숏폼 (릴스·쇼츠)"), ReelOptionItem(key="long", label="롱폼 (유튜브)")],
+        modes=[ReelOptionItem(key=AUTO_MODE, label="자동 (AI가 골라 줌)")] + [ReelOptionItem(key=m.key, label=m.label) for m in MODES],
+        paces=[ReelOptionItem(key=key, label=f"{label} (장면당 약 {seconds:g}초)") for key, (label, seconds) in PACES.items()],
+        lengths=list(SHORT_LENGTHS), default_length=DEFAULT_SHORT_SECONDS,
+    )
+
+
+class ReelDraftRequest(BaseModel):
+    format: str = Field(default="short", pattern="^(short|long)$")
+    mode: str = Field(default=AUTO_MODE, max_length=32)
+    pace: str = Field(default=DEFAULT_PACE, max_length=16)
+    target_seconds: int = Field(default=DEFAULT_SHORT_SECONDS, ge=10, le=180)
+
+
+class ReelSceneResponse(BaseModel):
+    shot_index: int
+    source_video_id: UUID
+    source_filename: str
+    start_seconds: float
+    end_seconds: float
+    caption: str
+    label: str
+    is_hook: bool
+    shot_caption: str
+
+
+class ReelDraftResponse(BaseModel):
+    format: str
+    mode: str
+    mode_label: str
+    pace: str
+    pace_label: str
+    target_seconds: int
+    total_seconds: float
+    title: str
+    engine: str
+    scenes: list[ReelSceneResponse]
+    shot_count: int
+    notes: list[str]
+    fallback_reason: str | None = None
+
+
+class ReelDraftStatusResponse(BaseModel):
+    project_id: UUID
+    status: str
+    step: str
+    done: int
+    total: int
+    error_code: str | None = None
+    draft: ReelDraftResponse | None = None
+
+
+def _reel_status_sync(factory, project_id) -> ReelDraftStatusResponse:
+    with factory() as session:
+        draft = saved_draft(session, project_id)
+    job = job_state(project_id)
+    return ReelDraftStatusResponse(
+        project_id=project_id, status=job.status, step=job.step, done=job.done, total=job.total,
+        error_code=job.error_code, draft=None if draft is None else ReelDraftResponse(**{
+            **draft.to_json(), "scenes": [ReelSceneResponse(**vars(scene)) for scene in draft.scenes],
+            "notes": list(draft.notes)}))
+
+
+@router.post("/{project_id}/reel-draft", response_model=ReelDraftStatusResponse, status_code=202)
+async def start_project_reel_draft(request: Request, project_id: UUID, payload: ReelDraftRequest) -> ReelDraftStatusResponse:
+    """Short-form only (TODO 10). Long-form uses the story direction card that already exists."""
+    if payload.format == "long":
+        raise HTTPException(status_code=409, detail={"code": "LONG_FORM_USES_STORY_DIRECTION", "message": "Use the story direction for long-form videos."})
+    if (payload.mode != AUTO_MODE and payload.mode not in MODE_BY_KEY) or payload.pace not in PACES:
+        raise HTTPException(status_code=422, detail={"code": "REEL_OPTION_INVALID", "message": "Unknown mode or pace."})
+    factory = _session_factory(request)
+    storage = request.app.state.source_storage
+    try:
+        await run_in_threadpool(_reel_status_sync, factory, project_id)  # 404 before starting anything
+    except ReelProjectNotFound as error:
+        raise _project_not_found() from error
+    started = start_reel_draft(project_id, factory, storage.resolve,
+                               ReelOptions(payload.mode, payload.pace, payload.target_seconds))
+    if not started:
+        raise HTTPException(status_code=409, detail={"code": "REEL_DRAFT_RUNNING", "message": "A reel draft is already being made."})
+    return await run_in_threadpool(_reel_status_sync, factory, project_id)
+
+
+@router.get("/{project_id}/reel-draft", response_model=ReelDraftStatusResponse)
+async def get_project_reel_draft(request: Request, project_id: UUID) -> ReelDraftStatusResponse:
+    try:
+        return await run_in_threadpool(_reel_status_sync, _session_factory(request), project_id)
+    except ReelProjectNotFound as error:
+        raise _project_not_found() from error
 
 
 def _read_scene_edit_plan_sync(factory, project_id):

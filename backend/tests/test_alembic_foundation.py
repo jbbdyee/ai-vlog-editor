@@ -37,5 +37,6 @@ class AlembicFoundationTests(TestCase):
                 "project_scene_edit_plans",
                 "project_scene_edit_plan_items",
                 "project_render_runs",
+                "project_reel_drafts",
             },
         )

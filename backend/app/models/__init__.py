@@ -29,8 +29,10 @@ from backend.app.models.scene import (
 )
 from backend.app.models.edit_plan import ProjectSceneEditPlan, ProjectSceneEditPlanItem
 from backend.app.models.render import ProjectRenderRun
+from backend.app.models.reel import ProjectReelDraft
 
 __all__ = [
+    "ProjectReelDraft",
     "ProjectRenderRun",
     "ProjectSceneEditPlan",
     "ProjectSceneEditPlanItem",

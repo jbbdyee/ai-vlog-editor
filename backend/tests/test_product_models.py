@@ -36,6 +36,7 @@ EXPECTED_TABLES = {
     "project_scene_edit_plans",
     "project_scene_edit_plan_items",
     "project_render_runs",
+    "project_reel_drafts",
 }
 
 
@@ -49,6 +50,7 @@ class ProductModelMetadataTests(TestCase):
                 "project_scene_edit_plans": ["project_id"],
                 "project_scene_edit_plan_items": ["project_id", "position"],
                 "project_render_runs": ["render_id"],
+                "project_reel_drafts": ["project_id"],
             }.get(table_name, ["id"])
             self.assertEqual([column.name for column in table.primary_key], expected_pk)
 
