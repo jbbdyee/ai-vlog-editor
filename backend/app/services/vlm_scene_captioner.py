@@ -88,6 +88,18 @@ def vlm_model() -> str:
 
 def caption_interval(source_path: Path, start: float, end: float, *, model: str | None = None,
                      base_url: str | None = None, ffmpeg: str = "ffmpeg") -> CaptionResult:
+    answer, latency, timestamps, sheet, model = ask_frames(source_path, start, end, PROMPT, VLMSceneCaption,
+                                                           model=model, base_url=base_url, ffmpeg=ffmpeg)
+    return CaptionResult(answer, latency, timestamps, sheet, model)
+
+
+def ask_frames(source_path: Path, start: float, end: float, prompt: str, schema: type[BaseModel], *,
+               model: str | None = None, base_url: str | None = None, ffmpeg: str = "ffmpeg"):
+    """Send three frames of ``start``-``end`` with ``prompt``; the answer must match ``schema``.
+
+    Returns (answer, latency_seconds, frame_timestamps, frames_sha256, model). Reels (TODO 11) ask a different
+    question than scene search, so the frame grabbing and the Ollama call live here once.
+    """
     model = model or vlm_model()
     base_url = (base_url or os.environ.get("OLLAMA_BASE_URL") or "http://127.0.0.1:11434").rstrip("/")
     proposal = SceneBoundaryProposal("scene", ProposalKind.RAW_BLOCK, float(start), float(end), "scene", (), (), (), ())
@@ -98,9 +110,9 @@ def caption_interval(source_path: Path, start: float, end: float, *, model: str 
     started = perf_counter()
     try:
         response = httpx.post(f"{base_url}/api/chat", timeout=TIMEOUT_SECONDS, json={
-            "model": model, "stream": False, "format": VLMSceneCaption.model_json_schema(),
+            "model": model, "stream": False, "format": schema.model_json_schema(),
             "options": {"temperature": 0},
-            "messages": [{"role": "user", "content": PROMPT,
+            "messages": [{"role": "user", "content": prompt,
                           "images": [base64.b64encode(sample.jpeg_bytes).decode() for sample in framed.frame_samples]}]})
     except httpx.TimeoutException as error:
         raise VLMCaptionError("VLM_TIMEOUT") from error
@@ -110,12 +122,12 @@ def caption_interval(source_path: Path, start: float, end: float, *, model: str 
     if response.status_code != 200:
         raise VLMCaptionError("VLM_HTTP_ERROR")
     try:
-        caption = VLMSceneCaption.model_validate_json(response.json()["message"]["content"])
+        answer = schema.model_validate_json(response.json()["message"]["content"])
     except (ValueError, KeyError, TypeError, ValidationError) as error:
         raise VLMCaptionError("VLM_SCHEMA_INVALID") from error
     frames = b"".join(sample.jpeg_bytes for sample in framed.frame_samples)
-    return CaptionResult(caption, round(latency, 2), tuple(s.timestamp_seconds for s in framed.frame_samples),
-                         hashlib.sha256(frames).hexdigest(), model)
+    return (answer, round(latency, 2), tuple(s.timestamp_seconds for s in framed.frame_samples),
+            hashlib.sha256(frames).hexdigest(), model)
 
 
 def existing_caption(session: Session, candidate_id, model: str) -> SceneEvidence | None:

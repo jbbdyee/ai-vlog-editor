@@ -116,6 +116,79 @@ class BuildDraftTests(TestCase):
         self.assertEqual((none.mode, none.fallback_reason), ("recipe", "LLM_NOT_CONFIGURED"))
 
 
+def looked(rows, length=3.0):
+    """rows: (activity, item, speech) per shot."""
+    return [Shot(i, "s", "a.mp4", (i - 1) * length, i * length, f"장면{i}", speech, (i - 1) * length if speech else None,
+                 i * length if speech else None, item, activity) for i, (activity, item, speech) in enumerate(rows, start=1)]
+
+
+class CaptionQualityTests(TestCase):
+    """TODO 11: auto mode by vote, no copied speech or counting, name tags and "첫 번째" by Python."""
+
+    def test_auto_mode_follows_what_most_shots_are_doing(self):
+        rows = [("옷 보여주기", "브라운 미니스커트", "")] * 6 + [("이야기·셀카", "", "")] * 3
+        fake, calls = engine({"mode": "daily_vlog", "title": "t", "hook_shot": 1, "scenes": [{"shot": 1, "caption": "a"}]})
+        draft = build_draft(looked(rows), mode_key="auto", pace_key="normal", target_seconds=15, engine=fake)
+        self.assertEqual(draft.mode, "try_on")
+        self.assertIn("지정된 모드: try_on", calls[0][1])
+        self.assertTrue(any("9개 중 6개" in note for note in draft.notes))
+        mixed = looked([("춤", "", ""), ("요리", "", ""), ("운동", "", ""), ("이동·풍경", "", ""), ("기타", "", "")])
+        fake, _ = engine({"mode": "travel", "title": "t", "hook_shot": 1, "scenes": [{"shot": 1, "caption": "a"}]})
+        self.assertEqual(build_draft(mixed, mode_key="auto", pace_key="normal", target_seconds=10, engine=fake).mode, "travel",
+                         "no clear majority: the AI still chooses")
+
+    def test_counting_is_not_given_to_the_ai_and_copied_lines_are_rewritten_once(self):
+        rows = [("춤", "", "1, 2, 3, 4, 5!"), ("춤", "", "호흡 진흙 호흡"), ("춤", "", "할 수 있어")]
+        first = {"mode": "challenge", "title": "첫 댄스곡 도전기", "hook_shot": 1, "scenes": [
+            {"shot": 1, "caption": "1, 2, 3, 4, 5!"}, {"shot": 2, "caption": "호흡, 진흙, 호흡!"},
+            {"shot": 3, "caption": "포기 안 해"}]}
+        second = {**first, "scenes": [{"shot": 1, "caption": "동작 바로잡기"}, {"shot": 2, "caption": "호흡, 진흙, 호흡!"},
+                                      {"shot": 3, "caption": "포기 안 해"}]}
+        answers = iter([first, second])
+        calls = []
+
+        def complete(system, user, schema):
+            calls.append(user)
+            return json.dumps(next(answers), ensure_ascii=False)
+        draft = build_draft(looked(rows), mode_key="challenge", pace_key="normal", target_seconds=10,
+                            engine=("ollama", "gemma3:4b", complete))
+        self.assertNotIn("1, 2, 3, 4, 5", calls[0])
+        self.assertIn("들린 말(참고만): 호흡 진흙 호흡", calls[0])
+        self.assertEqual(len(calls), 2)
+        self.assertIn("다시 써라: 장면 1, 2의", calls[1])
+        self.assertNotIn("호흡 진흙 호흡", calls[1], "copied shots lose their speech in the rewrite")
+        captions = {s.shot_index: s.caption for s in draft.scenes}
+        self.assertEqual(captions[1], "동작 바로잡기")
+        self.assertEqual(captions[2], "", "still copied after the rewrite: no line rather than a lifted lyric")
+        self.assertEqual(captions[3], "포기 안 해")
+
+    def test_try_on_gets_name_tags_and_numbers_from_the_screen(self):
+        rows = [("옷 보여주기", "플라워 롱원피스", ""), ("옷 보여주기", "브라운 미니스커트", ""),
+                ("옷 보여주기", "브라운 스커트", ""), ("옷 보여주기", "플라워 원피스", ""), ("옷 보여주기", "", ""),
+                ("옷 보여주기", "빈티지 롱스커트", "")]
+        fake, calls = engine({"mode": "try_on", "title": "직접 입어본 추천템 3가지", "hook_shot": 1,
+                          "scenes": [{"shot": n, "caption": f"문구{n}"} for n in range(1, 7)]})
+        draft = build_draft(looked(rows, 2.5), mode_key="auto", pace_key="normal", target_seconds=15, engine=fake)
+        self.assertIn("보여주는 옷·물건 4가지(촬영 순서): 플라워 롱원피스(장면 1~1), 브라운 미니스커트(장면 2~3)", calls[0][1])
+        got = [(s.shot_index, s.label, s.caption) for s in draft.scenes]
+        self.assertEqual(got, [(1, "플라워 롱원피스", "문구1"), (2, "브라운 미니스커트", "첫 번째"), (3, "브라운 미니스커트", "문구3"),
+                               (4, "플라워 원피스", "두 번째"), (5, "플라워 원피스", "문구5"), (6, "빈티지 롱스커트", "세 번째")])
+
+    def test_counting_inside_a_line_and_base_tee_in_item_names(self):
+        from backend.app.services.reel_draft import _copies_speech, _is_counting, _one_item
+        self.assertTrue(_is_counting("1, 2, 3, 4, 5! 긍정 에너지!"))
+        self.assertFalse(_is_counting("직접 입어본 추천템 3가지"))
+        self.assertTrue(_copies_speech("대, 대야!! 완벽해!", "호흡.. 진흙... 대, 대야!! 잘했어!"))
+        self.assertFalse(_copies_speech("폭풍 칭찬 받았어요", "잘하셨습니다 너무 잘 따라왔죠"))
+        self.assertEqual(_one_item("흰색 반팔티, 짙은 갈색 미니스커트"), "짙은 갈색 미니스커트")
+
+    def test_old_saved_shots_without_item_still_load(self):
+        from backend.app.services.reel_draft import shots_from_json
+        old = {"index": 1, "source_video_id": "s", "source_filename": "a.mp4", "start_seconds": 0.0, "end_seconds": 2.0,
+               "caption": "c", "speech": "", "speech_start": None, "speech_end": None}
+        self.assertEqual(shots_from_json([old])[0].item, "")
+
+
 class AnalyzeShotsTests(TestCase):
     def test_long_shots_are_split_and_fake_speech_over_music_is_dropped(self):
         source_id = uuid4()
@@ -132,6 +205,16 @@ class AnalyzeShotsTests(TestCase):
         self.assertEqual(result[0].speech, "")
         self.assertEqual((result[1].speech, result[1].speech_start, result[1].speech_end), ("할 수 있어", 4.0, 5.0))
         self.assertEqual(result[2].caption, "9초 장면")
+
+    def test_screen_answer_keeps_item_and_activity(self):
+        from backend.app.services.reel_draft import ShotLook
+        source_id = uuid4()
+
+        def detect(path, *, source_video_id, duration_seconds, config):
+            return ShotStructureResult(source_video_id, duration_seconds, (), (ShotInterval(source_video_id, 0.0, 3.0, None, None),))
+        result = analyze_shots([SourceInput(source_id, "a.mp4", Path("a.mp4"), 3.0)], detect=detect,
+                               describe=lambda *_: ShotLook(caption="거울 앞 셀카", item="브라운 미니스커트", activity="옷 보여주기"))
+        self.assertEqual((result[0].item, result[0].activity), ("브라운 미니스커트", "옷 보여주기"))
 
 
 class ReelDraftApiTests(TestCase):
