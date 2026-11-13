@@ -127,3 +127,67 @@ def _run(project_id, factory, resolve, options, analyze, build) -> None:
         import logging
         logging.getLogger(__name__).exception("reel draft failed")
         _update(project_id, status="FAILED", error_code="REEL_DRAFT_FAILED")
+
+
+# --- TODO 12: make the vertical video from the saved draft (also in the background; it takes a minute or two) ---
+
+_render_jobs: dict[UUID, ReelJob] = {}
+
+
+def reel_output_dir(output_root: Path, project_id: UUID) -> Path:
+    return Path(output_root) / str(project_id) / "reel"
+
+
+def render_job_state(project_id: UUID) -> ReelJob:
+    with _lock:
+        job = _render_jobs.get(project_id)
+        return ReelJob(**vars(job)) if job else ReelJob()
+
+
+def start_reel_render(project_id: UUID, factory: sessionmaker[Session], resolve: Callable[[str], Path],
+                      output_root: Path, *, render=None, background: bool = True) -> str | None:
+    """None when started, otherwise a reason code (no draft yet, a draft or a video is being made)."""
+    from backend.app.services.reel_render import render_reel
+
+    with factory() as session:
+        if saved_draft(session, project_id) is None:
+            return "REEL_DRAFT_MISSING"
+    with _lock:
+        if project_id in _jobs and _jobs[project_id].status == "RUNNING":
+            return "REEL_DRAFT_RUNNING"
+        if project_id in _render_jobs and _render_jobs[project_id].status == "RUNNING":
+            return "REEL_VIDEO_RUNNING"
+        _render_jobs[project_id] = ReelJob(status="RUNNING", step="영상 확인")
+    work = lambda: _render(project_id, factory, resolve, output_root, render or render_reel)  # noqa: E731
+    if background:
+        threading.Thread(target=work, name=f"reel-video-{project_id}", daemon=True).start()
+    else:
+        work()
+    return None
+
+
+def _update_render(project_id: UUID, **changes) -> None:
+    with _lock:
+        for key, value in changes.items():
+            setattr(_render_jobs[project_id], key, value)
+
+
+def _render(project_id, factory, resolve, output_root, render) -> None:
+    from backend.app.services.reel_render import ReelRenderError
+
+    try:
+        with factory() as session:
+            draft = saved_draft(session, project_id)
+            rows = session.scalars(select(SourceVideo).where(SourceVideo.project_id == project_id)).all()
+            sources = {str(row.id): resolve(row.storage_reference) for row in rows}
+        render(draft, sources, reel_output_dir(output_root, project_id),
+               on_progress=lambda step, done, total: _update_render(project_id, step=step, done=done, total=total))
+        _update_render(project_id, status="COMPLETED", step="완료")
+    except ReelRenderError as error:
+        import logging
+        logging.getLogger(__name__).warning("reel video failed: %s", error)
+        _update_render(project_id, status="FAILED", error_code=error.code)
+    except Exception:  # noqa: BLE001 - the screen shows a safe code; details stay in the server log
+        import logging
+        logging.getLogger(__name__).exception("reel video failed")
+        _update_render(project_id, status="FAILED", error_code="REEL_VIDEO_FAILED")

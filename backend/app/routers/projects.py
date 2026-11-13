@@ -28,7 +28,9 @@ from backend.app.services.project_processing import process_project
 from backend.app.services.edit_request import MAX_REQUEST_LENGTH
 from backend.app.services.llm_edit_interpreter import interpret_with_llm
 from backend.app.services.story_direction import load_story_inputs, rebuild_direction, recommend_story_direction
-from backend.app.services.project_reel import ReelOptions, ReelProjectNotFound, job_state, saved_draft, start_reel_draft
+from backend.app.services.project_reel import (ReelOptions, ReelProjectNotFound, job_state, reel_output_dir,
+                                              render_job_state, saved_draft, start_reel_draft, start_reel_render)
+from backend.app.services.reel_render import draft_fingerprint, saved_video
 from backend.app.services.reel_modes import (AUTO_MODE, DEFAULT_PACE, DEFAULT_SHORT_SECONDS, MODE_BY_KEY, MODES, PACES,
                                              SHORT_LENGTHS)
 from backend.app.services.story_length import (LENGTH_OPTIONS, Moment, accept_minutes, fit_to_length, footage_seconds,
@@ -838,6 +840,72 @@ async def get_project_reel_draft(request: Request, project_id: UUID) -> ReelDraf
     except ReelProjectNotFound as error:
         raise _project_not_found() from error
 
+
+
+class ReelVideoInfo(BaseModel):
+    duration_seconds: float
+    file_size_bytes: int
+    scene_count: int
+    matches_draft: bool
+    url: str
+
+
+class ReelVideoStatusResponse(BaseModel):
+    project_id: UUID
+    status: str
+    step: str
+    done: int
+    total: int
+    error_code: str | None = None
+    video: ReelVideoInfo | None = None
+
+
+def _reel_video_status_sync(factory, output_root, project_id) -> ReelVideoStatusResponse:
+    with factory() as session:
+        draft = saved_draft(session, project_id)  # 404 for an unknown project
+    job = render_job_state(project_id)
+    video = saved_video(reel_output_dir(output_root, project_id))
+    info = None
+    if video is not None:
+        stamp = int(video.path.stat().st_mtime)
+        info = ReelVideoInfo(duration_seconds=video.duration_seconds, file_size_bytes=video.file_size_bytes,
+                             scene_count=video.scene_count,
+                             matches_draft=draft is not None and draft_fingerprint(draft) == video.draft_fingerprint,
+                             url=f"/projects/{project_id}/reel-video/file?v={stamp}")
+    return ReelVideoStatusResponse(project_id=project_id, status=job.status, step=job.step, done=job.done,
+                                   total=job.total, error_code=job.error_code, video=info)
+
+
+@router.post("/{project_id}/reel-video", response_model=ReelVideoStatusResponse, status_code=202)
+async def start_project_reel_video(request: Request, project_id: UUID) -> ReelVideoStatusResponse:
+    """TODO 12: make the vertical video (title and lines burned in) from the saved reel draft."""
+    factory, output_root = _session_factory(request), request.app.state.project_render_output_root
+    try:
+        await run_in_threadpool(_reel_video_status_sync, factory, output_root, project_id)
+    except ReelProjectNotFound as error:
+        raise _project_not_found() from error
+    reason = await run_in_threadpool(start_reel_render, project_id, factory, request.app.state.source_storage.resolve,
+                                     output_root)
+    if reason is not None:
+        raise HTTPException(status_code=409, detail={"code": reason, "message": "The reel video cannot start now."})
+    return await run_in_threadpool(_reel_video_status_sync, factory, output_root, project_id)
+
+
+@router.get("/{project_id}/reel-video", response_model=ReelVideoStatusResponse)
+async def get_project_reel_video(request: Request, project_id: UUID) -> ReelVideoStatusResponse:
+    try:
+        return await run_in_threadpool(_reel_video_status_sync, _session_factory(request),
+                                       request.app.state.project_render_output_root, project_id)
+    except ReelProjectNotFound as error:
+        raise _project_not_found() from error
+
+
+@router.get("/{project_id}/reel-video/file", response_class=FileResponse)
+async def get_project_reel_video_file(request: Request, project_id: UUID) -> FileResponse:
+    video = saved_video(reel_output_dir(request.app.state.project_render_output_root, project_id))
+    if video is None:
+        raise HTTPException(status_code=404, detail={"code": "REEL_VIDEO_MISSING", "message": "No reel video yet."})
+    return FileResponse(video.path, media_type="video/mp4", filename="reel.mp4", content_disposition_type="inline")
 
 def _read_scene_edit_plan_sync(factory, project_id):
     with factory() as session:

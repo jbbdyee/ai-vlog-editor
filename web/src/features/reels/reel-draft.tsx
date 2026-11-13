@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Clapperboard, LoaderCircle } from "lucide-react";
+import { Clapperboard, Download, Film, LoaderCircle } from "lucide-react";
 import { ApiError } from "@/api/projects";
 import { formatDuration } from "@/api/story-direction";
-import { getReelOptions, getReelStatus, startReelDraft, type ReelOption } from "@/api/reels";
+import { getReelOptions, getReelStatus, getReelVideo, reelVideoSrc, startReelDraft, startReelVideo, type ReelOption } from "@/api/reels";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,6 +36,61 @@ function Choices({ label, options, value, onChange, disabled }: { label: string;
   </div>;
 }
 
+const videoErrors: Record<string, string> = {
+  REEL_DRAFT_MISSING: "먼저 릴스 초안을 만들어 주세요.",
+  REEL_DRAFT_RUNNING: "릴스 초안을 만드는 중입니다. 끝난 뒤에 영상을 만들어 주세요.",
+  REEL_VIDEO_RUNNING: "이미 세로 영상을 만드는 중입니다.",
+  REEL_SOURCE_MISSING: "초안에 쓰인 원본 영상 파일을 찾지 못했습니다.",
+  REEL_FONT_MISSING: "글자를 입힐 한글 글꼴(맑은 고딕 굵게)을 찾지 못했습니다.",
+  REEL_TEXT_FAILED: "제목·문구를 영상에 입히다가 문제가 생겼습니다.",
+};
+
+function videoErrorText(code: string | null | undefined, error?: unknown): string {
+  if (error instanceof ApiError) return (error.code && videoErrors[error.code]) || error.message;
+  return (code && videoErrors[code]) || "세로 영상을 만들지 못했습니다. 다시 시도해 주세요.";
+}
+
+/** TODO 12: turn the saved draft into a 9:16 video with the title, name tags and lines burned in. */
+function ReelVideoPanel({ projectId, draftKey, draftRunning }: { projectId: string; draftKey: string; draftRunning: boolean }) {
+  const queryClient = useQueryClient();
+  const status = useQuery({
+    queryKey: ["reel-video", projectId, draftKey], queryFn: () => getReelVideo(projectId),
+    refetchInterval: (query) => query.state.data?.status === "RUNNING" ? 2000 : false,
+  });
+  const start = useMutation({
+    mutationFn: () => startReelVideo(projectId),
+    onSuccess: (value) => queryClient.setQueryData(["reel-video", projectId, draftKey], value),
+  });
+  const running = status.data?.status === "RUNNING" || start.isPending;
+  const video = status.data?.video;
+  return <div className="space-y-3 rounded-xl border border-white/10 bg-white/[.03] p-3" aria-label="세로 영상">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-slate-100">세로 영상 (9:16)</p>
+        <p className="text-xs text-slate-400">초안 순서대로 이어 붙이고 첫 화면 제목·이름표·문구를 글자로 입힙니다. 30초짜리 릴스는 20초쯤 걸려요.</p>
+      </div>
+      <Button onClick={() => start.mutate()} disabled={running || draftRunning}>
+        <span className="flex items-center gap-2">{running ? <LoaderCircle size={16} className="animate-spin" /> : <Film size={16} />}{running ? "세로 영상 만드는 중…" : video ? "세로 영상 다시 만들기" : "세로 영상 만들기"}</span>
+      </Button>
+    </div>
+    {status.data?.status === "RUNNING" && <p role="status" className="text-sm text-cyan-200 tabular-nums">
+      {status.data.step}{status.data.total > 0 ? ` · ${status.data.done}/${status.data.total}개` : ""}
+    </p>}
+    {status.isError && <Alert>{videoErrorText(null, status.error)}</Alert>}
+    {start.isError && <Alert>{videoErrorText(null, start.error)}</Alert>}
+    {status.data?.status === "FAILED" && <Alert>{videoErrorText(status.data.error_code)}</Alert>}
+    {video && <div className="flex flex-wrap items-start gap-4">
+      <video key={video.url} controls playsInline preload="metadata" src={reelVideoSrc(video)} aria-label="완성된 세로 영상"
+        className="aspect-[9/16] w-full max-w-[260px] rounded-xl bg-black" />
+      <div className="min-w-0 space-y-2 text-sm text-slate-300">
+        <p className="tabular-nums">길이 <b className="text-slate-50">{formatDuration(video.duration_seconds)}</b> · 장면 {video.scene_count}개 · {(video.file_size_bytes / 1024 / 1024).toFixed(1)}MB</p>
+        {!video.matches_draft && <p className="text-xs text-amber-200">초안을 다시 만들어서 이 영상은 예전 초안으로 만든 것입니다. 지금 초안으로 보려면 다시 만들어 주세요.</p>}
+        <a href={reelVideoSrc(video)} download="reel.mp4" className="inline-flex items-center gap-1.5 text-cyan-300 underline"><Download size={14} />영상 내려받기</a>
+      </div>
+    </div>}
+  </div>;
+}
+
 /** TODO 10: pick short/long, mode, pace and length, then the AI drafts a reel (order, length per shot, title, lines). */
 export function ReelDraftCard({ projectId, onPreview }: { projectId: string; onPreview?: (range: PreviewRange) => void }) {
   const queryClient = useQueryClient();
@@ -64,7 +119,7 @@ export function ReelDraftCard({ projectId, onPreview }: { projectId: string; onP
   return <Card id="reel-draft" className="mt-3 scroll-mt-24 sm:mt-6 sm:scroll-mt-3">
     <CardHeader>
       <CardTitle>숏폼·롱폼 만들기</CardTitle>
-      <CardDescription>무엇을 만들지 먼저 고르세요. 숏폼은 AI가 장면 순서, 장면별 길이, 첫 화면 제목, 장면 문구를 짠 초안을 보여줍니다. 영상 파일은 다음 단계에서 만듭니다.</CardDescription>
+      <CardDescription>무엇을 만들지 먼저 고르세요. 숏폼은 AI가 장면 순서, 장면별 길이, 첫 화면 제목, 장면 문구를 짠 초안을 보여줍니다. 초안이 나오면 바로 세로 영상으로 만들 수 있습니다.</CardDescription>
     </CardHeader>
     <CardContent className="space-y-4">
       {options.isError && <Alert>{errorText(options.error)}</Alert>}
@@ -96,6 +151,8 @@ export function ReelDraftCard({ projectId, onPreview }: { projectId: string; onP
           <p className="mt-1 text-xs text-slate-500">{byAi ? `AI 초안 (${draft.engine.replace("llm:", "")})` : "AI 없이 촬영 순서대로 만든 기본 초안"}</p>
           {draft.notes.map((note) => <p key={note} className="text-xs text-amber-200">{note}</p>)}
         </div>
+        <ReelVideoPanel projectId={projectId} draftRunning={running}
+          draftKey={`${draft.mode}|${draft.title}|${draft.total_seconds}|${draft.scenes.map((s) => `${s.shot_index}:${s.caption}`).join(",")}`} />
         <ol className="space-y-2">
           {draft.scenes.map((scene, index) => <li key={`${scene.shot_index}:${index}`} className="flex min-w-0 flex-wrap items-start justify-between gap-2 rounded-xl border border-white/10 bg-[#0b1420] p-3">
             <div className="min-w-0 flex-1">

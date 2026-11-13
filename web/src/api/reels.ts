@@ -86,3 +86,43 @@ export async function startReelDraft(id: string, body: ReelRequest): Promise<Ree
     }, 202), id);
   } catch (error) { return unsupported(error); }
 }
+
+/** TODO 12: the vertical video made from the saved draft. */
+export interface ReelVideo {
+  duration_seconds: number;
+  file_size_bytes: number;
+  scene_count: number;
+  /** False when the draft was remade after this video, so the video shows an older draft. */
+  matches_draft: boolean;
+  url: string;
+}
+
+export interface ReelVideoStatus {
+  project_id: string;
+  status: "IDLE" | "RUNNING" | "COMPLETED" | "FAILED";
+  step: string;
+  done: number;
+  total: number;
+  error_code: string | null;
+  video: ReelVideo | null;
+}
+
+function checkVideo(value: ReelVideoStatus, id: string): ReelVideoStatus {
+  if (!value || value.project_id !== id || typeof value.status !== "string" || (value.video && typeof value.video.url !== "string")) {
+    throw new ApiError("릴스 영상 응답을 확인할 수 없습니다.");
+  }
+  return value;
+}
+
+/** Browser address of the finished video (the server URL plus the /api prefix the screen uses). */
+export function reelVideoSrc(video: ReelVideo): string {
+  return `/api${video.url}`;
+}
+
+export async function getReelVideo(id: string): Promise<ReelVideoStatus> {
+  try { return checkVideo(await request<ReelVideoStatus>(`/projects/${id}/reel-video`), id); } catch (error) { return unsupported(error); }
+}
+
+export async function startReelVideo(id: string): Promise<ReelVideoStatus> {
+  try { return checkVideo(await request<ReelVideoStatus>(`/projects/${id}/reel-video`, { method: "POST" }, 202), id); } catch (error) { return unsupported(error); }
+}

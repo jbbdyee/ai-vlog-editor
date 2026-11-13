@@ -1,0 +1,174 @@
+"""TODO 12: the saved reel draft becomes a vertical 1080x1920 video with the title, name tags and lines burned in."""
+
+from pathlib import Path
+import shutil
+import subprocess
+from tempfile import TemporaryDirectory
+import time
+from unittest import TestCase, skipUnless
+from unittest.mock import patch
+from uuid import uuid4
+
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from backend.app.database import Base
+from backend.app.main import app
+from backend.app.models import EpisodeSplitPolicy, Project, SourceVideo
+from backend.app.models.reel import ProjectReelDraft
+from backend.app.services.reel_draft import ReelDraft, ReelScene
+from backend.app.services.reel_render import (DEFAULT_FONT, ReelRenderError, build_ass, clean_text, draft_fingerprint,
+                                              render_reel, saved_video)
+
+VERTICAL = "00000000-0000-0000-0000-00000000000a"
+WIDE = "00000000-0000-0000-0000-00000000000b"
+HAVE_TOOLS = shutil.which("ffmpeg") is not None and DEFAULT_FONT.is_file()
+
+
+def draft(*scenes, title="이 3벌 중에 골라줘 😍"):
+    return ReelDraft("short", "haul", "옷 입어보기·하울", "normal", "보통", 15, 0.0, title, "llm:test",
+                     tuple(scenes), len(scenes))
+
+
+def scene(index, source, start, end, caption="", label="", hook=False):
+    return ReelScene(index, source, f"{source[-1]}.mp4", start, end, caption, label, hook)
+
+
+def make_video(path: Path, width: int, height: int, seconds: float, audio: bool) -> Path:
+    command = ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"testsrc=size={width}x{height}:rate=60:d={seconds}"]
+    if audio:
+        command += ["-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}", "-c:a", "aac", "-shortest"]
+    subprocess.run(command + ["-c:v", "libx264", "-pix_fmt", "yuv420p", str(path)], check=True, capture_output=True)
+    return path
+
+
+def probe(path: Path) -> tuple[int, int, float]:
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                          "stream=width,height:format=duration", "-of", "default=nw=1:nk=1", str(path)],
+                         check=True, capture_output=True, text=True).stdout.split()
+    return int(out[0]), int(out[1]), float(out[2])
+
+
+class SubtitleTextTests(TestCase):
+    def test_emoji_dropped_and_braces_cannot_become_ass_commands(self):
+        self.assertEqual(clean_text("핏 미쳤다 😍✨ {\\b1}진짜  "), "핏 미쳤다 (b1)진짜")
+
+    def test_title_on_first_scene_and_each_scene_gets_its_tag_and_line_back_to_back(self):
+        ass = build_ass(draft(scene(3, VERTICAL, 1.0, 2.0, "첫 장면", "브라운 미니스커트", True),
+                              scene(1, VERTICAL, 0.0, 2.5, "핏 예쁘지?", "첫 번째 · 브라운 미니스커트"),
+                              scene(2, WIDE, 0.0, 1.5, "")))
+        lines = [line for line in ass.splitlines() if line.startswith("Dialogue")]
+        # Hook is 1 s, but the title stays at least 2.5 s so it can be read.
+        self.assertIn("Dialogue: 1,0:00:00.00,0:00:02.50,Title,,0,0,0,,이 3벌 중에 골라줘", lines)
+        self.assertIn("Dialogue: 0,0:00:01.00,0:00:03.50,Caption,,0,0,0,,핏 예쁘지?", lines)
+        self.assertIn("Dialogue: 0,0:00:01.00,0:00:03.50,Label,,0,0,0,,첫 번째 · 브라운 미니스커트", lines)
+        self.assertEqual(len(lines), 5, "an empty line makes no subtitle")
+        self.assertIn("PlayResY: 1920", ass)
+
+
+@skipUnless(HAVE_TOOLS, "needs FFmpeg and the Malgun Gothic font")
+class RenderReelTests(TestCase):
+    def setUp(self):
+        self.temporary = TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.sources = {VERTICAL: make_video(self.root / "v.mp4", 360, 640, 4, audio=True),
+                        WIDE: make_video(self.root / "w.mp4", 640, 360, 4, audio=False)}
+
+    def test_vertical_and_wide_sources_become_one_1080x1920_video_of_the_draft_length(self):
+        reel = draft(scene(2, VERTICAL, 2.0, 3.0, "첫 장면", "", True), scene(1, WIDE, 0.0, 1.5, "가로 영상 😎"),
+                     scene(3, VERTICAL, 0.5, 2.25, "마지막", "두 번째 · 블라우스"))
+        steps = []
+        video = render_reel(reel, self.sources, self.root / "out", on_progress=lambda s, d, t: steps.append(s))
+        width, height, seconds = probe(video.path)
+        self.assertEqual((width, height), (1080, 1920))
+        self.assertAlmostEqual(seconds, 4.25, delta=0.1)
+        self.assertEqual(video.scene_count, 3)
+        self.assertEqual(steps[-1], "제목·문구 글자 입히기")
+        self.assertEqual(saved_video(self.root / "out").draft_fingerprint, draft_fingerprint(reel))
+        self.assertEqual([p.name for p in (self.root / "out").iterdir()], ["reel.json", "reel.mp4"],
+                         "work files are cleaned up")
+
+    def test_missing_source_is_reported_before_anything_is_cut(self):
+        with self.assertRaises(ReelRenderError) as caught:
+            render_reel(draft(scene(1, str(uuid4()), 0, 1, "x", hook=True)), self.sources, self.root / "out")
+        self.assertEqual(caught.exception.code, "REEL_SOURCE_MISSING")
+
+
+class ReelVideoApiTests(TestCase):
+    def setUp(self):
+        self.temporary = TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        root = Path(self.temporary.name)
+        self.engine = create_engine(f"sqlite+pysqlite:///{root / 'reel.db'}", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(self.engine)
+        self.addCleanup(self.engine.dispose)
+        self.factory = sessionmaker(bind=self.engine, expire_on_commit=False)
+        loader = patch("backend.app.main.load_model", return_value=object())
+        loader.start()
+        self.addCleanup(loader.stop)
+        context = TestClient(app)
+        self.client = context.__enter__()
+        self.addCleanup(context.__exit__, None, None, None)
+        app.state.project_session_factory = self.factory
+        output = patch.object(app.state, "project_render_output_root", root / "outputs", create=True)
+        output.start()
+        self.addCleanup(output.stop)
+        resolve = patch.object(app.state.source_storage, "resolve", lambda reference: root / "originals" / "a.mp4")
+        resolve.start()
+        self.addCleanup(resolve.stop)
+        with self.factory() as session:
+            project = Project(name="reels", split_policy=EpisodeSplitPolicy.SINGLE)
+            session.add(project)
+            session.flush()
+            source = SourceVideo(project_id=project.id, original_filename="a.mp4",
+                                 storage_reference=f"projects/{project.id.hex}/sources/a.mp4", duration_seconds=5)
+            session.add(source)
+            session.flush()
+            self.project_id, self.source_id = project.id, source.id
+            session.commit()
+
+    def save_draft(self, caption="문구"):
+        reel = draft(scene(1, str(self.source_id), 0, 1, caption, hook=True))
+        with self.factory() as session:
+            record = session.get(ProjectReelDraft, self.project_id) or ProjectReelDraft(project_id=self.project_id)
+            record.format, record.mode, record.pace, record.target_seconds = "short", "haul", "normal", 15
+            record.analysis_fingerprint, record.shots, record.draft = "x", [], reel.to_json()
+            session.add(record)
+            session.commit()
+
+    def wait(self):
+        for _ in range(200):
+            body = self.client.get(f"/projects/{self.project_id}/reel-video").json()
+            if body["status"] != "RUNNING":
+                return body
+            time.sleep(0.02)
+        self.fail("reel video did not finish")
+
+    def fake_render(self, reel, sources, output_dir, on_progress=None):
+        self.seen_sources = sources
+        output_dir.mkdir(parents=True)
+        (output_dir / "reel.mp4").write_bytes(b"mp4")
+        (output_dir / "reel.json").write_text(
+            f'{{"duration_seconds": 1.0, "file_size_bytes": 3, "draft_fingerprint": "{draft_fingerprint(reel)}", '
+            f'"scene_count": 1}}', encoding="utf-8")
+
+    def test_needs_a_draft_first(self):
+        refused = self.client.post(f"/projects/{self.project_id}/reel-video")
+        self.assertEqual((refused.status_code, refused.json()["detail"]["code"]), (409, "REEL_DRAFT_MISSING"))
+        self.assertEqual(self.client.get(f"/projects/{uuid4()}/reel-video").status_code, 404)
+        self.assertEqual(self.client.get(f"/projects/{self.project_id}/reel-video/file").status_code, 404)
+
+    def test_make_play_and_notice_when_the_draft_changes_afterwards(self):
+        self.save_draft()
+        with patch("backend.app.services.reel_render.render_reel", self.fake_render):
+            self.assertEqual(self.client.post(f"/projects/{self.project_id}/reel-video").status_code, 202)
+            body = self.wait()
+        self.assertEqual(body["status"], "COMPLETED")
+        self.assertIn(str(self.source_id), self.seen_sources)
+        self.assertTrue(body["video"]["matches_draft"])
+        file = self.client.get(body["video"]["url"])
+        self.assertEqual((file.status_code, file.content, file.headers["content-type"]), (200, b"mp4", "video/mp4"))
+        self.save_draft(caption="바뀐 문구")
+        self.assertFalse(self.client.get(f"/projects/{self.project_id}/reel-video").json()["video"]["matches_draft"])
