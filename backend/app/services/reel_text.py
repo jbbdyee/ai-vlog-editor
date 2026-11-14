@@ -37,6 +37,32 @@ MAX_LINE_WIDTH = 920  # px of the 1080 wide frame a line may use
 LINE_GAP = 1.3  # line height as a multiple of the font size
 # Instagram covers the top and bottom of a reel with its own buttons; lines stay between these.
 SAFE_TOP, SAFE_BOTTOM, MIDDLE = 300.0, 1420.0, 1060.0
+# TODO 17: a wide clip is not centred but sits a little high (its top edge at y=520), like the popular reels: the
+# title goes in the black band above it and the name tag and line in the band right below it.
+WIDE_VIDEO_TOP = 520
+BAND_GAP = 36  # px between the clip's edge and the text in a band
+BAND_ROOM = 200  # px the band below should keep for text before the safe-area bottom
+
+
+@dataclass(frozen=True)
+class WideFrame:
+    """Where a wide clip sits in the 1080x1920 frame (rows ``top`` to ``bottom``)."""
+    top: int
+    height: int
+
+    @property
+    def bottom(self) -> int:
+        return self.top + self.height
+
+
+def wide_frame(width: int | None, height: int | None) -> WideFrame | None:
+    """Place of a clip of this on-screen size, or None for a portrait/square clip (it fills the frame as before)."""
+    if not width or not height or width <= height:
+        return None
+    scaled = max(2, round(WIDTH * height / width / 2) * 2)  # even, for the video encoder
+    # A taller clip (4:3) moves up so the band below still has room for the lines.
+    top = min(WIDE_VIDEO_TOP, max(0, int(SAFE_BOTTOM) - BAND_ROOM - scaled))
+    return WideFrame(top - top % 2, scaled)
 
 
 @dataclass(frozen=True)
@@ -389,14 +415,20 @@ class _Writer:
         pill = look == "box" and line.role in ("title_big", "tag")
         return line.size * (LINE_GAP + (0.36 if pill else 0.0))  # pills need air between them
 
-    def block(self, start: str, end: str, lines: Sequence[_Line], place: str, below: float = 0.0) -> tuple[float, float]:
+    def height(self, lines: Sequence[_Line]) -> float:
+        return sum(self.advance(line) for line in lines)
+
+    def block(self, start: str, end: str, lines: Sequence[_Line], place: str, below: float = 0.0,
+              at: float | None = None) -> tuple[float, float]:
         """Stack lines at the top, middle or bottom of the frame; returns the block's top and bottom.
 
         ``below``: keep the block under this y (the title, while it shares the top of the frame with the lines).
+        ``at``: put the block's top exactly here (the black bands around a wide clip).
         """
-        height = sum(self.advance(line) for line in lines)
-        top = {"top": SAFE_TOP, "middle": MIDDLE - height / 2, "bottom": SAFE_BOTTOM - height,
-               "title_top": 250.0, "title_middle": 820.0 - height / 2}[place]
+        height = self.height(lines)
+        top = at if at is not None else {"top": SAFE_TOP, "middle": MIDDLE - height / 2,
+                                         "bottom": SAFE_BOTTOM - height, "title_top": 250.0,
+                                         "title_middle": 820.0 - height / 2}[place]
         top = max(top, below)
         y = top
         for line in lines:
@@ -405,8 +437,14 @@ class _Writer:
         return top, y
 
 
-def _title(writer: _Writer, template: Template, title: str, start: str, end: str, place: str, lead: str = "") -> float:
-    """Draw the title; returns the y where it ends.
+def _band_top(height: float, band: WideFrame) -> float:
+    """Top of a block that ends just above a wide clip, never above the safe area."""
+    return max(SAFE_TOP, band.top - BAND_GAP - height)
+
+
+def _title(writer: _Writer, template: Template, title: str, start: str, end: str, place: str, lead: str = "",
+           band: WideFrame | None = None) -> float:
+    """Draw the title; returns the y where it ends. ``band``: the first scene is wide, so the title sits above it.
 
     TODO 14: when the draft has a lead-in, it and the title are two separate text boxes (as in Blo), never one
     sentence cut in two. Older drafts without a lead-in are still split at a space near the middle.
@@ -429,8 +467,8 @@ def _title(writer: _Writer, template: Template, title: str, start: str, end: str
     if mark == "pill" and len(lines) > 1:  # first line becomes a rounded badge above the big line
         badge, rest = lines[0], lines[1:]
         badge = _Line(badge.text, writer.px(template.title_small * 0.74), "title_small", template.display)
-        height = badge.size * 1.9 + sum(writer.advance(line) for line in rest)
-        top = (820.0 - height / 2) if place == "title_middle" else 250.0
+        height = badge.size * 1.9 + writer.height(rest)
+        top = (_band_top(height, band) if band else (820.0 - height / 2) if place == "title_middle" else 250.0)
         writer.pill(0, start, end, WIDTH / 2, top, badge.width + badge.size * 1.4, badge.size * 1.56, accent, "10",
                     role="title_small")
         writer.text(1, start, end, top + badge.size * 0.2, badge, "#2A2A2E" if _is_light(accent) else "#FFFFFF")
@@ -439,7 +477,9 @@ def _title(writer: _Writer, template: Template, title: str, start: str, end: str
             writer.line(start, end, y, line)
             y += writer.advance(line)
         return y
-    top, bottom = writer.block(start, end, lines, place)
+    top, bottom = writer.block(start, end, lines, place,
+                               at=_band_top(writer.height(lines) + (writer.px(40) if mark == "stars" else 0), band)
+                               if band else None)
     widest = max(line.width for line in lines)
     if mark == "stars":
         left, right = WIDTH / 2 - widest / 2, WIDTH / 2 + widest / 2
@@ -461,8 +501,15 @@ def _ms(end: float, begin: float = 0.0) -> int:
     return (max(0, round(end * 100)) - max(0, round(begin * 100))) * 10
 
 
-def build_ass(draft, style: TextStyle | dict | None = None) -> str:
-    """Times follow the frame-snapped scene lengths, the same ones used to cut the video."""
+def build_ass(draft, style: TextStyle | dict | None = None,
+              wide: Sequence[WideFrame | None] | None = None) -> str:
+    """Times follow the frame-snapped scene lengths, the same ones used to cut the video.
+
+    ``wide``: per scene, where its wide clip sits (None for a portrait scene). A wide scene's name tag and line go in
+    the band right under the clip whatever position was chosen; the title goes above the first scene's clip.
+    """
+    boxes = list(wide or [])
+    boxes += [None] * (len(draft.scenes) - len(boxes))
     style = normalize(style)
     template = TEMPLATE_BY_KEY[style.template]
     accent = COLORS[style.color if style.color != AUTO else template.accent][1]
@@ -487,6 +534,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     title_place = template.title_place
     if title_place == "middle" and place == "middle":
         title_place = "top"
+    title_band = boxes[0] if boxes else None
+    if title_band:
+        title_place = "top"  # above the clip, in the top band
     t, title_end, title_bottom = 0.0, 0.0, 0.0
     total = sum(frames(s.end_seconds - s.start_seconds) for s in draft.scenes) / FPS
     for index, scene in enumerate(draft.scenes):
@@ -498,7 +548,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             writer.motion = (None if style.motion == "none"
                              else _Motion(style.motion, _ms(title_end), fade_out=title_end < total - 0.001))
             title_bottom = _title(writer, template, title, start, ass_time(title_end), f"title_{title_place}",
-                                  clean_text(getattr(draft, "title_lead", "")))
+                                  clean_text(getattr(draft, "title_lead", "")), band=title_band)
         writer.motion = None if style.motion == "none" else _Motion(style.motion, _ms(t + length, t), caption=True)
         lines: list[_Line] = []
         if label:
@@ -509,7 +559,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             size, font = writer.px(template.caption), template.font
             lines += [_Line(text, size, "caption", font)
                       for text in wrap(caption, size, template.spacing, letter=_usable(font).width)]
-        if lines:
+        box = boxes[index]
+        if lines and box:  # wide clip: right under it, kept inside the safe area
+            writer.block(start, end, lines, place,
+                         at=min(box.bottom + BAND_GAP, SAFE_BOTTOM - writer.height(lines)))
+        elif lines:
             # While the title is up and shares the top of the frame, the lines sit right under it.
             under = title_place == place == "top" and t < title_end - 0.001
             writer.block(start, end, lines, place, below=title_bottom + writer.px(24) if under else 0.0)

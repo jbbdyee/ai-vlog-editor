@@ -20,7 +20,8 @@ from backend.app.models.reel import ProjectReelDraft
 from backend.app.services.reel_draft import ReelDraft, ReelScene
 from backend.app.services.reel_render import (DEFAULT_FONT, ReelRenderError, build_ass, clean_text, draft_fingerprint,
                                               render_reel, saved_video)
-from backend.app.services.reel_text import TEMPLATES, TextStyle, font_files, normalize, split_title, wrap
+from backend.app.services.reel_text import (TEMPLATES, TextStyle, WideFrame, font_files, normalize, split_title,
+                                            wide_frame, wrap)
 
 VERTICAL = "00000000-0000-0000-0000-00000000000a"
 WIDE = "00000000-0000-0000-0000-00000000000b"
@@ -109,6 +110,31 @@ class SubtitleTextTests(TestCase):
         late = draft(scene(1, VERTICAL, 0.0, 3.0, "첫 장면", hook=True), scene(2, VERTICAL, 0.0, 2.0, "나중 장면"))
         self.assertEqual(top_of(build_ass(late, TextStyle("pixel")), "나중 장면"), 300, "back at the top afterwards")
 
+    def test_wide_clip_sits_high_with_title_above_and_lines_right_below(self):
+        """TODO 17: wide clip top at 520; title in the band above it, tag and line under it, all within 300-1420."""
+        def top_of(ass, text):
+            line = next(row for row in ass.splitlines() if row.startswith("Dialogue") and text in row.split("}")[-1])
+            if "\\move(" in line:
+                return int(line.split("\\move(")[1].split(")")[0].split(",")[3])
+            return int(line.split("\\pos(")[1].split(")")[0].split(",")[1])
+
+        self.assertEqual(wide_frame(1920, 1080), WideFrame(520, 608))
+        self.assertIsNone(wide_frame(1080, 1920))
+        self.assertLess(wide_frame(1440, 1080).top, 520, "a 4:3 clip moves up so the band below keeps room")
+        reel = draft(scene(1, WIDE, 0, 3, "첫 장면", "알약 이름표", True), scene(2, VERTICAL, 0, 2, "세로 장면"))
+        box = wide_frame(1920, 1080)
+        for key in ("box", "pixel", "clean", "basic"):
+            ass = build_ass(reel, TextStyle(key, position="top"), [box, None])
+            self.assertLess(top_of(ass, "골라줘"), box.top, key)
+            self.assertGreaterEqual(top_of(ass, "이 3벌"), 300, key)
+            self.assertEqual(top_of(ass, "알약 이름표"), box.bottom + 36, key)
+            self.assertGreater(top_of(ass, "첫 장면"), box.bottom, key)
+            self.assertLess(top_of(ass, "첫 장면"), 1420, key)
+        # the portrait scene keeps the chosen place, as before
+        self.assertEqual(top_of(build_ass(reel, TextStyle("box", position="bottom"), [box, None]), "세로 장면"),
+                         top_of(build_ass(reel, TextStyle("box", position="bottom")), "세로 장면"))
+        self.assertEqual(build_ass(reel, TextStyle("box"), [None, None]), build_ass(reel, TextStyle("box")))
+
     def test_lead_in_from_the_draft_is_its_own_text_box(self):
         """TODO 14: Blo's title is two text boxes; the AI writes both, nothing is cut in the middle."""
         from dataclasses import replace
@@ -182,11 +208,40 @@ class RenderReelTests(TestCase):
         self.assertEqual((width, height), (1080, 1920))
         self.assertAlmostEqual(seconds, 4.25, delta=0.1)
         self.assertEqual(video.scene_count, 3)
+        # TODO 17: during the wide scene (1.0-2.5 s) the picture fills rows 520-1128; above and below stay black.
+        gray = subprocess.run(["ffmpeg", "-v", "error", "-ss", "1.75", "-i", str(video.path), "-frames:v", "1",
+                               "-f", "rawvideo", "-pix_fmt", "gray", "-"], check=True, capture_output=True).stdout
+        row = lambda y: sum(gray[y * 1080:(y + 1) * 1080]) / 1080  # noqa: E731
+        self.assertLess(row(480), 30)
+        self.assertGreater(row(540), 40)
+        self.assertGreater(row(1100), 40)
+        self.assertLess(row(1145), 30)
         self.assertEqual(steps[-1], "제목·문구 글자 입히기")
         self.assertEqual(saved_video(self.root / "out").draft_fingerprint, draft_fingerprint(reel))
         self.assertEqual(saved_video(self.root / "out").text_style, TextStyle("clean", color="pink"))
         self.assertEqual([p.name for p in (self.root / "out").iterdir()], ["reel.json", "reel.mp4"],
                          "work files are cleaned up")
+
+    def test_wide_shot_saved_with_black_bars_in_a_portrait_file_is_placed_like_a_wide_clip(self):
+        """TODO 17: the dance test file is 9:16 with a 16:9 picture and black bars baked in."""
+        baked = self.root / "baked.mp4"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                        "color=c=0x909090:size=360x204:rate=30:d=3,pad=360:640:0:218:black", "-c:v", "libx264",
+                        "-pix_fmt", "yuv420p", str(baked)], check=True, capture_output=True)
+        dark = make_video(self.root / "dark.mp4", 360, 640, 3, audio=False)  # a real portrait clip stays as it was
+        reel = draft(scene(1, WIDE, 0.0, 1.5, "띠 안 장면", hook=True), scene(2, VERTICAL, 0.0, 1.5, "세로"))
+        video = render_reel(reel, {WIDE: str(baked), VERTICAL: str(dark)}, self.root / "out",
+                            text_style=TextStyle("box"))
+
+        def rows(at):
+            gray = subprocess.run(["ffmpeg", "-v", "error", "-ss", str(at), "-i", str(video.path), "-frames:v", "1",
+                                   "-f", "rawvideo", "-pix_fmt", "gray", "-"], check=True, capture_output=True).stdout
+            return lambda y: sum(gray[y * 1080:(y + 1) * 1080]) / 1080
+
+        row = rows(0.75)
+        self.assertGreater(row(540), 40, "the picture starts at 520, not at the file's own bar")
+        self.assertLess(row(1150), 30)
+        self.assertGreater(rows(2.25)(200), 40, "the portrait clip still fills the frame")
 
     def test_missing_source_is_reported_before_anything_is_cut(self):
         with self.assertRaises(ReelRenderError) as caught:

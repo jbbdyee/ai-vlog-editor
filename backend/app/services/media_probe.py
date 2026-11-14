@@ -20,6 +20,24 @@ class MediaInfo:
     video_codec: str | None
     audio_codec: str | None
     format_name: str
+    # TODO 17: stored pixel size and the phone's turn (0/90/180/270). A phone often stores a portrait clip as a wide
+    # picture plus "turn 90°", so what the eye sees is ``display_width`` x ``display_height``.
+    width: int | None = None
+    height: int | None = None
+    rotation: int = 0
+
+    @property
+    def display_width(self) -> int | None:
+        return self.height if self.rotation in (90, 270) else self.width
+
+    @property
+    def display_height(self) -> int | None:
+        return self.width if self.rotation in (90, 270) else self.height
+
+    @property
+    def is_wide(self) -> bool:
+        """Landscape as seen on screen. Unknown size counts as not wide (the old centred layout)."""
+        return bool(self.display_width and self.display_height and self.display_width > self.display_height)
 
 
 def probe_media(
@@ -95,7 +113,40 @@ def parse_media_info(output: Any) -> MediaInfo:
         video_codec=_codec_name(video_stream),
         audio_codec=_codec_name(audio_stream),
         format_name=format_name,
+        width=_dimension(video_stream, "width"),
+        height=_dimension(video_stream, "height"),
+        rotation=_rotation(video_stream),
     )
+
+
+def _dimension(stream: dict[str, Any] | None, key: str) -> int | None:
+    if stream is None:
+        return None
+    try:
+        value = int(stream.get(key))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _rotation(stream: dict[str, Any] | None) -> int:
+    """Turn from the display matrix (newer FFmpeg) or the old ``rotate`` tag, as 0/90/180/270."""
+    if stream is None:
+        return 0
+    values: list[Any] = [
+        item.get("rotation")
+        for item in stream.get("side_data_list") or []
+        if isinstance(item, dict) and "rotation" in item
+    ]
+    tags = stream.get("tags")
+    if isinstance(tags, dict):
+        values.append(tags.get("rotate"))
+    for value in values:
+        try:
+            return round(float(value) / 90) * 90 % 360
+        except (TypeError, ValueError):
+            continue
+    return 0
 
 
 def _parse_duration(value: Any) -> float:

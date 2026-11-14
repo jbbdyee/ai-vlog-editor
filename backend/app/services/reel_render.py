@@ -1,9 +1,11 @@
 """TODO 12: turn a saved reel draft into a vertical (9:16) MP4 with the title, name tags and lines burned in.
 
 Steps (all local FFmpeg, no AI):
-1. cut every scene from its source and fit it into a 1080x1920 frame (wide shots get black bars above and below,
-   nothing is cropped). Each piece is snapped to whole frames and gets audio of exactly the same length (silence when
-   the source has none), so joining many pieces never drifts (the TODO 9 lesson).
+1. cut every scene from its source and fit it into a 1080x1920 frame. A portrait shot fills it; a wide shot keeps its
+   whole picture and sits a little high (top edge at y=520, TODO 17) so the title fits in the black band above and
+   the name tag and line in the band below. A wide shot saved inside a portrait file with black bars is found with
+   cropdetect and treated the same (only the bars are cut off). Each piece is snapped to whole frames and gets audio
+   of exactly the same length (silence when the source has none), so joining many pieces never drifts (TODO 9).
 2. join the pieces without re-encoding.
 3. write an ASS subtitle file in the chosen text template (``reel_text``: typeface, colour, place, size) and burn it
    in. Emoji are dropped because the fonts have none (they would show as empty boxes).
@@ -15,15 +17,16 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 from tempfile import TemporaryDirectory
 from typing import Callable, Mapping
 
-from backend.app.services.media_probe import MediaProbeError, probe_media
+from backend.app.services.media_probe import MediaInfo, MediaProbeError, probe_media
 from backend.app.services.reel_draft import ReelDraft
-from backend.app.services.reel_text import (DEFAULT_FONT, FPS, HEIGHT, WIDTH, TextStyle, build_ass, clean_text,  # noqa: F401
-                                            font_files, frames, normalize, reel_font)
+from backend.app.services.reel_text import (DEFAULT_FONT, FPS, HEIGHT, WIDTH, TextStyle, WideFrame, build_ass,  # noqa: F401
+                                            clean_text, font_files, frames, normalize, reel_font, wide_frame)
 
 AUDIO_RATE = 48000
 VIDEO_NAME = "reel.mp4"
@@ -67,10 +70,59 @@ def _run(command: list[str], cwd: Path, code: str) -> None:
         raise ReelRenderError(code, result.stderr.strip()[-800:])
 
 
-def _cut_command(ffmpeg: str, source: Path, start: float, frames: int, has_audio: bool, output: str) -> list[str]:
+@dataclass(frozen=True)
+class _Shape:
+    """How one source goes into the reel frame: an optional crop to its real picture, then its place."""
+    crop: str = ""  # FFmpeg crop=w:h:x:y, when black bars are baked into a portrait file
+    wide: WideFrame | None = None
+
+
+_CROP = re.compile(r"crop=(\d+):(\d+):(\d+):(\d+)")
+
+
+def _baked_bars(ffmpeg: str, source: Path, width: int, height: int) -> tuple[int, int] | None:
+    """(height, top) of a wide picture saved inside a portrait file with black bars above and below.
+
+    Such files come from apps that export a wide shot as 9:16. FFmpeg's cropdetect looks at the key frames of the first
+    two minutes and keeps the area that was ever not black. Only bars across the full width that take a fifth of the
+    height or more count, so a dark portrait clip is not mistaken for one.
+    """
+    try:
+        result = subprocess.run([ffmpeg, "-v", "info", "-nostdin", "-skip_frame", "nokey", "-t", "120",
+                                 "-i", str(source), "-vf", "cropdetect=limit=0.1:round=2:reset=0:skip=0", "-an",
+                                 "-f", "null", "-"], capture_output=True, text=True, encoding="utf-8",
+                                errors="replace", timeout=300, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    found = _CROP.findall(result.stderr or "")
+    if not found:
+        return None
+    w, h, _, y = (int(v) for v in found[-1])
+    if w >= width * 0.95 and h <= height * 0.8 and width > h:
+        return h, y
+    return None
+
+
+def _shape(ffmpeg: str, source: Path, info: MediaInfo) -> _Shape:
+    width, height = info.display_width, info.display_height
+    if info.is_wide:
+        return _Shape(wide=wide_frame(width, height))
+    if width and height:
+        bars = _baked_bars(ffmpeg, source, width, height)
+        if bars:
+            picture, top = bars
+            return _Shape(f"crop={width}:{picture}:0:{top},", wide_frame(width, picture))
+    return _Shape()
+
+
+def _cut_command(ffmpeg: str, source: Path, start: float, frames: int, has_audio: bool, output: str,
+                 shape: _Shape = _Shape()) -> list[str]:
     seconds = frames / FPS
-    video = (f"[0:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
-             f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={FPS},format=yuv420p[v]")
+    # FFmpeg turns a phone clip upright by itself while reading it, so the sizes here are the on-screen ones.
+    wide = shape.wide
+    fit = (f"{shape.crop}scale={WIDTH}:{wide.height},pad={WIDTH}:{HEIGHT}:0:{wide.top}:black" if wide else
+           f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2:black")
+    video = f"[0:v]{fit},setsar=1,fps={FPS},format=yuv420p[v]"
     command = [ffmpeg, "-v", "error", "-nostdin", "-y", "-ss", f"{start:.3f}", "-i", str(source)]
     if has_audio:
         audio = (f"[0:a:0]aresample={AUDIO_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo,"
@@ -99,7 +151,9 @@ def render_reel(draft: ReelDraft, sources: Mapping[str, Path], output_dir: Path,
     if missing:
         raise ReelRenderError("REEL_SOURCE_MISSING", ", ".join(sorted(set(missing))))
     output_dir.mkdir(parents=True, exist_ok=True)
-    audio_by_source: dict[str, bool] = {}
+    info_by_source: dict[str, MediaInfo] = {}
+    shape_by_source: dict[str, _Shape] = {}
+    wide: list[WideFrame | None] = []
     with TemporaryDirectory(prefix="reel-", dir=output_dir) as directory:
         stage = Path(directory)
         total = len(draft.scenes)
@@ -108,21 +162,24 @@ def render_reel(draft: ReelDraft, sources: Mapping[str, Path], output_dir: Path,
             progress("장면 잘라 세로로 맞추기", number - 1, total)
             source = Path(sources[str(scene.source_video_id)])
             key = str(source)
-            if key not in audio_by_source:
+            if key not in info_by_source:
                 try:
-                    audio_by_source[key] = probe_media(source).has_audio_stream
+                    info_by_source[key] = probe_media(source)
                 except MediaProbeError as error:
                     raise ReelRenderError("REEL_SOURCE_INVALID", source.name) from error
+                shape_by_source[key] = _shape(ffmpeg, source, info_by_source[key])
+            info, shape = info_by_source[key], shape_by_source[key]
+            wide.append(shape.wide)  # each scene on its own (TODO 17)
             name = f"scene-{number:03d}.mp4"
             _run(_cut_command(ffmpeg, source, scene.start_seconds, _frames(scene.end_seconds - scene.start_seconds),
-                              audio_by_source[key], name), stage, "REEL_CUT_FAILED")
+                              info.has_audio_stream, name, shape), stage, "REEL_CUT_FAILED")
             names.append(name)
         progress("장면 이어 붙이기", total, total)
         (stage / "list.txt").write_text("".join(f"file '{n}'\n" for n in names), encoding="utf-8")
         _run([ffmpeg, "-v", "error", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", "list.txt",
               "-c", "copy", "joined.mp4"], stage, "REEL_JOIN_FAILED")
         progress("제목·문구 글자 입히기", total, total)
-        (stage / "captions.ass").write_text(build_ass(draft, text_style), encoding="utf-8")
+        (stage / "captions.ass").write_text(build_ass(draft, text_style, wide), encoding="utf-8")
         for file in {font, *font_files(text_style)}:  # the template's typefaces, next to the subtitle file
             shutil.copyfile(file, stage / file.name.lower())
         # Relative names only: Windows drive letters ("C:") break FFmpeg's filter syntax.

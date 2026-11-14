@@ -39,6 +39,26 @@ class MediaProbeTests(TestCase):
         self._assert_safe_command(run_mock, media_path)
 
     @patch("backend.app.services.media_probe.subprocess.run")
+    def test_size_and_phone_turn_give_the_on_screen_shape(self, run_mock) -> None:
+        """TODO 17: a phone stores a portrait clip as 1920x1080 plus a turn; the display matrix or old tag says so."""
+        media_path = self._create_file("phone.mp4")
+        cases = [
+            ({"width": 1920, "height": 1080}, (1920, 1080, 0, True)),
+            ({"width": 1920, "height": 1080, "side_data_list": [{"side_data_type": "Display Matrix",
+                                                                 "rotation": -90}]}, (1080, 1920, 270, False)),
+            ({"width": 1920, "height": 1080, "tags": {"rotate": "90"}}, (1080, 1920, 90, False)),
+            ({"width": 1080, "height": 1920, "tags": {"rotate": "180"}}, (1080, 1920, 180, False)),
+            ({}, (None, None, 0, False)),
+        ]
+        for extra, expected in cases:
+            run_mock.return_value = self._successful_result(
+                duration="1", format_name="mov,mp4",
+                streams=[{"codec_type": "video", "codec_name": "h264", **extra}],
+            )
+            info = probe_media(media_path)
+            self.assertEqual((info.display_width, info.display_height, info.rotation, info.is_wide), expected)
+
+    @patch("backend.app.services.media_probe.subprocess.run")
     def test_mp4_metadata_with_video_and_audio_is_parsed(self, run_mock) -> None:
         media_path = self._create_file("sample.mp4")
         run_mock.return_value = self._successful_result(
