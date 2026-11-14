@@ -100,6 +100,8 @@ class SubtitleTextTests(TestCase):
     def test_lines_wait_under_the_title_when_both_sit_at_the_top(self):
         def top_of(ass, text):
             line = next(row for row in ass.splitlines() if row.endswith("}" + text))
+            if "\\move(" in line:  # TODO 15: where a rising line comes to rest
+                return int(line.split("\\move(")[1].split(")")[0].split(",")[3])
             return int(line.split("\\pos(")[1].split(")")[0].split(",")[1])
 
         ass = build_ass(self.three_scenes(), TextStyle("pixel"))  # title and lines both at the top
@@ -115,6 +117,43 @@ class SubtitleTextTests(TestCase):
             ass = build_ass(two, TextStyle(key))
             self.assertRegex(ass, r"}나만 아는 가수의\n", key)
             self.assertRegex(ass, r"}첫 댄스곡 도전기\n", key)
+
+    def line_of(self, ass, text):
+        return next(row for row in ass.splitlines() if row.endswith("}" + text))
+
+    def test_pill_template_has_no_dark_box_but_keeps_the_coloured_name_tag(self):
+        """TODO 15: no dark box behind the lines; the name tag keeps its coloured pill."""
+        ass = build_ass(self.three_scenes(), TextStyle("box", motion="none"))
+        drawings = [row for row in ass.splitlines() if "\\p1" in row]
+        self.assertTrue(drawings, "the name tag and the big title still sit on pills")
+        self.assertFalse(any("&H141010&" in row for row in drawings), "no dark box")
+        self.assertEqual(len(drawings), 3, "big title + two name tags, none for the plain lines")
+
+    def test_motion_pop_rise_and_none(self):
+        """TODO 15: the title pops (or rises) in within 0.25 s and fades out; scene lines rise in with each cut."""
+        pop = build_ass(self.three_scenes(), TextStyle("pixel"))  # default motion is pop
+        title = self.line_of(pop, "중에 골라줘")
+        self.assertIn("\\fscx70", title)
+        self.assertIn("\\t(230,330,\\fscx100\\fscy100)", title, "big line starts 80 ms after the lead, done by 0.33 s")
+        self.assertRegex(title, r"\\fade\(255,0,255,80,200,2300,2500\)", "fades out over the last 0.2 s")
+        caption = self.line_of(pop, "핏 예쁘지?")
+        self.assertRegex(caption, r"\\move\(540,\d+,540,\d+,0,150\)")
+        self.assertRegex(caption, r"\\fade\(255,0,0,0,150,2500,2500\)", "leaves with the cut")
+        rise = self.line_of(build_ass(self.three_scenes(), TextStyle("pixel", motion="rise")), "중에 골라줘")
+        self.assertIn("\\move(", rise)
+        self.assertNotIn("\\fscx70", rise)
+        still = build_ass(self.three_scenes(), TextStyle(motion="none"))
+        self.assertNotIn("\\fade", still)
+        self.assertNotIn("\\move", still)
+        self.assertEqual(normalize({"motion": "spin"}).motion, "pop")
+
+    def test_diary_template_uses_the_ownglyph_hand_and_sparkles_the_lead_in(self):
+        from dataclasses import replace
+        two = replace(draft(scene(1, "s1", 0, 3, "회 진짜 맛있어", hook=True), title="고흥 회 맛집"), title_lead="새벽에 달려간")
+        ass = build_ass(two, TextStyle("diary"))
+        self.assertRegex(ass, r"}✦ 새벽에 달려간 ✦\n")
+        self.assertIn("\\fnOwnglyph PDH Regular", self.line_of(ass, "고흥 회 맛집"))
+        self.assertIn("\\fnOwnglyph Shin Yebin Regular", build_ass(two, TextStyle("hand")))
 
     def test_long_lines_are_wrapped_and_the_title_splits_into_lead_and_punch_line(self):
         self.assertEqual(split_title("직접 입어본 추천템 3가지"), ["직접 입어본", "추천템 3가지"])

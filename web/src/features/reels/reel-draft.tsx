@@ -50,9 +50,9 @@ function videoErrorText(code: string | null | undefined, error?: unknown): strin
   return (code && videoErrors[code]) || "세로 영상을 만들지 못했습니다. 다시 시도해 주세요.";
 }
 
-const defaultTextStyle: ReelTextStyle = { template: "clean", color: "auto", position: "auto", size: "normal" };
+const defaultTextStyle: ReelTextStyle = { template: "clean", color: "auto", position: "auto", size: "normal", motion: "pop" };
 
-/** TODO 13: pick the text template, colour, place and size before making the video. */
+/** TODO 13: pick the text template, colour, place and size before making the video (TODO 15: and the motion). */
 function TextStylePicker({ options, value, onChange, disabled }: { options: ReelOptions; value: ReelTextStyle; onChange: (value: ReelTextStyle) => void; disabled: boolean }) {
   const templates = options.text_templates ?? [];
   if (templates.length === 0) return null;
@@ -73,6 +73,7 @@ function TextStylePicker({ options, value, onChange, disabled }: { options: Reel
     <Choices label="포인트 색" options={options.text_colors ?? []} value={value.color} onChange={(color) => onChange({ ...value, color })} disabled={disabled} />
     <Choices label="문구 위치" options={options.text_positions ?? []} value={value.position} onChange={(position) => onChange({ ...value, position })} disabled={disabled} />
     <Choices label="글자 크기" options={options.text_sizes ?? []} value={value.size} onChange={(size) => onChange({ ...value, size })} disabled={disabled} />
+    {(options.text_motions?.length ?? 0) > 0 && <Choices label="글자 움직임" options={options.text_motions ?? []} value={value.motion ?? "pop"} onChange={(motion) => onChange({ ...value, motion })} disabled={disabled} />}
   </div>;
 }
 

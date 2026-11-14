@@ -13,12 +13,14 @@ export interface ReelOptions {
   text_colors?: ReelOption[];
   text_positions?: ReelOption[];
   text_sizes?: ReelOption[];
+  /** TODO 15: how the title and lines come on screen. */
+  text_motions?: ReelOption[];
 }
 
 export interface ReelTextTemplate extends ReelOption { hint: string }
 
 /** How the title, name tags and lines look in the vertical video. "auto" follows the template. */
-export interface ReelTextStyle { template: string; color: string; position: string; size: string }
+export interface ReelTextStyle { template: string; color: string; position: string; size: string; motion?: string }
 
 export interface ReelScene {
   shot_index: number;
