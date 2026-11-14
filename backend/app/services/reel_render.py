@@ -5,8 +5,8 @@ Steps (all local FFmpeg, no AI):
    nothing is cropped). Each piece is snapped to whole frames and gets audio of exactly the same length (silence when
    the source has none), so joining many pieces never drifts (the TODO 9 lesson).
 2. join the pieces without re-encoding.
-3. write an ASS subtitle file (title on the hook scene at the top, name tag + line per scene near the bottom) and burn
-   it in with a Korean font. Emoji are dropped because the font has none (they would show as empty boxes).
+3. write an ASS subtitle file in the chosen text template (``reel_text``: typeface, colour, place, size) and burn it
+   in. Emoji are dropped because the fonts have none (they would show as empty boxes).
 """
 
 from __future__ import annotations
@@ -14,9 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
-import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 from tempfile import TemporaryDirectory
@@ -24,12 +22,10 @@ from typing import Callable, Mapping
 
 from backend.app.services.media_probe import MediaProbeError, probe_media
 from backend.app.services.reel_draft import ReelDraft
+from backend.app.services.reel_text import (DEFAULT_FONT, FPS, HEIGHT, WIDTH, TextStyle, build_ass, clean_text,  # noqa: F401
+                                            font_files, frames, normalize, reel_font)
 
-WIDTH, HEIGHT, FPS = 1080, 1920, 30
 AUDIO_RATE = 48000
-DEFAULT_FONT = Path(r"C:\Windows\Fonts\malgunbd.ttf")
-FONT_NAME = "Malgun Gothic"
-TITLE_MIN_SECONDS = 2.5  # a very short hook scene still leaves the title on screen long enough to read
 VIDEO_NAME = "reel.mp4"
 INFO_NAME = "reel.json"
 
@@ -49,6 +45,7 @@ class ReelVideo:
     file_size_bytes: int
     draft_fingerprint: str
     scene_count: int
+    text_style: TextStyle = TextStyle()
 
 
 def draft_fingerprint(draft: ReelDraft) -> str:
@@ -56,67 +53,8 @@ def draft_fingerprint(draft: ReelDraft) -> str:
     return hashlib.sha256(json.dumps(draft.to_json(), ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
 
 
-def reel_font() -> Path:
-    return Path(os.environ.get("CUTORY_REEL_FONT_PATH") or DEFAULT_FONT)
-
-
-# Emoji, pictographs, dingbats, variation selectors and joiners; everything else (Korean, Latin, digits) stays.
-_EMOJI = re.compile("[\U00010000-\U0010FFFF\u2600-\u27BF\u2B00-\u2BFF\uFE00-\uFE0F\u200D\u20E3]")
-
-
-def clean_text(text: str) -> str:
-    text = _EMOJI.sub("", text or "")
-    text = text.replace("\\", "").replace("{", "(").replace("}", ")")
-    return re.sub(r"\s+", " ", text).strip()
-
-
 def _frames(seconds: float) -> int:
-    return max(1, round(seconds * FPS))
-
-
-def _ass_time(seconds: float) -> str:
-    centis = max(0, round(seconds * 100))
-    hours, rest = divmod(centis, 360000)
-    minutes, rest = divmod(rest, 6000)
-    secs, cs = divmod(rest, 100)
-    return f"{hours}:{minutes:02d}:{secs:02d}.{cs:02d}"
-
-
-def build_ass(draft: ReelDraft) -> str:
-    """Times follow the frame-snapped scene lengths, the same ones used to cut the video."""
-    # Colours are &HAABBGGRR. Title/Caption: white with a thick black outline; Label: light cyan.
-    header = f"""[Script Info]
-ScriptType: v4.00+
-PlayResX: {WIDTH}
-PlayResY: {HEIGHT}
-WrapStyle: 0
-ScaledBorderAndShadow: yes
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Title,{FONT_NAME},96,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,7,2,8,80,80,250,1
-Style: Caption,{FONT_NAME},74,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,6,2,2,90,90,330,1
-Style: Label,{FONT_NAME},52,&H00F2E79F,&H00F2E79F,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,5,1,2,90,90,440,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
-    events = []
-    t = 0.0
-    total = sum(_frames(s.end_seconds - s.start_seconds) for s in draft.scenes) / FPS
-    for index, scene in enumerate(draft.scenes):
-        length = _frames(scene.end_seconds - scene.start_seconds) / FPS
-        start, end = _ass_time(t), _ass_time(t + length)
-        caption, label = clean_text(scene.caption), clean_text(scene.label)
-        if index == 0 and clean_text(draft.title):
-            events.append(f"Dialogue: 1,{start},{_ass_time(min(total, max(length, TITLE_MIN_SECONDS)))},Title,,0,0,0,,"
-                          f"{clean_text(draft.title)}")
-        if label:
-            events.append(f"Dialogue: 0,{start},{end},Label,,0,0,0,,{label}")
-        if caption:
-            events.append(f"Dialogue: 0,{start},{end},Caption,,0,0,0,,{caption}")
-        t += length
-    return header + "\n".join(events) + "\n"
+    return frames(seconds)
 
 
 def _run(command: list[str], cwd: Path, code: str) -> None:
@@ -147,10 +85,12 @@ def _cut_command(ffmpeg: str, source: Path, start: float, frames: int, has_audio
 
 
 def render_reel(draft: ReelDraft, sources: Mapping[str, Path], output_dir: Path, *, ffmpeg: str = "ffmpeg",
-                font: Path | None = None, on_progress: Progress | None = None) -> ReelVideo:
+                font: Path | None = None, on_progress: Progress | None = None,
+                text_style: TextStyle | dict | None = None) -> ReelVideo:
     """Write ``output_dir/reel.mp4`` (replacing the old one only after the new one is checked)."""
     progress = on_progress or (lambda step, done, total: None)
     font = Path(font or reel_font())
+    text_style = normalize(text_style)
     if not draft.scenes:
         raise ReelRenderError("REEL_NO_SCENES")
     if not font.is_file():
@@ -182,8 +122,9 @@ def render_reel(draft: ReelDraft, sources: Mapping[str, Path], output_dir: Path,
         _run([ffmpeg, "-v", "error", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", "list.txt",
               "-c", "copy", "joined.mp4"], stage, "REEL_JOIN_FAILED")
         progress("제목·문구 글자 입히기", total, total)
-        (stage / "captions.ass").write_text(build_ass(draft), encoding="utf-8")
-        shutil.copyfile(font, stage / f"font{font.suffix.lower()}")
+        (stage / "captions.ass").write_text(build_ass(draft, text_style), encoding="utf-8")
+        for file in {font, *font_files(text_style)}:  # the template's typefaces, next to the subtitle file
+            shutil.copyfile(file, stage / file.name.lower())
         # Relative names only: Windows drive letters ("C:") break FFmpeg's filter syntax.
         _run([ffmpeg, "-v", "error", "-nostdin", "-y", "-i", "joined.mp4", "-vf", "ass=captions.ass:fontsdir=.",
               "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "copy",
@@ -199,10 +140,11 @@ def render_reel(draft: ReelDraft, sources: Mapping[str, Path], output_dir: Path,
         destination = output_dir / VIDEO_NAME
         final.replace(destination)
     video = ReelVideo(destination, round(info.duration_seconds, 2), destination.stat().st_size,
-                      draft_fingerprint(draft), len(draft.scenes))
+                      draft_fingerprint(draft), len(draft.scenes), text_style)
     (output_dir / INFO_NAME).write_text(json.dumps({
         "duration_seconds": video.duration_seconds, "file_size_bytes": video.file_size_bytes,
-        "draft_fingerprint": video.draft_fingerprint, "scene_count": video.scene_count}), encoding="utf-8")
+        "draft_fingerprint": video.draft_fingerprint, "scene_count": video.scene_count,
+        "text_style": text_style.to_json()}), encoding="utf-8")
     return video
 
 
@@ -213,6 +155,6 @@ def saved_video(output_dir: Path) -> ReelVideo | None:
     try:
         data = json.loads(info.read_text(encoding="utf-8"))
         return ReelVideo(path, float(data["duration_seconds"]), path.stat().st_size, str(data["draft_fingerprint"]),
-                         int(data["scene_count"]))
+                         int(data["scene_count"]), normalize(data.get("text_style")))
     except (OSError, ValueError, KeyError, TypeError):
         return None

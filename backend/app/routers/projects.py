@@ -31,6 +31,7 @@ from backend.app.services.story_direction import load_story_inputs, rebuild_dire
 from backend.app.services.project_reel import (ReelOptions, ReelProjectNotFound, job_state, reel_output_dir,
                                               render_job_state, saved_draft, start_reel_draft, start_reel_render)
 from backend.app.services.reel_render import draft_fingerprint, saved_video
+from backend.app.services import reel_text
 from backend.app.services.reel_modes import (AUTO_MODE, DEFAULT_PACE, DEFAULT_SHORT_SECONDS, MODE_BY_KEY, MODES, PACES,
                                              SHORT_LENGTHS)
 from backend.app.services.story_length import (LENGTH_OPTIONS, Moment, accept_minutes, fit_to_length, footage_seconds,
@@ -744,16 +745,24 @@ class ReelOptionsResponse(BaseModel):
     paces: list[ReelOptionItem]
     lengths: list[int]
     default_length: int
+    # TODO 13: text looks for the vertical video
+    text_templates: list[dict[str, str]]
+    text_colors: list[ReelOptionItem]
+    text_positions: list[ReelOptionItem]
+    text_sizes: list[ReelOptionItem]
 
 
 @router.get("/reel-options", response_model=ReelOptionsResponse)
 async def get_reel_options() -> ReelOptionsResponse:
     """Short-form choices from one settings file (reel_modes), so the screen never has its own copy."""
+    text = reel_text.options()
     return ReelOptionsResponse(
         formats=[ReelOptionItem(key="short", label="숏폼 (릴스·쇼츠)"), ReelOptionItem(key="long", label="롱폼 (유튜브)")],
         modes=[ReelOptionItem(key=AUTO_MODE, label="자동 (AI가 골라 줌)")] + [ReelOptionItem(key=m.key, label=m.label) for m in MODES],
         paces=[ReelOptionItem(key=key, label=f"{label} (장면당 약 {seconds:g}초)") for key, (label, seconds) in PACES.items()],
         lengths=list(SHORT_LENGTHS), default_length=DEFAULT_SHORT_SECONDS,
+        text_templates=text["templates"], text_colors=text["colors"], text_positions=text["positions"],
+        text_sizes=text["sizes"],
     )
 
 
@@ -842,7 +851,20 @@ async def get_project_reel_draft(request: Request, project_id: UUID) -> ReelDraf
 
 
 
+class ReelTextStyle(BaseModel):
+    """TODO 13: how the title, name tags and lines look. Unknown values fall back to the defaults."""
+    template: str = Field(default=reel_text.DEFAULT_TEMPLATE, max_length=24)
+    color: str = Field(default=reel_text.AUTO, max_length=24)
+    position: str = Field(default=reel_text.AUTO, max_length=24)
+    size: str = Field(default="normal", max_length=24)
+
+
+class ReelVideoRequest(BaseModel):
+    text_style: ReelTextStyle = Field(default_factory=ReelTextStyle)
+
+
 class ReelVideoInfo(BaseModel):
+    text_style: ReelTextStyle
     duration_seconds: float
     file_size_bytes: int
     scene_count: int
@@ -869,7 +891,7 @@ def _reel_video_status_sync(factory, output_root, project_id) -> ReelVideoStatus
     if video is not None:
         stamp = int(video.path.stat().st_mtime)
         info = ReelVideoInfo(duration_seconds=video.duration_seconds, file_size_bytes=video.file_size_bytes,
-                             scene_count=video.scene_count,
+                             scene_count=video.scene_count, text_style=ReelTextStyle(**video.text_style.to_json()),
                              matches_draft=draft is not None and draft_fingerprint(draft) == video.draft_fingerprint,
                              url=f"/projects/{project_id}/reel-video/file?v={stamp}")
     return ReelVideoStatusResponse(project_id=project_id, status=job.status, step=job.step, done=job.done,
@@ -877,15 +899,17 @@ def _reel_video_status_sync(factory, output_root, project_id) -> ReelVideoStatus
 
 
 @router.post("/{project_id}/reel-video", response_model=ReelVideoStatusResponse, status_code=202)
-async def start_project_reel_video(request: Request, project_id: UUID) -> ReelVideoStatusResponse:
+async def start_project_reel_video(request: Request, project_id: UUID,
+                                   payload: ReelVideoRequest | None = None) -> ReelVideoStatusResponse:
     """TODO 12: make the vertical video (title and lines burned in) from the saved reel draft."""
     factory, output_root = _session_factory(request), request.app.state.project_render_output_root
     try:
         await run_in_threadpool(_reel_video_status_sync, factory, output_root, project_id)
     except ReelProjectNotFound as error:
         raise _project_not_found() from error
-    reason = await run_in_threadpool(start_reel_render, project_id, factory, request.app.state.source_storage.resolve,
-                                     output_root)
+    style = reel_text.normalize((payload or ReelVideoRequest()).text_style.model_dump())
+    reason = await run_in_threadpool(lambda: start_reel_render(
+        project_id, factory, request.app.state.source_storage.resolve, output_root, text_style=style))
     if reason is not None:
         raise HTTPException(status_code=409, detail={"code": reason, "message": "The reel video cannot start now."})
     return await run_in_threadpool(_reel_video_status_sync, factory, output_root, project_id)

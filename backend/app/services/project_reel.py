@@ -145,7 +145,7 @@ def render_job_state(project_id: UUID) -> ReelJob:
 
 
 def start_reel_render(project_id: UUID, factory: sessionmaker[Session], resolve: Callable[[str], Path],
-                      output_root: Path, *, render=None, background: bool = True) -> str | None:
+                      output_root: Path, *, render=None, background: bool = True, text_style=None) -> str | None:
     """None when started, otherwise a reason code (no draft yet, a draft or a video is being made)."""
     from backend.app.services.reel_render import render_reel
 
@@ -158,7 +158,7 @@ def start_reel_render(project_id: UUID, factory: sessionmaker[Session], resolve:
         if project_id in _render_jobs and _render_jobs[project_id].status == "RUNNING":
             return "REEL_VIDEO_RUNNING"
         _render_jobs[project_id] = ReelJob(status="RUNNING", step="영상 확인")
-    work = lambda: _render(project_id, factory, resolve, output_root, render or render_reel)  # noqa: E731
+    work = lambda: _render(project_id, factory, resolve, output_root, render or render_reel, text_style)  # noqa: E731
     if background:
         threading.Thread(target=work, name=f"reel-video-{project_id}", daemon=True).start()
     else:
@@ -172,7 +172,7 @@ def _update_render(project_id: UUID, **changes) -> None:
             setattr(_render_jobs[project_id], key, value)
 
 
-def _render(project_id, factory, resolve, output_root, render) -> None:
+def _render(project_id, factory, resolve, output_root, render, text_style=None) -> None:
     from backend.app.services.reel_render import ReelRenderError
 
     try:
@@ -180,7 +180,7 @@ def _render(project_id, factory, resolve, output_root, render) -> None:
             draft = saved_draft(session, project_id)
             rows = session.scalars(select(SourceVideo).where(SourceVideo.project_id == project_id)).all()
             sources = {str(row.id): resolve(row.storage_reference) for row in rows}
-        render(draft, sources, reel_output_dir(output_root, project_id),
+        render(draft, sources, reel_output_dir(output_root, project_id), text_style=text_style,
                on_progress=lambda step, done, total: _update_render(project_id, step=step, done=done, total=total))
         _update_render(project_id, status="COMPLETED", step="완료")
     except ReelRenderError as error:

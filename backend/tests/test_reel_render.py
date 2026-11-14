@@ -20,6 +20,7 @@ from backend.app.models.reel import ProjectReelDraft
 from backend.app.services.reel_draft import ReelDraft, ReelScene
 from backend.app.services.reel_render import (DEFAULT_FONT, ReelRenderError, build_ass, clean_text, draft_fingerprint,
                                               render_reel, saved_video)
+from backend.app.services.reel_text import TEMPLATES, TextStyle, font_files, normalize, split_title, wrap
 
 VERTICAL = "00000000-0000-0000-0000-00000000000a"
 WIDE = "00000000-0000-0000-0000-00000000000b"
@@ -54,17 +55,64 @@ class SubtitleTextTests(TestCase):
     def test_emoji_dropped_and_braces_cannot_become_ass_commands(self):
         self.assertEqual(clean_text("핏 미쳤다 😍✨ {\\b1}진짜  "), "핏 미쳤다 (b1)진짜")
 
+    def events(self, ass):
+        """(start, end, text) of every Dialogue line; text is what follows the {tags}."""
+        rows = []
+        for line in ass.splitlines():
+            if line.startswith("Dialogue"):
+                parts = line.split(",", 9)
+                rows.append((parts[1], parts[2], parts[9].split("}", 1)[1]))
+        return rows
+
+    def three_scenes(self):
+        return draft(scene(3, VERTICAL, 1.0, 2.0, "첫 장면", "브라운 미니스커트", True),
+                     scene(1, VERTICAL, 0.0, 2.5, "핏 예쁘지?", "첫 번째 · 브라운 미니스커트"),
+                     scene(2, WIDE, 0.0, 1.5, ""))
+
     def test_title_on_first_scene_and_each_scene_gets_its_tag_and_line_back_to_back(self):
-        ass = build_ass(draft(scene(3, VERTICAL, 1.0, 2.0, "첫 장면", "브라운 미니스커트", True),
-                              scene(1, VERTICAL, 0.0, 2.5, "핏 예쁘지?", "첫 번째 · 브라운 미니스커트"),
-                              scene(2, WIDE, 0.0, 1.5, "")))
-        lines = [line for line in ass.splitlines() if line.startswith("Dialogue")]
+        ass = build_ass(self.three_scenes())
+        rows = self.events(ass)
         # Hook is 1 s, but the title stays at least 2.5 s so it can be read.
-        self.assertIn("Dialogue: 1,0:00:00.00,0:00:02.50,Title,,0,0,0,,이 3벌 중에 골라줘", lines)
-        self.assertIn("Dialogue: 0,0:00:01.00,0:00:03.50,Caption,,0,0,0,,핏 예쁘지?", lines)
-        self.assertIn("Dialogue: 0,0:00:01.00,0:00:03.50,Label,,0,0,0,,첫 번째 · 브라운 미니스커트", lines)
-        self.assertEqual(len(lines), 5, "an empty line makes no subtitle")
+        self.assertIn(("0:00:00.00", "0:00:02.50", "이 3벌 중에 골라줘"), rows)
+        self.assertIn(("0:00:01.00", "0:00:03.50", "핏 예쁘지?"), rows)
+        self.assertIn(("0:00:01.00", "0:00:03.50", "첫 번째 · 브라운 미니스커트"), rows)
+        self.assertEqual(len(rows), 5, "an empty line makes no subtitle")
         self.assertIn("PlayResY: 1920", ass)
+
+    def test_every_template_keeps_all_the_words_and_looks_different(self):
+        seen = set()
+        for template in TEMPLATES:
+            ass = build_ass(self.three_scenes(), TextStyle(template=template.key))
+            words = "".join(text for _, _, text in self.events(ass))
+            for expected in ("골라줘", "핏 예쁘지?", "브라운 미니스커트"):
+                self.assertIn(expected, words, template.key)
+            seen.add(ass)
+            self.assertTrue(all(file.is_file() for file in font_files(TextStyle(template=template.key))))
+        self.assertEqual(len(seen), len(TEMPLATES))
+
+    def test_colour_place_and_size_change_the_result_and_unknown_choices_fall_back(self):
+        base = build_ass(self.three_scenes(), TextStyle("pixel"))
+        for change in (TextStyle("pixel", color="pink"), TextStyle("pixel", position="bottom"), TextStyle("pixel", size="large")):
+            self.assertNotEqual(build_ass(self.three_scenes(), change), base)
+        self.assertEqual(normalize({"template": "nope", "color": "?", "position": 3, "size": None}), TextStyle())
+        self.assertEqual(build_ass(self.three_scenes(), {"template": "nope"}), build_ass(self.three_scenes()))
+
+    def test_lines_wait_under_the_title_when_both_sit_at_the_top(self):
+        def top_of(ass, text):
+            line = next(row for row in ass.splitlines() if row.endswith("}" + text))
+            return int(line.split("\\pos(")[1].split(")")[0].split(",")[1])
+
+        ass = build_ass(self.three_scenes(), TextStyle("pixel"))  # title and lines both at the top
+        self.assertGreater(top_of(ass, "첫 장면"), top_of(ass, "중에 골라줘") + 100, "under the title while it is up")
+        late = draft(scene(1, VERTICAL, 0.0, 3.0, "첫 장면", hook=True), scene(2, VERTICAL, 0.0, 2.0, "나중 장면"))
+        self.assertEqual(top_of(build_ass(late, TextStyle("pixel")), "나중 장면"), 300, "back at the top afterwards")
+
+    def test_long_lines_are_wrapped_and_the_title_splits_into_lead_and_punch_line(self):
+        self.assertEqual(split_title("직접 입어본 추천템 3가지"), ["직접 입어본", "추천템 3가지"])
+        self.assertEqual(split_title("골라줘"), ["골라줘"])
+        lines = wrap("선생님이 진짜 잘 가르쳐주심 최고였다 다음에도 꼭 다시 오고 싶은 수업", 84)
+        self.assertGreater(len(lines), 1)
+        self.assertEqual(" ".join(lines), "선생님이 진짜 잘 가르쳐주심 최고였다 다음에도 꼭 다시 오고 싶은 수업")
 
 
 @skipUnless(HAVE_TOOLS, "needs FFmpeg and the Malgun Gothic font")
@@ -80,13 +128,15 @@ class RenderReelTests(TestCase):
         reel = draft(scene(2, VERTICAL, 2.0, 3.0, "첫 장면", "", True), scene(1, WIDE, 0.0, 1.5, "가로 영상 😎"),
                      scene(3, VERTICAL, 0.5, 2.25, "마지막", "두 번째 · 블라우스"))
         steps = []
-        video = render_reel(reel, self.sources, self.root / "out", on_progress=lambda s, d, t: steps.append(s))
+        video = render_reel(reel, self.sources, self.root / "out", on_progress=lambda s, d, t: steps.append(s),
+                            text_style=TextStyle("clean", color="pink"))
         width, height, seconds = probe(video.path)
         self.assertEqual((width, height), (1080, 1920))
         self.assertAlmostEqual(seconds, 4.25, delta=0.1)
         self.assertEqual(video.scene_count, 3)
         self.assertEqual(steps[-1], "제목·문구 글자 입히기")
         self.assertEqual(saved_video(self.root / "out").draft_fingerprint, draft_fingerprint(reel))
+        self.assertEqual(saved_video(self.root / "out").text_style, TextStyle("clean", color="pink"))
         self.assertEqual([p.name for p in (self.root / "out").iterdir()], ["reel.json", "reel.mp4"],
                          "work files are cleaned up")
 
@@ -146,13 +196,13 @@ class ReelVideoApiTests(TestCase):
             time.sleep(0.02)
         self.fail("reel video did not finish")
 
-    def fake_render(self, reel, sources, output_dir, on_progress=None):
-        self.seen_sources = sources
+    def fake_render(self, reel, sources, output_dir, on_progress=None, text_style=None):
+        self.seen_sources, self.seen_style = sources, text_style
         output_dir.mkdir(parents=True)
         (output_dir / "reel.mp4").write_bytes(b"mp4")
         (output_dir / "reel.json").write_text(
             f'{{"duration_seconds": 1.0, "file_size_bytes": 3, "draft_fingerprint": "{draft_fingerprint(reel)}", '
-            f'"scene_count": 1}}', encoding="utf-8")
+            f'"scene_count": 1, "text_style": {{"template": "{text_style.template}"}}}}', encoding="utf-8")
 
     def test_needs_a_draft_first(self):
         refused = self.client.post(f"/projects/{self.project_id}/reel-video")
@@ -163,9 +213,16 @@ class ReelVideoApiTests(TestCase):
     def test_make_play_and_notice_when_the_draft_changes_afterwards(self):
         self.save_draft()
         with patch("backend.app.services.reel_render.render_reel", self.fake_render):
-            self.assertEqual(self.client.post(f"/projects/{self.project_id}/reel-video").status_code, 202)
+            started = self.client.post(f"/projects/{self.project_id}/reel-video",
+                                       json={"text_style": {"template": "hook", "color": "sky", "size": "huge"}})
+            self.assertEqual(started.status_code, 202)
             body = self.wait()
         self.assertEqual(body["status"], "COMPLETED")
+        self.assertEqual(self.seen_style, TextStyle("hook", color="sky"), "an unknown size falls back to normal")
+        self.assertEqual(body["video"]["text_style"]["template"], "hook")
+        options = self.client.get("/projects/reel-options").json()
+        self.assertEqual([t["key"] for t in options["text_templates"]], [t.key for t in TEMPLATES])
+        self.assertEqual(options["text_positions"][0], {"key": "auto", "label": "템플릿 기본"})
         self.assertIn(str(self.source_id), self.seen_sources)
         self.assertTrue(body["video"]["matches_draft"])
         file = self.client.get(body["video"]["url"])

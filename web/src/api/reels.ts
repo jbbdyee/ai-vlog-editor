@@ -8,7 +8,17 @@ export interface ReelOptions {
   paces: ReelOption[];
   lengths: number[];
   default_length: number;
+  /** TODO 13: text looks for the vertical video (missing on a server that was not restarted yet). */
+  text_templates?: ReelTextTemplate[];
+  text_colors?: ReelOption[];
+  text_positions?: ReelOption[];
+  text_sizes?: ReelOption[];
 }
+
+export interface ReelTextTemplate extends ReelOption { hint: string }
+
+/** How the title, name tags and lines look in the vertical video. "auto" follows the template. */
+export interface ReelTextStyle { template: string; color: string; position: string; size: string }
 
 export interface ReelScene {
   shot_index: number;
@@ -95,6 +105,8 @@ export interface ReelVideo {
   /** False when the draft was remade after this video, so the video shows an older draft. */
   matches_draft: boolean;
   url: string;
+  /** The look this video was made with. */
+  text_style?: ReelTextStyle;
 }
 
 export interface ReelVideoStatus {
@@ -123,6 +135,10 @@ export async function getReelVideo(id: string): Promise<ReelVideoStatus> {
   try { return checkVideo(await request<ReelVideoStatus>(`/projects/${id}/reel-video`), id); } catch (error) { return unsupported(error); }
 }
 
-export async function startReelVideo(id: string): Promise<ReelVideoStatus> {
-  try { return checkVideo(await request<ReelVideoStatus>(`/projects/${id}/reel-video`, { method: "POST" }, 202), id); } catch (error) { return unsupported(error); }
+export async function startReelVideo(id: string, textStyle?: ReelTextStyle): Promise<ReelVideoStatus> {
+  try {
+    return checkVideo(await request<ReelVideoStatus>(`/projects/${id}/reel-video`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(textStyle ? { text_style: textStyle } : {}),
+    }, 202), id);
+  } catch (error) { return unsupported(error); }
 }

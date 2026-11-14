@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Clapperboard, Download, Film, LoaderCircle } from "lucide-react";
 import { ApiError } from "@/api/projects";
 import { formatDuration } from "@/api/story-direction";
-import { getReelOptions, getReelStatus, getReelVideo, reelVideoSrc, startReelDraft, startReelVideo, type ReelOption } from "@/api/reels";
+import { getReelOptions, getReelStatus, getReelVideo, reelVideoSrc, startReelDraft, startReelVideo, type ReelOption, type ReelOptions, type ReelTextStyle } from "@/api/reels";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -50,29 +50,62 @@ function videoErrorText(code: string | null | undefined, error?: unknown): strin
   return (code && videoErrors[code]) || "세로 영상을 만들지 못했습니다. 다시 시도해 주세요.";
 }
 
+const defaultTextStyle: ReelTextStyle = { template: "clean", color: "auto", position: "auto", size: "normal" };
+
+/** TODO 13: pick the text template, colour, place and size before making the video. */
+function TextStylePicker({ options, value, onChange, disabled }: { options: ReelOptions; value: ReelTextStyle; onChange: (value: ReelTextStyle) => void; disabled: boolean }) {
+  const templates = options.text_templates ?? [];
+  if (templates.length === 0) return null;
+  return <div className="space-y-3" aria-label="글자 꾸미기">
+    <div className="space-y-1.5">
+      <p className="text-xs font-semibold text-slate-400">글자 템플릿</p>
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" role="group" aria-label="글자 템플릿">
+        {templates.map((template) => {
+          const on = template.key === value.template;
+          return <button key={template.key} type="button" aria-pressed={on} disabled={disabled} onClick={() => onChange({ ...value, template: template.key })}
+            className={`min-w-0 rounded-xl border px-3 py-2 text-left transition disabled:opacity-60 ${on ? "border-cyan-300 bg-cyan-300/10" : "border-white/15 hover:border-cyan-300/60"}`}>
+            <span className={`block text-sm font-semibold ${on ? "text-cyan-200" : "text-slate-100"}`}>{template.label}</span>
+            <span className="block text-xs text-slate-400">{template.hint}</span>
+          </button>;
+        })}
+      </div>
+    </div>
+    <Choices label="포인트 색" options={options.text_colors ?? []} value={value.color} onChange={(color) => onChange({ ...value, color })} disabled={disabled} />
+    <Choices label="문구 위치" options={options.text_positions ?? []} value={value.position} onChange={(position) => onChange({ ...value, position })} disabled={disabled} />
+    <Choices label="글자 크기" options={options.text_sizes ?? []} value={value.size} onChange={(size) => onChange({ ...value, size })} disabled={disabled} />
+  </div>;
+}
+
 /** TODO 12: turn the saved draft into a 9:16 video with the title, name tags and lines burned in. */
-function ReelVideoPanel({ projectId, draftKey, draftRunning }: { projectId: string; draftKey: string; draftRunning: boolean }) {
+function ReelVideoPanel({ projectId, draftKey, draftRunning, options }: { projectId: string; draftKey: string; draftRunning: boolean; options?: ReelOptions }) {
   const queryClient = useQueryClient();
+  const [textStyle, setTextStyle] = useState<ReelTextStyle>(defaultTextStyle);
+  const [styleSynced, setStyleSynced] = useState(false);
   const status = useQuery({
     queryKey: ["reel-video", projectId, draftKey], queryFn: () => getReelVideo(projectId),
     refetchInterval: (query) => query.state.data?.status === "RUNNING" ? 2000 : false,
   });
   const start = useMutation({
-    mutationFn: () => startReelVideo(projectId),
+    mutationFn: () => startReelVideo(projectId, textStyle),
     onSuccess: (value) => queryClient.setQueryData(["reel-video", projectId, draftKey], value),
   });
   const running = status.data?.status === "RUNNING" || start.isPending;
   const video = status.data?.video;
+  // Start from the look the last video was made with, once.
+  useEffect(() => {
+    if (video?.text_style && !styleSynced) { setTextStyle(video.text_style); setStyleSynced(true); }
+  }, [video, styleSynced]);
   return <div className="space-y-3 rounded-xl border border-white/10 bg-white/[.03] p-3" aria-label="세로 영상">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div className="min-w-0">
         <p className="text-sm font-semibold text-slate-100">세로 영상 (9:16)</p>
-        <p className="text-xs text-slate-400">초안 순서대로 이어 붙이고 첫 화면 제목·이름표·문구를 글자로 입힙니다. 30초짜리 릴스는 20초쯤 걸려요.</p>
+        <p className="text-xs text-slate-400">초안 순서대로 이어 붙이고 첫 화면 제목·이름표·문구를 고른 글자 템플릿으로 입힙니다. 30초짜리 릴스는 20초쯤 걸려요. 템플릿만 바꿔 다시 만들어 비교해 보세요.</p>
       </div>
       <Button onClick={() => start.mutate()} disabled={running || draftRunning}>
         <span className="flex items-center gap-2">{running ? <LoaderCircle size={16} className="animate-spin" /> : <Film size={16} />}{running ? "세로 영상 만드는 중…" : video ? "세로 영상 다시 만들기" : "세로 영상 만들기"}</span>
       </Button>
     </div>
+    {options && <TextStylePicker options={options} value={textStyle} onChange={setTextStyle} disabled={running || draftRunning} />}
     {status.data?.status === "RUNNING" && <p role="status" className="text-sm text-cyan-200 tabular-nums">
       {status.data.step}{status.data.total > 0 ? ` · ${status.data.done}/${status.data.total}개` : ""}
     </p>}
@@ -84,6 +117,7 @@ function ReelVideoPanel({ projectId, draftKey, draftRunning }: { projectId: stri
         className="aspect-[9/16] w-full max-w-[260px] rounded-xl bg-black" />
       <div className="min-w-0 space-y-2 text-sm text-slate-300">
         <p className="tabular-nums">길이 <b className="text-slate-50">{formatDuration(video.duration_seconds)}</b> · 장면 {video.scene_count}개 · {(video.file_size_bytes / 1024 / 1024).toFixed(1)}MB</p>
+        {video.text_style && options?.text_templates && <p className="text-xs text-slate-400">글자 템플릿: {options.text_templates.find((t) => t.key === video.text_style?.template)?.label ?? video.text_style.template}</p>}
         {!video.matches_draft && <p className="text-xs text-amber-200">초안을 다시 만들어서 이 영상은 예전 초안으로 만든 것입니다. 지금 초안으로 보려면 다시 만들어 주세요.</p>}
         <a href={reelVideoSrc(video)} download="reel.mp4" className="inline-flex items-center gap-1.5 text-cyan-300 underline"><Download size={14} />영상 내려받기</a>
       </div>
@@ -151,7 +185,7 @@ export function ReelDraftCard({ projectId, onPreview }: { projectId: string; onP
           <p className="mt-1 text-xs text-slate-500">{byAi ? `AI 초안 (${draft.engine.replace("llm:", "")})` : "AI 없이 촬영 순서대로 만든 기본 초안"}</p>
           {draft.notes.map((note) => <p key={note} className="text-xs text-amber-200">{note}</p>)}
         </div>
-        <ReelVideoPanel projectId={projectId} draftRunning={running}
+        <ReelVideoPanel projectId={projectId} draftRunning={running} options={options.data}
           draftKey={`${draft.mode}|${draft.title}|${draft.total_seconds}|${draft.scenes.map((s) => `${s.shot_index}:${s.caption}`).join(",")}`} />
         <ol className="space-y-2">
           {draft.scenes.map((scene, index) => <li key={`${scene.shot_index}:${index}`} className="flex min-w-0 flex-wrap items-start justify-between gap-2 rounded-xl border border-white/10 bg-[#0b1420] p-3">

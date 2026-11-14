@@ -10,6 +10,10 @@ const response = (body: unknown, status = 200) => new Response(JSON.stringify(bo
 const options = {
   formats: [{ key: "short", label: "숏폼 (릴스·쇼츠)" }, { key: "long", label: "롱폼 (유튜브)" }],
   modes: [{ key: "auto", label: "자동 (AI가 골라 줌)" }], paces: [{ key: "normal", label: "보통" }], lengths: [30], default_length: 30,
+  text_templates: [{ key: "clean", label: "감성 글로우", hint: "얇은 글씨" }, { key: "neon", label: "네온", hint: "빛 번짐" }],
+  text_colors: [{ key: "auto", label: "템플릿 기본" }, { key: "pink", label: "분홍" }],
+  text_positions: [{ key: "auto", label: "템플릿 기본" }, { key: "bottom", label: "아래" }],
+  text_sizes: [{ key: "normal", label: "보통" }, { key: "large", label: "크게" }],
 };
 const draft = {
   format: "short", mode: "try_on", mode_label: "옷 입어보기·하울", pace: "normal", pace_label: "보통", target_seconds: 30,
@@ -58,6 +62,21 @@ describe("TODO 12 vertical reel video", () => {
     expect(panel).toHaveTextContent("장면 9개 · 12.0MB");
     expect(panel).toHaveTextContent("예전 초안으로 만든 것");
     expect(within(panel).getByRole("button", { name: "세로 영상 다시 만들기" })).toBeEnabled();
+  });
+
+  it("sends the chosen text template, colour, place and size, starting from the last video's look", async () => {
+    const fetcher = show((init) => init?.method === "POST"
+      ? response({ ...noVideo, status: "RUNNING", step: "장면 잘라 세로로 맞추기" }, 202)
+      : response({ ...noVideo, status: "COMPLETED", video: { ...video, text_style: { template: "neon", color: "auto", position: "auto", size: "normal" } } }));
+    const templates = await screen.findByRole("group", { name: "글자 템플릿" });
+    expect(await within(templates).findByRole("button", { name: /네온/, pressed: true })).toBeInTheDocument();
+    await userEvent.click(within(templates).getByRole("button", { name: /감성 글로우/ }));
+    await userEvent.click(within(screen.getByRole("group", { name: "포인트 색" })).getByRole("button", { name: "분홍" }));
+    await userEvent.click(within(screen.getByRole("group", { name: "문구 위치" })).getByRole("button", { name: "아래" }));
+    await userEvent.click(within(screen.getByRole("group", { name: "글자 크기" })).getByRole("button", { name: "크게" }));
+    await userEvent.click(screen.getByRole("button", { name: "세로 영상 다시 만들기" }));
+    const post = fetcher.mock.calls.find(([url, init]) => url === `/api/projects/${project}/reel-video` && init?.method === "POST");
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ text_style: { template: "clean", color: "pink", position: "bottom", size: "large" } });
   });
 
   it("explains a failure in plain words", async () => {
