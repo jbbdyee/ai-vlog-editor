@@ -14,8 +14,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from backend.app.models import Project, SourceVideo
 from backend.app.models.reel import ProjectReelDraft
 from backend.app.services.media_probe import probe_media
-from backend.app.services.reel_draft import (ReelDraft, SourceInput, analysis_fingerprint, analyze_shots, build_draft,
-                                             draft_from_json, shots_from_json, shots_to_json)
+from backend.app.services.reel_chat import EditResult
+from backend.app.services.reel_draft import (PREVIOUS_KEY, ReelDraft, SourceInput, analysis_fingerprint, analyze_shots,
+                                             build_draft, draft_from_json, shots_from_json, shots_to_json)
 
 
 class ReelProjectNotFound(LookupError):
@@ -69,6 +70,74 @@ def saved_draft(session: Session, project_id: UUID) -> ReelDraft | None:
         raise ReelProjectNotFound(str(project_id))
     record = session.get(ProjectReelDraft, project_id)
     return draft_from_json(record.draft) if record is not None else None
+
+
+def can_undo(session: Session, project_id: UUID) -> bool:
+    record = session.get(ProjectReelDraft, project_id)
+    return bool(record is not None and record.draft.get(PREVIOUS_KEY))
+
+
+# --- TODO 16: change the saved draft by talking to it ---
+
+class ReelEditRefused(RuntimeError):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def _busy(project_id: UUID) -> str | None:
+    with _lock:
+        if project_id in _jobs and _jobs[project_id].status == "RUNNING":
+            return "REEL_DRAFT_RUNNING"
+        if project_id in _render_jobs and _render_jobs[project_id].status == "RUNNING":
+            return "REEL_VIDEO_RUNNING"
+    return None
+
+
+def edit_reel_draft(factory: sessionmaker[Session], project_id: UUID, message: str, selected: int | None,
+                    *, complete=...) -> EditResult:
+    """Read the sentence, apply it and save; the draft before it is kept for one "되돌리기"."""
+    from backend.app.services.llm_edit_interpreter import configured_engine
+    from backend.app.services.reel_chat import NotUnderstood, apply_edits, understand
+
+    if complete is ...:
+        engine = configured_engine()
+        complete = engine[2] if engine else None
+    if (code := _busy(project_id)) is not None:
+        raise ReelEditRefused(code)
+    with factory() as session:
+        draft = saved_draft(session, project_id)
+        record = session.get(ProjectReelDraft, project_id)
+        if draft is None:
+            raise ReelEditRefused("REEL_DRAFT_MISSING")
+        shots = shots_from_json(record.shots)
+    if selected is not None and not 1 <= selected <= len(draft.scenes):
+        selected = None
+    try:
+        edits, _ = understand(message, draft, selected, complete)
+    except NotUnderstood as error:
+        raise ReelEditRefused("REEL_EDIT_NOT_UNDERSTOOD") from error
+    result = apply_edits(draft, shots, edits, complete=complete)
+    if result.done:
+        with factory() as session:
+            record = session.get(ProjectReelDraft, project_id)
+            record.draft = {**result.draft.to_json(), PREVIOUS_KEY: draft.to_json()}
+            session.commit()
+    return result
+
+
+def undo_reel_draft(factory: sessionmaker[Session], project_id: UUID) -> None:
+    if (code := _busy(project_id)) is not None:
+        raise ReelEditRefused(code)
+    with factory() as session:
+        if session.get(Project, project_id) is None:
+            raise ReelProjectNotFound(str(project_id))
+        record = session.get(ProjectReelDraft, project_id)
+        previous = record.draft.get(PREVIOUS_KEY) if record is not None else None
+        if not previous:
+            raise ReelEditRefused("REEL_UNDO_EMPTY")
+        record.draft = dict(previous)
+        session.commit()
 
 
 def start_reel_draft(project_id: UUID, factory: sessionmaker[Session], resolve: Callable[[str], Path],

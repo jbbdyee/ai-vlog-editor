@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Clapperboard, Download, Film, LoaderCircle } from "lucide-react";
+import { Clapperboard, Download, Film, LoaderCircle, Send, Undo2 } from "lucide-react";
 import { ApiError } from "@/api/projects";
 import { formatDuration } from "@/api/story-direction";
-import { getReelOptions, getReelStatus, getReelVideo, reelVideoSrc, startReelDraft, startReelVideo, type ReelOption, type ReelOptions, type ReelTextStyle } from "@/api/reels";
+import { editReelDraft, getReelOptions, getReelStatus, getReelVideo, reelVideoSrc, startReelDraft, startReelVideo, undoReelDraft, type ReelOption, type ReelOptions, type ReelTextStyle } from "@/api/reels";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -126,6 +126,62 @@ function ReelVideoPanel({ projectId, draftKey, draftRunning, options }: { projec
   </div>;
 }
 
+const editErrors: Record<string, string> = {
+  REEL_EDIT_NOT_UNDERSTOOD: "무엇을 고칠지 알아듣지 못했어요. 예: \"3번 더 길게\", \"여기에 자막 '최애템' 추가\", \"4번 빼\"",
+  REEL_DRAFT_RUNNING: "초안을 만드는 중이라 끝난 뒤에 고칠 수 있어요.",
+  REEL_VIDEO_RUNNING: "세로 영상을 만드는 중이라 끝난 뒤에 고칠 수 있어요.",
+  REEL_UNDO_EMPTY: "되돌릴 고치기가 없어요.",
+};
+
+const quickEdits = [["더 길게", "여기 더 길게"], ["더 짧게", "여기 더 짧게"], ["자막 새로", "여기 자막 다시 써줘"], ["장면 빼기", "여기 빼"]] as const;
+
+/** TODO 16: change the draft by talking ("3번 더 길게"); "여기" is the scene picked in the list below. */
+function ReelChat({ projectId, selected, canUndo, disabled, onChanged }: { projectId: string; selected: number | null; canUndo: boolean; disabled: boolean; onChanged: () => void }) {
+  const queryClient = useQueryClient();
+  const [message, setMessage] = useState("");
+  const [result, setResult] = useState<{ done: string[]; skipped: string[] } | null>(null);
+  const edit = useMutation({
+    mutationFn: (text: string) => editReelDraft(projectId, text, selected),
+    onSuccess: (value) => {
+      queryClient.setQueryData(["reel-draft", projectId], value);
+      setResult({ done: value.done_edits, skipped: value.skipped_edits });
+      if (value.done_edits.length) { setMessage(""); onChanged(); }
+    },
+    onError: () => setResult(null),
+  });
+  const undo = useMutation({
+    mutationFn: () => undoReelDraft(projectId),
+    onSuccess: (value) => { queryClient.setQueryData(["reel-draft", projectId], value); setResult({ done: ["고치기 전 초안으로 되돌렸어요"], skipped: [] }); onChanged(); },
+  });
+  const busy = disabled || edit.isPending || undo.isPending;
+  const send = (text: string) => { if (text.trim() && !busy) edit.mutate(text.trim()); };
+  const failure = edit.error ?? undo.error;
+  return <div className="space-y-2 rounded-xl border border-fuchsia-300/20 bg-fuchsia-300/[.04] p-3" aria-label="말로 고치기">
+    <p className="text-sm font-semibold text-slate-100">말로 고치기</p>
+    <p className="text-xs text-slate-400">{selected ? <>고른 장면: <b className="text-fuchsia-200">{selected}번</b> · "여기"는 이 장면이에요</> : "아래 장면을 누르면 \"여기\"로 고를 수 있어요. 번호로 말해도 돼요(예: 3번)."}</p>
+    {selected && <div className="flex flex-wrap gap-2">
+      {quickEdits.map(([label, text]) => <Button key={label} size="sm" variant="secondary" disabled={busy} onClick={() => send(text)}>{label}</Button>)}
+    </div>}
+    <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); send(message); }}>
+      <input id="reel-chat" aria-label="고칠 내용" value={message} onChange={(event) => setMessage(event.target.value)} disabled={busy} maxLength={300}
+        placeholder="예: 3번 더 길게 / 여기에 자막 '최애템' 추가 / 제목을 '여름 꿀템 3가지'로"
+        className="min-w-0 flex-1 rounded-lg border border-white/15 bg-[#0b1420] px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500" />
+      <Button type="submit" size="sm" disabled={busy || !message.trim()}>
+        <span className="flex items-center gap-1">{edit.isPending ? <LoaderCircle size={14} className="animate-spin" /> : <Send size={14} />}고치기</span>
+      </Button>
+      {canUndo && <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => undo.mutate()}>
+        <span className="flex items-center gap-1"><Undo2 size={14} />되돌리기</span>
+      </Button>}
+    </form>
+    {result && <div role="status" className="space-y-0.5 text-sm">
+      {result.done.map((line) => <p key={line} className="text-emerald-200">✓ {line}</p>)}
+      {result.skipped.map((line) => <p key={line} className="text-amber-200">· {line}</p>)}
+      {result.done.length > 0 && <p className="text-xs text-slate-500">세로 영상에 반영하려면 위에서 세로 영상을 다시 만들어 주세요.</p>}
+    </div>}
+    {failure && <Alert>{failure instanceof ApiError ? (failure.code && editErrors[failure.code]) || failure.message : "초안을 고치지 못했어요."}</Alert>}
+  </div>;
+}
+
 /** TODO 10: pick short/long, mode, pace and length, then the AI drafts a reel (order, length per shot, title, lines). */
 export function ReelDraftCard({ projectId, onPreview }: { projectId: string; onPreview?: (range: PreviewRange) => void }) {
   const queryClient = useQueryClient();
@@ -151,6 +207,11 @@ export function ReelDraftCard({ projectId, onPreview }: { projectId: string; onP
   const running = status.data?.status === "RUNNING" || start.isPending;
   const draft = status.data?.draft;
   const byAi = draft?.engine.startsWith("llm:");
+  // TODO 16: the scene "여기" means. Cleared when a scene is added or removed, since the numbers move.
+  const [selected, setSelected] = useState<number | null>(null);
+  const sceneCount = draft?.scenes.length ?? 0;
+  useEffect(() => { setSelected(null); }, [sceneCount]);
+  const picked = selected !== null && selected <= sceneCount ? selected : null;
   return <Card id="reel-draft" className="mt-3 scroll-mt-24 sm:mt-6 sm:scroll-mt-3">
     <CardHeader>
       <CardTitle>숏폼·롱폼 만들기</CardTitle>
@@ -189,14 +250,15 @@ export function ReelDraftCard({ projectId, onPreview }: { projectId: string; onP
         </div>
         <ReelVideoPanel projectId={projectId} draftRunning={running} options={options.data}
           draftKey={`${draft.mode}|${draft.title_lead ?? ""}|${draft.title}|${draft.total_seconds}|${draft.scenes.map((s) => `${s.shot_index}:${s.caption}`).join(",")}`} />
+        <ReelChat projectId={projectId} selected={picked} canUndo={Boolean(status.data?.can_undo)} disabled={running} onChanged={() => undefined} />
         <ol className="space-y-2">
-          {draft.scenes.map((scene, index) => <li key={`${scene.shot_index}:${index}`} className="flex min-w-0 flex-wrap items-start justify-between gap-2 rounded-xl border border-white/10 bg-[#0b1420] p-3">
-            <div className="min-w-0 flex-1">
+          {draft.scenes.map((scene, index) => <li key={`${scene.shot_index}:${index}`} className={`flex min-w-0 flex-wrap items-start justify-between gap-2 rounded-xl border p-3 ${picked === index + 1 ? "border-fuchsia-300/60 bg-fuchsia-300/[.06]" : "border-white/10 bg-[#0b1420]"}`}>
+            <button type="button" aria-pressed={picked === index + 1} aria-label={`${index + 1}번 장면 고르기`} onClick={() => setSelected(picked === index + 1 ? null : index + 1)} className="min-w-0 flex-1 text-left">
               <p className="text-xs text-slate-500 tabular-nums">{index + 1}. {scene.is_hook ? <span className="mr-1 rounded-full bg-amber-300/15 px-2 py-0.5 font-semibold text-amber-200">맨 앞 장면</span> : null}{scene.source_filename} · {scene.start_seconds.toFixed(1)}–{scene.end_seconds.toFixed(1)}초 ({(scene.end_seconds - scene.start_seconds).toFixed(1)}초)</p>
               {scene.label && <p className="mt-1 text-xs font-semibold text-cyan-200">{scene.label}</p>}
               <p className="mt-0.5 text-base font-semibold text-slate-50">{scene.caption || <span className="text-slate-500">(문구 없음)</span>}</p>
               {scene.shot_caption && <p className="mt-0.5 text-xs text-slate-400">AI가 본 화면: {scene.shot_caption}</p>}
-            </div>
+            </button>
             <Button size="sm" variant="secondary" onClick={() => onPreview?.({ candidateId: `reel:${scene.shot_index}`, sourceId: scene.source_video_id, start: scene.start_seconds, end: scene.end_seconds })}>미리보기</Button>
           </li>)}
         </ol>

@@ -28,8 +28,9 @@ from backend.app.services.project_processing import process_project
 from backend.app.services.edit_request import MAX_REQUEST_LENGTH
 from backend.app.services.llm_edit_interpreter import interpret_with_llm
 from backend.app.services.story_direction import load_story_inputs, rebuild_direction, recommend_story_direction
-from backend.app.services.project_reel import (ReelOptions, ReelProjectNotFound, job_state, reel_output_dir,
-                                              render_job_state, saved_draft, start_reel_draft, start_reel_render)
+from backend.app.services.project_reel import (ReelEditRefused, ReelOptions, ReelProjectNotFound, can_undo,
+                                              edit_reel_draft, job_state, reel_output_dir, render_job_state,
+                                              saved_draft, start_reel_draft, start_reel_render, undo_reel_draft)
 from backend.app.services.reel_render import draft_fingerprint, saved_video
 from backend.app.services import reel_text
 from backend.app.services.reel_modes import (AUTO_MODE, DEFAULT_PACE, DEFAULT_SHORT_SECONDS, MODE_BY_KEY, MODES, PACES,
@@ -811,14 +812,16 @@ class ReelDraftStatusResponse(BaseModel):
     total: int
     error_code: str | None = None
     draft: ReelDraftResponse | None = None
+    can_undo: bool = False  # TODO 16: the draft before the last chat edit is kept
 
 
 def _reel_status_sync(factory, project_id) -> ReelDraftStatusResponse:
     with factory() as session:
         draft = saved_draft(session, project_id)
+        undo = can_undo(session, project_id)
     job = job_state(project_id)
     return ReelDraftStatusResponse(
-        project_id=project_id, status=job.status, step=job.step, done=job.done, total=job.total,
+        project_id=project_id, status=job.status, step=job.step, done=job.done, total=job.total, can_undo=undo,
         error_code=job.error_code, draft=None if draft is None else ReelDraftResponse(**{
             **draft.to_json(), "scenes": [ReelSceneResponse(**vars(scene)) for scene in draft.scenes],
             "notes": list(draft.notes)}))
@@ -850,6 +853,56 @@ async def get_project_reel_draft(request: Request, project_id: UUID) -> ReelDraf
         return await run_in_threadpool(_reel_status_sync, _session_factory(request), project_id)
     except ReelProjectNotFound as error:
         raise _project_not_found() from error
+
+
+class ReelEditRequest(BaseModel):
+    """TODO 16: one sentence such as "3번 더 길게"; ``selected`` is the scene number picked on the screen."""
+    message: str = Field(min_length=1, max_length=300)
+    selected: int | None = Field(default=None, ge=1, le=200)
+
+
+class ReelEditResponse(ReelDraftStatusResponse):
+    done_edits: list[str] = []
+    skipped_edits: list[str] = []
+
+
+_REEL_EDIT_STATUS = {"REEL_DRAFT_MISSING": 404, "REEL_EDIT_NOT_UNDERSTOOD": 422, "REEL_UNDO_EMPTY": 409}
+
+
+def _reel_edit_error(error: ReelEditRefused) -> HTTPException:
+    return HTTPException(status_code=_REEL_EDIT_STATUS.get(error.code, 409),
+                         detail={"code": error.code, "message": "The reel draft could not be changed."})
+
+
+def _reel_edit_sync(factory, project_id, payload: ReelEditRequest) -> ReelEditResponse:
+    result = edit_reel_draft(factory, project_id, payload.message, payload.selected)
+    status = _reel_status_sync(factory, project_id)
+    return ReelEditResponse(**status.model_dump(), done_edits=list(result.done), skipped_edits=list(result.skipped))
+
+
+@router.post("/{project_id}/reel-draft/edit", response_model=ReelEditResponse)
+async def edit_project_reel_draft(request: Request, project_id: UUID, payload: ReelEditRequest) -> ReelEditResponse:
+    try:
+        return await run_in_threadpool(_reel_edit_sync, _session_factory(request), project_id, payload)
+    except ReelProjectNotFound as error:
+        raise _project_not_found() from error
+    except ReelEditRefused as error:
+        raise _reel_edit_error(error) from error
+
+
+def _reel_undo_sync(factory, project_id) -> ReelDraftStatusResponse:
+    undo_reel_draft(factory, project_id)
+    return _reel_status_sync(factory, project_id)
+
+
+@router.post("/{project_id}/reel-draft/undo", response_model=ReelDraftStatusResponse)
+async def undo_project_reel_draft(request: Request, project_id: UUID) -> ReelDraftStatusResponse:
+    try:
+        return await run_in_threadpool(_reel_undo_sync, _session_factory(request), project_id)
+    except ReelProjectNotFound as error:
+        raise _project_not_found() from error
+    except ReelEditRefused as error:
+        raise _reel_edit_error(error) from error
 
 
 

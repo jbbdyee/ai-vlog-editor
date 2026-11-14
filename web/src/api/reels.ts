@@ -62,7 +62,12 @@ export interface ReelStatus {
   total: number;
   error_code: string | null;
   draft: ReelDraft | null;
+  /** TODO 16: the draft before the last chat edit is kept, so "되돌리기" works. */
+  can_undo?: boolean;
 }
+
+/** TODO 16: what a chat edit changed and what it could not. */
+export interface ReelEditStatus extends ReelStatus { done_edits: string[]; skipped_edits: string[] }
 
 export interface ReelRequest { mode: string; pace: string; target_seconds: number }
 
@@ -98,6 +103,23 @@ export async function startReelDraft(id: string, body: ReelRequest): Promise<Ree
     return checkStatus(await request<ReelStatus>(`/projects/${id}/reel-draft`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ format: "short", ...body }),
     }, 202), id);
+  } catch (error) { return unsupported(error); }
+}
+
+/** TODO 16: change the saved draft with one sentence ("3번 더 길게"); `selected` is the scene number picked on screen. */
+export async function editReelDraft(id: string, message: string, selected: number | null): Promise<ReelEditStatus> {
+  try {
+    const value = await request<ReelEditStatus>(`/projects/${id}/reel-draft/edit`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message, selected }),
+    });
+    checkStatus(value, id);
+    return { ...value, done_edits: value.done_edits ?? [], skipped_edits: value.skipped_edits ?? [] };
+  } catch (error) { return unsupported(error); }
+}
+
+export async function undoReelDraft(id: string): Promise<ReelStatus> {
+  try {
+    return checkStatus(await request<ReelStatus>(`/projects/${id}/reel-draft/undo`, { method: "POST" }), id);
   } catch (error) { return unsupported(error); }
 }
 
