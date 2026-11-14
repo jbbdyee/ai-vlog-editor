@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { PreviewRange } from "@/features/projects/source-preview";
 import { RenderPreview } from "@/features/edit/render-preview";
+import { LongformCaptions } from "@/features/edit/longform-captions";
 import { SceneReasons } from "@/features/scenes/scene-reasons";
 import type { StoryPlanDraft } from "@/features/story/story-direction";
 
@@ -253,6 +254,7 @@ export function EditRender({ projectId, processing, onPreview, previewCandidateI
       {selectedRenderId && !selectedRun && <Alert>선택한 렌더 기록을 찾을 수 없습니다. 목록을 다시 조회해 주세요.</Alert>}
       {showResult && displayRun && <div className="space-y-4 border-t border-white/10 pt-5"><p className="text-xs text-slate-400">{selectedRenderId ? "선택한 과거 렌더 결과입니다." : "현재 서버의 마지막 완료 렌더 결과입니다."} 편집 계획을 변경했다면 이 결과는 이전 계획으로 만든 영상일 수 있습니다.</p><p className="break-all text-xs text-slate-500">렌더 ID · {displayRun.render_id}</p><p className="text-sm text-slate-300">{displayRun.output ? `${displayRun.output.duration_seconds.toFixed(2)}초 · ${displayRun.output.video_codec ?? "영상 코덱 미확인"} / ${displayRun.output.audio_codec ?? "오디오 없음"}` : "결과 메타데이터 없음"}</p><p className="text-sm text-slate-300">자막 상태 · {subtitleLabels[displayRun.hard_subtitle_status] ?? displayRun.hard_subtitle_status}{displayRun.hard_subtitle_error_code ? ` (${displayRun.hard_subtitle_error_code})` : ""}</p>{plainPath && displayRun.render_id && <RenderPreview key={`${projectId}:${displayRun.render_id}`} projectId={projectId} renderId={displayRun.render_id} plainPath={plainPath} subtitledPath={subtitledPath} onUnavailable={refreshRenderState} />}{!plainPath && <Alert>기본 MP4 결과를 미리 보거나 다운로드할 수 없습니다. 결과 파일과 서버 상태를 확인해 주세요.{renderFileProblem(displayRun) ? ` ${renderFileProblem(displayRun)!.detail}` : ""}</Alert>}{subtitleIntegrityNote(displayRun) && <p className="text-sm text-amber-200">{subtitleIntegrityNote(displayRun)}</p>}<div className="flex flex-wrap gap-3"><Button disabled={!plainPath || downloading !== null} onClick={() => void download("plain", plainPath)}><Download size={16} />자막 없는 MP4 다운로드</Button><Button variant="secondary" disabled={!subtitledPath || downloading !== null} onClick={() => void download("subtitled", subtitledPath)}><Download size={16} />한국어 하드 자막 MP4 다운로드</Button><Button variant="secondary" disabled={!srtPath || downloading !== null} onClick={() => void download("srt", srtPath)}><Download size={16} />자막(SRT) 다운로드</Button></div>{!subtitledPath && <p className="text-sm text-amber-200">자막 적용 영상은 현재 다운로드할 수 없습니다. 기본 영상이 제공되면 별도로 받을 수 있습니다.</p>}</div>}
       {downloadError && <Alert>{downloadError}</Alert>}
+      <LongformCaptions projectId={projectId} renderKey={run?.render_id} />
     </CardContent></Card>
   </section>;
 }

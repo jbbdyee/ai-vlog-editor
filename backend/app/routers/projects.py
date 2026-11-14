@@ -32,7 +32,7 @@ from backend.app.services.project_reel import (ReelEditRefused, ReelOptions, Ree
                                               edit_reel_draft, unused_shots, job_state, reel_output_dir, render_job_state,
                                               saved_draft, start_reel_draft, start_reel_render, undo_reel_draft)
 from backend.app.services.reel_render import draft_fingerprint, saved_video
-from backend.app.services import reel_text
+from backend.app.services import longform_captions, reel_text
 from backend.app.services.reel_modes import (AUTO_MODE, DEFAULT_PACE, DEFAULT_SHORT_SECONDS, MODE_BY_KEY, MODES, PACES,
                                              SHORT_LENGTHS)
 from backend.app.services.story_length import (LENGTH_OPTIONS, Moment, accept_minutes, fit_to_length, footage_seconds,
@@ -1016,6 +1016,96 @@ async def get_project_reel_video_file(request: Request, project_id: UUID) -> Fil
     if video is None:
         raise HTTPException(status_code=404, detail={"code": "REEL_VIDEO_MISSING", "message": "No reel video yet."})
     return FileResponse(video.path, media_type="video/mp4", filename="reel.mp4", content_disposition_type="inline")
+
+
+class CaptionedVideoInfo(BaseModel):
+    render_id: str
+    duration_seconds: float
+    file_size_bytes: int
+    line_count: int
+    thoughts: list[str]
+    thought_engine: str
+    matches_render: bool
+    url: str
+
+
+class CaptionedVideoStatusResponse(BaseModel):
+    project_id: UUID
+    status: str
+    step: str
+    done: int
+    total: int
+    error_code: str | None = None
+    latest_render_id: str | None = None
+    video: CaptionedVideoInfo | None = None
+
+
+def _latest_render_files(request: Request, project_id: UUID):
+    """(render_id, final.mp4, final.srt or None) of the last completed render, or None."""
+    snapshot = request.app.state.project_render_run_registry.snapshot(project_id)
+    result = snapshot.result
+    if snapshot.status is not RenderRunStatus.COMPLETED or result is None:
+        return None
+    video = _render_output_path(request, project_id, result, "final.mp4", result.output_path)
+    if video is None or not video.is_file():
+        return None
+    srt = None
+    if result.subtitle_path is not None and not result.subtitle_error_code:
+        srt = _render_output_path(request, project_id, result, "final.srt", result.subtitle_path)
+    return result.render_id.hex, video, srt
+
+
+def _captioned_status(request: Request, project_id: UUID) -> CaptionedVideoStatusResponse:
+    latest = _latest_render_files(request, project_id)
+    job = longform_captions.job_state(project_id)
+    video = longform_captions.saved_video(
+        longform_captions.output_dir(request.app.state.project_render_output_root, project_id))
+    info = None
+    if video is not None:
+        stamp = int(video.path.stat().st_mtime)
+        info = CaptionedVideoInfo(render_id=video.render_id, duration_seconds=video.duration_seconds,
+                                  file_size_bytes=video.file_size_bytes, line_count=video.line_count,
+                                  thoughts=list(video.thoughts), thought_engine=video.thought_engine,
+                                  matches_render=latest is not None and latest[0] == video.render_id,
+                                  url=f"/projects/{project_id}/captioned-video/file?v={stamp}")
+    return CaptionedVideoStatusResponse(project_id=project_id, status=job.status, step=job.step, done=job.done,
+                                        total=job.total, error_code=job.error_code,
+                                        latest_render_id=latest[0] if latest else None, video=info)
+
+
+@router.post("/{project_id}/captioned-video", response_model=CaptionedVideoStatusResponse, status_code=202)
+async def start_project_captioned_video(request: Request, project_id: UUID) -> CaptionedVideoStatusResponse:
+    """TODO 21: burn the spoken lines (and a few inner thoughts) onto the last completed long-form render."""
+    await _snapshot_or_404(request, project_id)
+    latest = await run_in_threadpool(_latest_render_files, request, project_id)
+    if latest is None:
+        raise HTTPException(status_code=409, detail={"code": "CAPTION_RENDER_MISSING",
+                                                     "message": "Render the long-form video first."})
+    render_id, video, srt = latest
+    if srt is None:
+        raise HTTPException(status_code=409, detail={"code": "CAPTION_NO_LINES",
+                                                     "message": "This render has no spoken lines (SRT)."})
+    reason = longform_captions.start_captioning(project_id, video, srt, render_id,
+                                                request.app.state.project_render_output_root)
+    if reason is not None:
+        raise HTTPException(status_code=409, detail={"code": reason, "message": "Captions are already being made."})
+    return await run_in_threadpool(_captioned_status, request, project_id)
+
+
+@router.get("/{project_id}/captioned-video", response_model=CaptionedVideoStatusResponse)
+async def get_project_captioned_video(request: Request, project_id: UUID) -> CaptionedVideoStatusResponse:
+    await _snapshot_or_404(request, project_id)
+    return await run_in_threadpool(_captioned_status, request, project_id)
+
+
+@router.get("/{project_id}/captioned-video/file", response_class=FileResponse)
+async def get_project_captioned_video_file(request: Request, project_id: UUID) -> FileResponse:
+    video = longform_captions.saved_video(
+        longform_captions.output_dir(request.app.state.project_render_output_root, project_id))
+    if video is None:
+        raise HTTPException(status_code=404, detail={"code": "CAPTION_VIDEO_MISSING", "message": "No captioned video yet."})
+    return FileResponse(video.path, media_type="video/mp4", filename="vlog-captioned.mp4",
+                        content_disposition_type="inline")
 
 def _read_scene_edit_plan_sync(factory, project_id):
     with factory() as session:
