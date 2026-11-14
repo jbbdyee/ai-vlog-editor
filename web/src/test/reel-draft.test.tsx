@@ -19,7 +19,7 @@ const scene = (index: number, caption: string, hook = false, label = "") => ({
 });
 const draft = {
   format: "short", mode: "challenge", mode_label: "도전기·연습 기록", pace: "fast", pace_label: "빠르게", target_seconds: 15,
-  total_seconds: 15.2, title: "첫 댄스곡 도전기", engine: "llm:ollama/gemma3:4b", shot_count: 12, notes: [], fallback_reason: null,
+  total_seconds: 15.2, title_lead: "나만 아는 가수의", title: "첫 댄스곡 도전기", engine: "llm:ollama/gemma3:4b", shot_count: 12, notes: [], fallback_reason: null,
   scenes: [scene(5, "폭풍 칭찬 받았어요", true), scene(1, "처음 뵙겠습니다"), scene(2, "카운트 맞추는 중")],
 };
 const idle = { project_id: project, status: "IDLE", step: "", done: 0, total: 0, error_code: null, draft: null };
@@ -49,6 +49,7 @@ describe("TODO 10 reel draft", () => {
     expect(JSON.parse(post[1]!.body as string)).toEqual({ format: "short", mode: "challenge", pace: "fast", target_seconds: 15 });
     const result = await screen.findByLabelText("릴스 초안");
     expect(within(result).getByText("첫 댄스곡 도전기")).toBeInTheDocument();
+    expect(within(result).getByText("나만 아는 가수의")).toBeInTheDocument();
     const rows = within(result).getAllByRole("listitem");
     expect(rows[0]).toHaveTextContent("맨 앞 장면");
     expect(rows[0]).toHaveTextContent("폭풍 칭찬 받았어요");

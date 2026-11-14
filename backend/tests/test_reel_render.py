@@ -107,6 +107,15 @@ class SubtitleTextTests(TestCase):
         late = draft(scene(1, VERTICAL, 0.0, 3.0, "첫 장면", hook=True), scene(2, VERTICAL, 0.0, 2.0, "나중 장면"))
         self.assertEqual(top_of(build_ass(late, TextStyle("pixel")), "나중 장면"), 300, "back at the top afterwards")
 
+    def test_lead_in_from_the_draft_is_its_own_text_box(self):
+        """TODO 14: Blo's title is two text boxes; the AI writes both, nothing is cut in the middle."""
+        from dataclasses import replace
+        two = replace(draft(scene(1, "s1", 0, 3, hook=True), title="첫 댄스곡 도전기"), title_lead="나만 아는 가수의")
+        for key in ("pixel", "clean", "basic"):
+            ass = build_ass(two, TextStyle(key))
+            self.assertRegex(ass, r"}나만 아는 가수의\n", key)
+            self.assertRegex(ass, r"}첫 댄스곡 도전기\n", key)
+
     def test_long_lines_are_wrapped_and_the_title_splits_into_lead_and_punch_line(self):
         self.assertEqual(split_title("직접 입어본 추천템 3가지"), ["직접 입어본", "추천템 3가지"])
         self.assertEqual(split_title("골라줘"), ["골라줘"])

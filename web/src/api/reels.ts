@@ -42,6 +42,8 @@ export interface ReelDraft {
   pace_label: string;
   target_seconds: number;
   total_seconds: number;
+  /** TODO 14: small line above the title, its own text box. Older drafts have none. */
+  title_lead?: string;
   title: string;
   engine: string;
   scenes: ReelScene[];

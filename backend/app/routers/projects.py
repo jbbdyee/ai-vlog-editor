@@ -793,6 +793,7 @@ class ReelDraftResponse(BaseModel):
     pace_label: str
     target_seconds: int
     total_seconds: float
+    title_lead: str = ""  # TODO 14: small line above the title (its own text box)
     title: str
     engine: str
     scenes: list[ReelSceneResponse]

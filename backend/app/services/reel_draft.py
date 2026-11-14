@@ -15,7 +15,7 @@ what was heard is rewritten once, and item modes get their name tags and "첫 �
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from difflib import SequenceMatcher
 import hashlib
 import os
@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from backend.app.services.llm_edit_interpreter import Completion, LLMEditError, configured_engine
 from backend.app.services.reel_modes import (ACTIVITIES, ACTIVITY_MODE, AUTO_MODE, MIN_SHOT_SECONDS, MODE_BY_KEY, MODES,
                                              PACES)
+from backend.app.services.reel_text import clean_text
 from backend.app.services.shot_structure import ShotDetectionConfig, ShotStructureError, detect_shot_structure
 from backend.app.services.vlm_scene_captioner import VLMCaptionError, ask_frames, vlm_model
 
@@ -96,6 +97,7 @@ class ReelDraft:
     shot_count: int
     notes: tuple[str, ...] = ()
     fallback_reason: str | None = None
+    title_lead: str = ""  # TODO 14: small line above the title, its own text box (Blo: "나만 아는 가수의" / "첫 댄스곡 도전기")
 
     def to_json(self) -> dict:
         return asdict(self)
@@ -254,6 +256,7 @@ class _AIScene(BaseModel):
 class _AIReel(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: str
+    title_lead: str = Field(default="", max_length=30)
     title: str = Field(min_length=1, max_length=40)
     hook_shot: int
     scenes: list[_AIScene] = Field(min_length=1, max_length=MAX_SHOTS)
@@ -263,11 +266,13 @@ SYSTEM_PROMPT = (
     "너는 인스타그램 릴스·유튜브 쇼츠 편집자다. 사람이 이미 한 번 컷편집한 영상의 장면 목록을 받는다. "
     "각 장면에는 번호, 길이, 화면 설명(AI가 본 화면), 보이는 옷·물건, 들린 말이 있다. "
     "mode: 지정된 모드가 있으면 그대로, 'auto'면 내용에 가장 맞는 모드 키를 고른다. "
-    "title: 첫 화면에 크게 띄울 짧은 제목(20자 이내). 보는 사람이 끝까지 보고 싶게 쓴다. "
+    "첫 화면 제목은 글자 상자 두 개다. title_lead: 위에 작게 띄울 앞말(10자 안팎), title: 그 아래 크게 띄울 핵심(10자 안팎). "
+    "둘을 이어 읽으면 한 문장이 되고, 보는 사람이 끝까지 보고 싶게 쓴다. 두 칸에 같은 말을 쓰지 말고 '/'를 쓰지 마라. "
+    "화면 설명에 나온 장소·옷·동작을 넣어 이 영상만의 제목으로 쓴다. "
     "hook_shot: 맨 앞에 둘 가장 눈길을 끄는 장면 번호. "
     "scenes: 릴스에 넣을 장면을 고르고 장면마다 caption(화면에 띄울 한국어 한 줄, 18자 이내)을 쓴다. "
     "caption은 자막이 아니라 영상 주인이 화면에 얹는 짧은 한마디다. 친구에게 말하듯 솔직한 구어체로, "
-    "광고 문구·설명문처럼 쓰지 말고 마침표 없이 12자 안팎으로 쓴다. 그 장면에서 실제로 보이는 동작·옷·상황을 말한다. "
+    "광고 문구·설명문처럼 쓰지 말고 마침표·이모지 없이 12자 안팎으로 쓴다. 장면마다 다른 말을 쓴다. 그 장면에서 실제로 보이는 동작·옷·상황을 말한다. "
     "나쁜 예(설명문): '두 명의 여성이 춤추며 호흡', '거울 앞에서 셀카를 찍는 여성' → "
     "좋은 예(구어체): '선생님 따라 하는 중', '거울샷 남겨주고'. "
     "들린 말은 상황을 이해하는 참고일 뿐이다. 들린 말을 그대로 옮겨 적지 마라. 숫자 세기와 노래 가사는 무시하라. "
@@ -282,6 +287,10 @@ def _schema(shot_count: int) -> dict:
     schema = _AIReel.model_json_schema()
     numbers = {"type": "integer", "enum": list(range(1, shot_count + 1))}
     schema["properties"]["mode"] = {"type": "string", "enum": [m.key for m in MODES]}
+    # The small AI leaves an optional field empty: the lead-in is required in what it is asked for (Python still
+    # accepts an answer without one and then splits the title as before).
+    schema["properties"]["title_lead"] = {"type": "string", "minLength": 1, "maxLength": 20}
+    schema["required"] = sorted(set(schema.get("required", [])) | {"title_lead"})
     schema["properties"]["hook_shot"] = numbers
     schema["$defs"]["_AIScene"]["properties"]["shot"] = numbers
     return schema
@@ -291,7 +300,12 @@ def _user_prompt(shots: Sequence[Shot], mode_key: str, pace_seconds: float, targ
                  hide_speech: frozenset[int] = frozenset()) -> str:
     # A known mode: only its own examples (the small AI copied another mode's examples into a dance reel).
     shown = [MODE_BY_KEY[mode_key]] if mode_key in MODE_BY_KEY else MODES
-    modes = "\n".join(f"- {m.key}: {m.label} (순서 {m.order}, 제목 예: {m.title_example}, 문구 말투: {m.caption_style}"
+    def title_example(mode) -> str:
+        lead, _, title = mode.title_example.partition(" / ")
+        return f"title_lead '{lead}' + title '{title}'"
+    modes = "\n".join(f"- {m.key}: {m.label} (순서 {m.order}, 제목 틀(○○는 화면 설명의 낱말로, N은 옷·물건 개수로 채울 것): "
+                      f"{title_example(m)}, "
+                      f"문구 말투: {m.caption_style}"
                       + (f", 말투 참고 예시(그대로 쓰지 말 것): {' / '.join(m.caption_examples)})" if len(shown) == 1 else ")")
                       for m in shown)
     rows = "\n".join(
@@ -313,8 +327,28 @@ def _user_prompt(shots: Sequence[Shot], mode_key: str, pace_seconds: float, targ
             f"→ 약 {wanted}개 장면{items}{every}\n\n장면 목록(촬영 순서):\n{rows}")
 
 
+# TODO 14: in a try-on the pieces being shown are the bottoms and dresses; jackets, blouses and knits are worn over
+# them or held up next to them (Blo counted 3 items where the screen reader named 5, with a fur jacket and a blouse).
+LAYER_KINDS = ("재킷", "자켓", "코트", "블라우스", "셔츠", "니트", "스웨터", "가디건", "카디건", "점퍼", "패딩", "후드", "후디",
+               "맨투맨", "조끼", "베스트", "블레이저", "모자", "캡")
+
+
+def _is_layer(item: str) -> bool:
+    return bool(item) and item.split()[-1].endswith(LAYER_KINDS)
+
+
+def _shown_items(shots: Sequence[Shot]) -> dict[int, str]:
+    """Item per shot, leaving out layers when the video also shows other pieces (a jacket haul keeps its jackets)."""
+    named = {shot.index: shot.item for shot in shots if shot.item}
+    if any(not _is_layer(item) for item in named.values()):
+        named = {index: item for index, item in named.items() if not _is_layer(item)}
+    return named
+
+
 def _item_groups(shots: Sequence[Shot]) -> list[tuple[str, int, int]]:
     """Back-to-back shots of the same kind of item, in filmed order: (name, first shot, last shot)."""
+    shown = _shown_items(shots)
+    shots = [replace(shot, item=shown.get(shot.index, "")) for shot in shots]
     groups: list[list] = []
     for shot in shots:
         if not shot.item:
@@ -346,6 +380,7 @@ def build_draft(shots: Sequence[Shot], *, mode_key: str, pace_key: str, target_s
     ai: _AIReel | None = None
     fallback: str | None = None
     engine_name = "rule"
+    complete: Completion | None = None
     if engine is None:
         fallback = "LLM_NOT_CONFIGURED"
     else:
@@ -362,22 +397,23 @@ def build_draft(shots: Sequence[Shot], *, mode_key: str, pace_key: str, target_s
                 ai = again
     if ai is None:
         engine_name = "rule"
+        complete = None
         mode = MODE_BY_KEY.get(mode_key) or MODE_BY_KEY["daily_vlog"]
-        title = mode.label
+        lead, title = "", mode.label
         hook = shots[0].index
         lines = {s.index: (_short(s.caption) or "", "") for s in shots}
     else:
         mode = MODE_BY_KEY[mode_key] if mode_key != AUTO_MODE else MODE_BY_KEY.get(ai.mode, MODE_BY_KEY["daily_vlog"])
-        title = ai.title.strip()[:40]
+        lead, title = _title_parts(ai.title_lead, ai.title)
         hook = ai.hook_shot
         lines = {}
         bad = set(_copied_lines(ai, by_index))
         for scene in ai.scenes:
             if scene.shot in by_index and scene.shot not in lines:
-                caption = scene.caption.strip()[:40]
+                caption = _line(scene.caption)  # emoji: the video fonts have none (TODO 12)
                 if scene.shot in bad:  # still copied after one rewrite: no line beats a lifted lyric
                     caption = ""
-                lines[scene.shot] = (caption, scene.label.strip()[:24] if mode.order == "items" else "")
+                lines[scene.shot] = (caption, clean_text(scene.label)[:24] if mode.order == "items" else "")
         if hook not in lines:
             lines[hook] = ("", "")
     written = set(lines) if ai is not None else None
@@ -390,13 +426,117 @@ def build_draft(shots: Sequence[Shot], *, mode_key: str, pace_key: str, target_s
             if index not in written:
                 lines[index] = ("", lines[index][1])
     if mode.order == "items":
-        _label_items(ordered, lines, by_index)
+        count = _label_items(ordered, lines, by_index)
+        if count:  # the title promises as many items as there are name tags
+            fixed_lead, fixed = _match_count(lead, count), _match_count(title, count)
+            if (fixed_lead, fixed) != (lead, title):
+                notes.append(f"제목의 개수를 이름표 개수({count}가지)에 맞췄습니다.")
+                lead, title = fixed_lead, fixed
+    if complete is not None:
+        _fill_lines(complete, ordered, lines, by_index, mode, hook, bool(title))
+    if mode.order == "items":
+        _fill_with_item_kind(ordered, lines, hook, bool(title))
     scenes = tuple(ReelScene(
         index, by_index[index].source_video_id, by_index[index].source_filename, clips[index][0], clips[index][1],
         lines[index][0], lines[index][1], index == hook, by_index[index].caption) for index in ordered)
     total = round(sum(scene.end_seconds - scene.start_seconds for scene in scenes), 3)
     return ReelDraft("short", mode.key, mode.label, pace_key, pace_label, target_seconds, total, title, engine_name,
-                     scenes, len(shots), tuple(notes), fallback)
+                     scenes, len(shots), tuple(notes), fallback, title_lead=lead)
+
+
+def _title_parts(lead: str, title: str) -> tuple[str, str]:
+    """Two title boxes; when the AI put the whole sentence in ``title`` too, the repeated lead-in is dropped.
+
+    The small AI sometimes writes both boxes into ``title`` as "앞말 / 제목" (and puts the punch line in the lead
+    box): the slash wins.
+    """
+    if "/" in title:
+        head, _, tail = title.partition("/")
+        if head.strip() and tail.strip():
+            lead, title = head, tail
+    lead, title = (clean_text(part.replace("/", " ").replace("○", ""))[:limit] for part, limit in ((lead, 20), (title, 40)))
+    if lead and title.startswith(lead):
+        rest = title[len(lead):].strip()
+        title, lead = (rest, lead) if rest else (title, "")
+    return lead, title
+
+
+_NUM_WORDS = ("한", "두", "세", "네", "다섯", "여섯", "일곱", "여덟", "아홉", "열")
+_TITLE_COUNT_RE = re.compile(r"(?<![가-힣\d])(\d+|한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)(\s?)(가지|개|벌|착|템)")
+
+
+def _match_count(text: str, count: int) -> str:
+    """"추천템 5가지" with 3 name tags -> "추천템 3가지" ("세 가지" stays in words)."""
+    def fix(match: re.Match) -> str:
+        words = not match.group(1).isdigit() and count <= len(_NUM_WORDS)
+        return f"{_NUM_WORDS[count - 1] if words else count}{match.group(2)}{match.group(3)}"
+    return _TITLE_COUNT_RE.sub(fix, text, count=1)
+
+
+def _lines_to_fill(ordered: Sequence[int], lines: dict, hook: int, has_title: bool) -> list[int]:
+    """Scenes with no line, or the same line as the scene before. The title covers the first scene."""
+    missing, previous = [], ""
+    for index in ordered:
+        caption = lines[index][0]
+        if not (index == hook and has_title) and (not caption or _norm(caption) == _norm(previous)):
+            missing.append(index)
+        previous = caption
+    return missing
+
+
+class _AILine(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    shot: int
+    caption: str = Field(min_length=1, max_length=40)
+
+
+class _AIFill(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lines: list[_AILine] = Field(min_length=1)
+
+
+FILL_SYSTEM_PROMPT = (
+    "너는 인스타그램 릴스 편집자다. 릴스 장면 순서와 장면마다 화면에 띄운 한 줄 문구를 받는다. "
+    "'채울 것'이라고 표시된 장면에만 문구를 새로 쓴다. 친구에게 말하듯 솔직한 구어체로, 마침표·이모지 없이 12자 안팎. "
+    "그 장면 화면에 보이는 동작·옷·상황만 말하고, 앞뒤 장면 문구와 다른 말을 쓴다. 숫자 세기는 쓰지 마라. JSON만 출력하라."
+)
+
+
+def _fill_lines(complete: Completion, ordered, lines: dict, by_index: dict, mode, hook: int, has_title: bool) -> None:
+    """TODO 14: one more short AI call for scenes left without a line (dropped copies, shots added for length)."""
+    missing = _lines_to_fill(ordered, lines, hook, has_title)
+    if not missing:
+        return
+    rows = "\n".join(
+        f"[{index}] 화면: {by_index[index].caption or '설명 없음'}"
+        + (f" | 옷·물건: {lines[index][1]}" if lines[index][1] else "")
+        + (" | 문구: (채울 것)" if index in missing else f" | 문구: {lines[index][0] or '(제목 화면)'}")
+        for index in ordered)
+    prompt = (f"모드: {mode.label}, 문구 말투: {mode.caption_style}, 말투 참고 예시(그대로 쓰지 말 것): "
+              f"{' / '.join(mode.caption_examples)}\n\n릴스 순서:\n{rows}\n\n채울 장면: {', '.join(map(str, missing))}")
+    schema = _AIFill.model_json_schema()
+    schema["$defs"]["_AILine"]["properties"]["shot"] = {"type": "integer", "enum": list(missing)}
+    try:
+        answer = _AIFill.model_validate_json(complete(FILL_SYSTEM_PROMPT, prompt, schema))
+    except (LLMEditError, ValidationError, ValueError):
+        return
+    written = {line.shot: _line(line.caption) for line in answer.lines if line.shot in missing}
+    for position, index in enumerate(ordered):
+        caption = written.get(index, "")
+        neighbours = {_norm(lines[ordered[p]][0]) for p in (position - 1, position + 1) if 0 <= p < len(ordered)}
+        if caption and not _bad_caption(caption, by_index[index].speech) and _norm(caption) not in neighbours:
+            lines[index] = (caption, lines[index][1])
+
+
+def _fill_with_item_kind(ordered, lines: dict, hook: int, has_title: bool) -> None:
+    """Last resort for hauls, as Blo does: the kind of item ("미니스커트") under its name tag."""
+    for index in _lines_to_fill(ordered, lines, hook, has_title):
+        label = lines[index][1]
+        kind = label.split()[-1] if label else ""
+        place = ordered.index(index)
+        previous = lines[ordered[place - 1]][0] if place > 0 else ""
+        if kind and _norm(kind) != _norm(previous):
+            lines[index] = (kind, label)
 
 
 def _ask(complete: Completion, prompt: str, shot_count: int, by_index: dict) -> tuple[_AIReel | None, str | None]:
@@ -454,24 +594,37 @@ def _same_item(a: str, b: str) -> bool:
     return ka.endswith(kb) or kb.endswith(ka)
 
 
-def _label_items(ordered: list[int], lines: dict, by_index: dict) -> None:
+def _label_items(ordered: list[int], lines: dict, by_index: dict) -> int:
     """Haul/review: shots of the same item share one name tag; each new item opens with "첫 번째", "두 번째" ...
 
-    Done here, not by the AI, so the numbering is always right. The hook shot only gets its name tag.
+    Done here, not by the AI, so the numbering is always right. Returns how many items got a number.
+    TODO 14: names come from the screen reader (layers left out); the AI's labels only when it named nothing.
+    The hook shot (under the title) gets a name tag only when it shows one of the numbered items, so the screen
+    never shows more item names than the title counts.
     """
     hook, rest = ordered[0], ordered[1:]
-    name = lambda index: by_index[index].item or lines[index][1]  # noqa: E731  (what this shot shows first)
-    if name(hook):
-        lines[hook] = (lines[hook][0], name(hook))
+    shown = _shown_items([by_index[index] for index in ordered])
+    if not shown:
+        shown = {index: lines[index][1] for index in ordered if lines[index][1]}
     group: str | None = None
-    count = 0
+    groups: list[str] = []
     for index in rest:
-        own = name(index)
-        if own and (group is None or not _same_item(own, group)):
-            group, count = own, count + 1
-            lines[index] = (ORDINALS[count - 1] if count <= len(ORDINALS) else f"{count}번째", group)
-        elif group is not None:
+        own = shown.get(index, "")
+        earlier = next((name for name in groups if own and _same_item(own, name)), None)
+        if earlier is not None:  # back to an item already numbered: same tag, no new number
+            group = earlier
             lines[index] = (lines[index][0], group)
+        elif own:
+            group = own
+            groups.append(group)
+            count = len(groups)
+            lines[index] = (ORDINALS[count - 1] if count <= len(ORDINALS) else f"{count}번째", group)
+        else:
+            lines[index] = (lines[index][0], group or "")
+    own = shown.get(hook, "")
+    tag = next((name for name in groups if own and _same_item(own, name)), "")
+    lines[hook] = (lines[hook][0], tag)
+    return len(groups)
 
 
 def _short(text: str) -> str:
@@ -543,3 +696,8 @@ def draft_from_json(data: dict) -> ReelDraft:
     data["scenes"] = tuple(ReelScene(**scene) for scene in data["scenes"])
     data["notes"] = tuple(data.get("notes", ()))
     return ReelDraft(**data)
+
+
+def _line(text: str) -> str:
+    """On-screen line: no emoji (the video fonts have none) and no full stop at the end (the prompt asks for none)."""
+    return clean_text(text)[:40].rstrip(".。").strip()

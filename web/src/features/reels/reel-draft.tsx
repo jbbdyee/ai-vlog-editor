@@ -180,13 +180,14 @@ export function ReelDraftCard({ projectId, onPreview }: { projectId: string; onP
       {format === "short" && draft && <div className="space-y-3" aria-label="릴스 초안">
         <div className="rounded-xl border border-cyan-300/20 bg-cyan-300/[.04] p-3">
           <p className="text-xs text-slate-400">첫 화면 제목</p>
+          {draft.title_lead && <p className="text-sm text-slate-300">{draft.title_lead}</p>}
           <p className="text-xl font-semibold text-slate-50">{draft.title}</p>
           <p className="mt-1 text-sm text-slate-300 tabular-nums">{draft.mode_label} · {draft.pace_label} · 합계 <b className="text-slate-50">{formatDuration(draft.total_seconds)}</b> (목표 {draft.target_seconds}초) · 장면 {draft.scenes.length}개 / 나눈 장면 {draft.shot_count}개</p>
           <p className="mt-1 text-xs text-slate-500">{byAi ? `AI 초안 (${draft.engine.replace("llm:", "")})` : "AI 없이 촬영 순서대로 만든 기본 초안"}</p>
           {draft.notes.map((note) => <p key={note} className="text-xs text-amber-200">{note}</p>)}
         </div>
         <ReelVideoPanel projectId={projectId} draftRunning={running} options={options.data}
-          draftKey={`${draft.mode}|${draft.title}|${draft.total_seconds}|${draft.scenes.map((s) => `${s.shot_index}:${s.caption}`).join(",")}`} />
+          draftKey={`${draft.mode}|${draft.title_lead ?? ""}|${draft.title}|${draft.total_seconds}|${draft.scenes.map((s) => `${s.shot_index}:${s.caption}`).join(",")}`} />
         <ol className="space-y-2">
           {draft.scenes.map((scene, index) => <li key={`${scene.shot_index}:${index}`} className="flex min-w-0 flex-wrap items-start justify-between gap-2 rounded-xl border border-white/10 bg-[#0b1420] p-3">
             <div className="min-w-0 flex-1">

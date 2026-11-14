@@ -86,7 +86,9 @@ class BuildDraftTests(TestCase):
             {"shot": 2, "caption": "핏이 탄탄해요", "label": "브라운 미니스커트"},
             {"shot": 3, "caption": "두 번째 원피스", "label": "플라워 원피스"}]})
         draft = build_draft(shots([2.5] * 3), mode_key="try_on", pace_key="normal", target_seconds=8, engine=fake)
-        self.assertEqual([s.label for s in draft.scenes], ["플라워 원피스", "브라운 미니스커트", "브라운 미니스커트"])
+        # TODO 14: the hook (under the title) shows no name tag of an item that is never numbered
+        self.assertEqual([s.label for s in draft.scenes], ["", "브라운 미니스커트", "브라운 미니스커트"])
+        self.assertEqual(draft.title, "추천템 1가지", "the title counts the name tags")
 
     def test_too_long_drops_middle_scenes_and_keeps_hook(self):
         fake, _ = engine({"mode": "travel", "title": "여행", "hook_shot": 4,
@@ -144,7 +146,8 @@ class CaptionQualityTests(TestCase):
             {"shot": 3, "caption": "포기 안 해"}]}
         second = {**first, "scenes": [{"shot": 1, "caption": "동작 바로잡기"}, {"shot": 2, "caption": "호흡, 진흙, 호흡!"},
                                       {"shot": 3, "caption": "포기 안 해"}]}
-        answers = iter([first, second])
+        third = {"lines": [{"shot": 2, "caption": "거울 보며 맞추기"}]}  # TODO 14: the emptied line is filled
+        answers = iter([first, second, third])
         calls = []
 
         def complete(system, user, schema):
@@ -154,12 +157,14 @@ class CaptionQualityTests(TestCase):
                             engine=("ollama", "gemma3:4b", complete))
         self.assertNotIn("1, 2, 3, 4, 5", calls[0])
         self.assertIn("들린 말(참고만): 호흡 진흙 호흡", calls[0])
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 3)
         self.assertIn("다시 써라: 장면 1, 2의", calls[1])
         self.assertNotIn("호흡 진흙 호흡", calls[1], "copied shots lose their speech in the rewrite")
+        self.assertIn("채울 장면: 2", calls[2])
+        self.assertNotIn("호흡 진흙", calls[2], "the fill request never shows what was heard")
         captions = {s.shot_index: s.caption for s in draft.scenes}
         self.assertEqual(captions[1], "동작 바로잡기")
-        self.assertEqual(captions[2], "", "still copied after the rewrite: no line rather than a lifted lyric")
+        self.assertEqual(captions[2], "거울 보며 맞추기", "still copied after the rewrite: a new line, not the lyric")
         self.assertEqual(captions[3], "포기 안 해")
 
     def test_try_on_gets_name_tags_and_numbers_from_the_screen(self):
@@ -171,8 +176,52 @@ class CaptionQualityTests(TestCase):
         draft = build_draft(looked(rows, 2.5), mode_key="auto", pace_key="normal", target_seconds=15, engine=fake)
         self.assertIn("보여주는 옷·물건 4가지(촬영 순서): 플라워 롱원피스(장면 1~1), 브라운 미니스커트(장면 2~3)", calls[0][1])
         got = [(s.shot_index, s.label, s.caption) for s in draft.scenes]
-        self.assertEqual(got, [(1, "플라워 롱원피스", "문구1"), (2, "브라운 미니스커트", "첫 번째"), (3, "브라운 미니스커트", "문구3"),
+        self.assertEqual(got, [(1, "플라워 원피스", "문구1"), (2, "브라운 미니스커트", "첫 번째"), (3, "브라운 미니스커트", "문구3"),
                                (4, "플라워 원피스", "두 번째"), (5, "플라워 원피스", "문구5"), (6, "빈티지 롱스커트", "세 번째")])
+
+    def test_try_on_like_blo_three_items_title_count_and_every_scene_has_a_line(self):
+        """TODO 14, the user's try-on sample: 5 names on screen (fur jacket, blouse) but 3 items in Blo."""
+        rows = [("옷 보여주기", item, "") for item in (
+            "블랙 데님", "브라운 미니스커트", "브라운 미니스커트", "화이트 퍼 재킷", "", "녹색 레이스 원피스", "그린 블라우스",
+            "카모플라주 팬츠", "", "")]
+        captions = {1: "오늘 고른 옷들", 2: "첫 핏 체크", 3: "이 스커트 예쁘다", 4: "재킷 걸쳐보기", 5: "장미빛 스커트 💖.",
+                    6: "레이스 원피스", 7: "살랑살랑", 8: "팬츠도 입어봄", 9: "이 팬츠 맘에 들어", 10: "이 팬츠 맘에 들어"}
+        answers = iter([
+            {"mode": "try_on", "title_lead": "오늘의", "title": "오늘의 꿀템 5가지", "hook_shot": 1,
+             "scenes": [{"shot": n, "caption": text} for n, text in captions.items()]},
+            {"lines": [{"shot": 10, "caption": "이 팬츠 맘에 들어"}]},  # same as the line before: refused
+        ])
+        calls = []
+
+        def complete(system, user, schema):
+            calls.append(user)
+            return json.dumps(next(answers), ensure_ascii=False)
+        draft = build_draft(looked(rows, 2.5), mode_key="try_on", pace_key="normal", target_seconds=25,
+                            engine=("ollama", "gemma3:4b", complete))
+        got = {s.shot_index: (s.label, s.caption) for s in draft.scenes}
+        self.assertEqual({label for label, _ in got.values() if label},
+                         {"브라운 미니스커트", "녹색 레이스 원피스", "카모플라주 팬츠"}, "jacket and blouse are layers")
+        self.assertEqual(got[1], ("", "오늘 고른 옷들"), "the hook's jeans are never numbered, so no name tag")
+        self.assertEqual(got[4], ("브라운 미니스커트", "재킷 걸쳐보기"))
+        self.assertEqual([got[n][1] for n in (2, 6, 8)], ["첫 번째", "두 번째", "세 번째"])
+        self.assertEqual(got[5][1], "장미빛 스커트", "no emoji")
+        self.assertIn("채울 장면: 10", calls[1])
+        self.assertEqual(got[10], ("카모플라주 팬츠", "팬츠"), "last resort: the kind of item, as Blo does")
+        self.assertEqual((draft.title_lead, draft.title), ("오늘의", "꿀템 3가지"))
+        self.assertIn("제목의 개수를 이름표 개수(3가지)에 맞췄습니다.", draft.notes)
+
+    def test_count_in_words_and_old_drafts_without_a_lead_in(self):
+        from backend.app.services.reel_draft import _match_count, _title_parts, draft_from_json
+        self.assertEqual(_match_count("직접 입어본 세 가지", 4), "직접 입어본 네 가지")
+        self.assertEqual(_match_count("특별한 개 산책", 2), "특별한 개 산책")
+        self.assertEqual(_title_parts("나만 아는 가수의", "첫 댄스곡 도전기 ✨"), ("나만 아는 가수의", "첫 댄스곡 도전기"))
+        # the small AI's real answers on the user's samples
+        self.assertEqual(_title_parts("", "직접 입어본 / 추천템 3가지"), ("직접 입어본", "추천템 3가지"))
+        self.assertEqual(_title_parts("첫 댄스곡 도전기", "나만 아는 가수의 / 첫 댄스곡 도전기"),
+                         ("나만 아는 가수의", "첫 댄스곡 도전기"))
+        old = build_draft(shots([2.5] * 2), mode_key="challenge", pace_key="normal", target_seconds=5, engine=None).to_json()
+        old.pop("title_lead")
+        self.assertEqual(draft_from_json(old).title_lead, "")
 
     def test_counting_inside_a_line_and_base_tee_in_item_names(self):
         from backend.app.services.reel_draft import _copies_speech, _is_counting, _one_item

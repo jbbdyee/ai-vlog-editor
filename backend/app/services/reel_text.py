@@ -357,9 +357,16 @@ class _Writer:
         return top, y
 
 
-def _title(writer: _Writer, template: Template, title: str, start: str, end: str, place: str) -> float:
-    """Draw the title; returns the y where it ends."""
-    parts = split_title(title) if template.key != "basic" else [title]
+def _title(writer: _Writer, template: Template, title: str, start: str, end: str, place: str, lead: str = "") -> float:
+    """Draw the title; returns the y where it ends.
+
+    TODO 14: when the draft has a lead-in, it and the title are two separate text boxes (as in Blo), never one
+    sentence cut in two. Older drafts without a lead-in are still split at a space near the middle.
+    """
+    if lead:
+        parts = [lead, title]
+    else:
+        parts = split_title(title) if template.key != "basic" else [title]
     letter = _usable(template.display).width
     lines: list[_Line] = []
     for index, part in enumerate(parts):
@@ -431,7 +438,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         caption, label, title = clean_text(scene.caption), clean_text(scene.label), clean_text(draft.title)
         if index == 0 and title:
             title_end = min(total, max(length, TITLE_MIN_SECONDS))
-            title_bottom = _title(writer, template, title, start, ass_time(title_end), f"title_{title_place}")
+            title_bottom = _title(writer, template, title, start, ass_time(title_end), f"title_{title_place}",
+                                  clean_text(getattr(draft, "title_lead", "")))
         lines: list[_Line] = []
         if label:
             size, font = writer.px(template.tag), template.display
