@@ -71,6 +71,34 @@ describe("TODO 16 reel chat edits", () => {
   });
 });
 
+describe("TODO 20 title candidates", () => {
+  it("shows the AI's titles and switches with a chip or [다른 제목]", async () => {
+    const sent: unknown[] = [];
+    const titled = { ...draft(), title_lead: "처음 배웠는데", title: "칭찬 폭격", title_options: [
+      { lead: "처음 배웠는데", title: "칭찬 폭격", formula: "반전" }, { lead: "춤 연습은", title: "무조건 거울 앞", formula: "단언" },
+      { lead: "", title: "첫 댄스곡 도전기", formula: "모드" }] };
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith("/reel-options")) return Promise.resolve(response(options));
+      if (url.endsWith("/reel-video")) return Promise.resolve(response({ project_id: project, status: "IDLE", step: "", done: 0, total: 0, error_code: null, video: null }));
+      if (url.endsWith("/reel-draft/edit")) {
+        sent.push(JSON.parse(String(init?.body)));
+        return Promise.resolve(response(status({ draft: { ...titled, title_lead: "춤 연습은", title: "무조건 거울 앞" }, done_edits: ["제목 바꿈"], skipped_edits: [] })));
+      }
+      return Promise.resolve(response(status({ draft: titled })));
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><ReelDraftCard projectId={project} /></QueryClientProvider>);
+
+    const current = await screen.findByRole("button", { name: /반전처음 배웠는데 \/ 칭찬 폭격/ });
+    expect(current).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(screen.getByRole("button", { name: /단언춤 연습은 \/ 무조건 거울 앞/ }));
+    expect(sent[0]).toEqual({ message: "제목을 '춤 연습은 / 무조건 거울 앞'로", selected: null });
+    expect(await screen.findByRole("button", { name: /단언춤 연습은 \/ 무조건 거울 앞/ })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(screen.getByRole("button", { name: "다른 제목" }));
+    expect(sent[1]).toEqual({ message: "다른 제목", selected: null });
+  });
+});
+
 describe("TODO 18 put cuts back, undo many times, remake the video by itself", () => {
   it("puts an unused cut in and makes the video again with the same look", async () => {
     const sent: unknown[] = [];

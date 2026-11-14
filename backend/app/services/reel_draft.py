@@ -27,8 +27,8 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from backend.app.services.llm_edit_interpreter import Completion, LLMEditError, configured_engine
-from backend.app.services.reel_modes import (ACTIVITIES, ACTIVITY_MODE, AUTO_MODE, MIN_SHOT_SECONDS, MODE_BY_KEY, MODES,
-                                             PACES)
+from backend.app.services.reel_modes import (ACTIVITIES, ACTIVITY_MODE, AUTO_MODE, HOOK_FORMULAS, MIN_SHOT_SECONDS,
+                                             MODE_BY_KEY, MODES, PACES)
 from backend.app.services.reel_text import clean_text
 from backend.app.services.shot_structure import ShotDetectionConfig, ShotStructureError, detect_shot_structure
 from backend.app.services.vlm_scene_captioner import VLMCaptionError, ask_frames, vlm_model
@@ -83,6 +83,14 @@ class ReelScene:
 
 
 @dataclass(frozen=True)
+class TitleOption:
+    """TODO 20: one of the AI's title candidates (the draft keeps all of them for the [다른 제목] chips)."""
+    lead: str
+    title: str
+    formula: str = ""
+
+
+@dataclass(frozen=True)
 class ReelDraft:
     format: str
     mode: str
@@ -98,6 +106,7 @@ class ReelDraft:
     notes: tuple[str, ...] = ()
     fallback_reason: str | None = None
     title_lead: str = ""  # TODO 14: small line above the title, its own text box (Blo: "나만 아는 가수의" / "첫 댄스곡 도전기")
+    title_options: tuple[TitleOption, ...] = ()  # TODO 20: every title candidate, the one in use first
 
     def to_json(self) -> dict:
         return asdict(self)
@@ -231,13 +240,18 @@ def _copies_speech(caption: str, speech: str) -> bool:
     return match.size >= 4 or (match.size >= 3 and match.size / len(line) >= 0.5)
 
 
-MAX_CAPTION_CHARS = 20
+MAX_CAPTION_CHARS = 20  # longer is never used
+GOOD_CAPTION_CHARS = 14  # TODO 20: longer is asked to be rewritten once, but kept if the rewrite is long too
 _FOREIGN_RE = re.compile(r"[Ͱ-ϿЀ-ӿ぀-ヿ一-鿿]")  # Greek, Cyrillic, kana, Hanzi
 
 
 def _bad_caption(caption: str, speech: str) -> bool:
     return (_is_counting(caption) or _copies_speech(caption, speech) or len(caption.strip()) > MAX_CAPTION_CHARS
             or bool(_FOREIGN_RE.search(caption)))
+
+
+def _needs_rewrite(caption: str, speech: str) -> bool:
+    return _bad_caption(caption, speech) or len(caption.strip()) > GOOD_CAPTION_CHARS
 
 
 def _speech_hint(shot: Shot) -> str:
@@ -251,6 +265,18 @@ class _AIScene(BaseModel):
     shot: int
     caption: str = Field(min_length=1, max_length=40)
     label: str = Field(default="", max_length=24)
+
+
+class _AITitle(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    formula: str = Field(default="", max_length=10)
+    title_lead: str = Field(default="", max_length=30)
+    title: str = Field(min_length=1, max_length=40)
+
+
+class _AITitles(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    titles: list[_AITitle] = Field(min_length=1, max_length=5)
 
 
 class _AIReel(BaseModel):
@@ -270,7 +296,7 @@ SYSTEM_PROMPT = (
     "둘을 이어 읽으면 한 문장이 되고, 보는 사람이 끝까지 보고 싶게 쓴다. 두 칸에 같은 말을 쓰지 말고 '/'를 쓰지 마라. "
     "화면 설명에 나온 장소·옷·동작을 넣어 이 영상만의 제목으로 쓴다. "
     "hook_shot: 맨 앞에 둘 가장 눈길을 끄는 장면 번호. "
-    "scenes: 릴스에 넣을 장면을 고르고 장면마다 caption(화면에 띄울 한국어 한 줄, 18자 이내)을 쓴다. "
+    "scenes: 릴스에 넣을 장면을 고르고 장면마다 caption(화면에 띄울 한국어 한 줄, 14자 이내)을 쓴다. "
     "caption은 자막이 아니라 영상 주인이 화면에 얹는 짧은 한마디다. 친구에게 말하듯 솔직한 구어체로, "
     "광고 문구·설명문처럼 쓰지 말고 마침표·이모지 없이 12자 안팎으로 쓴다. 장면마다 다른 말을 쓴다. 그 장면에서 실제로 보이는 동작·옷·상황을 말한다. "
     "나쁜 예(설명문): '두 명의 여성이 춤추며 호흡', '거울 앞에서 셀카를 찍는 여성' → "
@@ -388,13 +414,13 @@ def build_draft(shots: Sequence[Shot], *, mode_key: str, pace_key: str, target_s
         engine_name = f"llm:{provider}/{model}"
         prompt = _user_prompt(shots, mode_key, pace_seconds, target_seconds)
         ai, fallback = _ask(complete, prompt, len(shots), by_index)
-        copied = _copied_lines(ai, by_index) if ai is not None else []
+        copied = _copied_lines(ai, by_index, rewrite=True) if ai is not None else []
         if copied:
             # The small AI copies whatever speech it sees, so the rewrite does not show it for those shots.
             retry = _user_prompt(shots, mode_key, pace_seconds, target_seconds, frozenset(copied))
             again, _ = _ask(complete, retry + _rewrite_request(ai, copied), len(shots), by_index)
-            if again is not None and len(_copied_lines(again, by_index)) < len(copied):
-                ai = again
+            if again is not None:
+                ai = _merge_lines(ai, again, copied, by_index)
     if ai is None:
         engine_name = "rule"
         complete = None
@@ -410,7 +436,7 @@ def build_draft(shots: Sequence[Shot], *, mode_key: str, pace_key: str, target_s
         bad = set(_copied_lines(ai, by_index))
         for scene in ai.scenes:
             if scene.shot in by_index and scene.shot not in lines:
-                caption = _line(scene.caption)  # emoji: the video fonts have none (TODO 12)
+                caption = _line(scene.caption.replace("/", " "))  # emoji: the video fonts have none (TODO 12)
                 if scene.shot in bad:  # still copied after one rewrite: no line beats a lifted lyric
                     caption = ""
                 lines[scene.shot] = (caption, clean_text(scene.label)[:24] if mode.order == "items" else "")
@@ -425,15 +451,20 @@ def build_draft(shots: Sequence[Shot], *, mode_key: str, pace_key: str, target_s
         for index in ordered:
             if index not in written:
                 lines[index] = ("", lines[index][1])
-    if mode.order == "items":
-        count = _label_items(ordered, lines, by_index)
-        if count:  # the title promises as many items as there are name tags
-            fixed_lead, fixed = _match_count(lead, count), _match_count(title, count)
-            if (fixed_lead, fixed) != (lead, title):
-                notes.append(f"제목의 개수를 이름표 개수({count}가지)에 맞췄습니다.")
-                lead, title = fixed_lead, fixed
+    count = _label_items(ordered, lines, by_index) if mode.order == "items" else 0
+    options: list[TitleOption] = []
     if complete is not None:
         _fill_lines(complete, ordered, lines, by_index, mode, hook, bool(title))
+        _shorten_lines(complete, ordered, lines, by_index, mode)
+        # TODO 20: three more titles from a title-only call; the draft's own title is one of the candidates.
+        extra = _ask_titles(complete, [by_index[index] for index in ordered], mode, count)
+        options = _pick_title(extra + [TitleOption(lead, title, "모드")], shots, mode.caption_examples, count)
+        if count:  # the title promises as many items as there are name tags
+            options = [replace(option, lead=_match_count(option.lead, count), title=_match_count(option.title, count))
+                       for option in options]
+            if (_match_count(lead, count), _match_count(title, count)) != (lead, title):
+                notes.append(f"제목의 개수를 이름표 개수({count}가지)에 맞췄습니다.")
+        lead, title = options[0].lead, options[0].title
     if mode.order == "items":
         _fill_with_item_kind(ordered, lines, hook, bool(title))
     scenes = tuple(ReelScene(
@@ -441,7 +472,75 @@ def build_draft(shots: Sequence[Shot], *, mode_key: str, pace_key: str, target_s
         lines[index][0], lines[index][1], index == hook, by_index[index].caption) for index in ordered)
     total = round(sum(scene.end_seconds - scene.start_seconds for scene in scenes), 3)
     return ReelDraft("short", mode.key, mode.label, pace_key, pace_label, target_seconds, total, title, engine_name,
-                     scenes, len(shots), tuple(notes), fallback, title_lead=lead)
+                     scenes, len(shots), tuple(notes), fallback, title_lead=lead,
+                     title_options=tuple(options) if len(options) > 1 else ())
+
+
+def _candidates(raw: Sequence[TitleOption]) -> list[TitleOption]:
+    """Title candidates in the given order, cleaned, empty and repeated ones left out."""
+    seen: set[str] = set()
+    options = []
+    for option in raw:
+        lead, title = _title_parts(option.lead, option.title)
+        key = _norm(lead + title)
+        if title and key not in seen:
+            seen.add(key)
+            options.append(TitleOption(lead, title, option.formula if option.formula in HOOK_FORMULAS else ""))
+    return options
+
+
+_BLAND_TITLE = re.compile(r"^(오늘의\s*)?(일상|브이로그|하루|기록|연습|시작|춤 연습 시작)$")
+
+
+def _title_score(option: TitleOption, words: set[str], speech: str = "", examples: Sequence[str] = (),
+                 count: int = 0) -> int:
+    """TODO 20: words from the screen count most (a title only this video could have), then length, then not bland.
+
+    Lifted speech ("처음 뵙겠습니다", a mis-heard "진흙 호흡") and fragments ("왜 / 한 이유") lose.
+    """
+    text = f"{option.lead} {option.title}"
+    score = 2 if any(word in text for word in words) else 0
+    score += 1 if len(option.lead) <= 12 and len(option.title) <= 14 else (-2 if len(option.title) > 18 else 0)
+    lead, title = _norm(option.lead), _norm(option.title)
+    score -= 2 if _BLAND_TITLE.match(option.title.strip()) or (lead and (lead in title or title in lead)) else 0
+    score -= 3 if any(_copies_speech(part, speech) for part in (option.lead, option.title) if part) else 0
+    # a caption example lifted into the title ("처음 뵙겠습니다" in a dance reel)
+    score -= 3 if any(len(_norm(example)) >= 4 and _norm(example) in _norm(text) for example in examples) else 0
+    # words only heard, never seen: mis-heard speech ("호흡, 진흙, 호흡!" became "진흙 호흡의 이유")
+    heard = {word for word in re.findall(r"[가-힣]{2,}", speech) if not any(word[:2] in seen for seen in words)}
+    score -= 1 if any(word in text for word in heard) else 0
+    score -= 2 if len(_norm(option.title)) < 4 else 0
+    score -= 1 if option.lead and len(_norm(option.lead)) < 2 else 0
+    # Short punch lines read at a glance; screen-description words ("장발의 여성의 비밀") and the base tee worn under a
+    # try-on ("흰색 티셔츠는") are not what the video is about; an item reel's title promises its count.
+    score += 1 if len(option.title) <= 10 else 0
+    score -= 2 if re.search(r"여성|남성|사람", text) else 0
+    score -= 2 if any(re.sub(r"[은는이가을를도]$", "", word).endswith(BASE_TOPS) for word in text.split()) else 0
+    score += 3 if count and _TITLE_COUNT_RE.search(text) else 0
+    return score
+
+
+_STOP_WORDS = {"있는", "하는", "있다", "여성", "남성", "사람", "모습", "장면", "화면", "앞에서", "함께", "그리고", "명의"}
+
+
+def _screen_words(shots: Sequence[Shot]) -> set[str]:
+    words = set()
+    for shot in shots:
+        for word in re.findall(r"[가-힣A-Za-z]{2,}", f"{shot.caption} {shot.item}"):
+            stem = word[:-1] if len(word) > 2 and word[-1] in "을를이가은는에의도와과로" else word
+            if stem not in _STOP_WORDS and len(stem) >= 2:
+                words.add(stem)
+    return words
+
+
+def _pick_title(raw: Sequence[TitleOption], shots: Sequence[Shot], examples: Sequence[str] = (),
+                count: int = 0) -> list[TitleOption]:
+    """The best candidate first, the rest in the given order (ties keep the given order)."""
+    options = _candidates(raw)
+    words = _screen_words(shots)
+    speech = " ".join(_speech_hint(shot) for shot in shots)
+    best = max(range(len(options)), key=lambda i: (_title_score(options[i], words, speech, examples, count), -i))
+    return [options[best]] + [option for i, option in enumerate(options) if i != best]
 
 
 def _title_parts(lead: str, title: str) -> tuple[str, str]:
@@ -520,12 +619,74 @@ def _fill_lines(complete: Completion, ordered, lines: dict, by_index: dict, mode
         answer = _AIFill.model_validate_json(complete(FILL_SYSTEM_PROMPT, prompt, schema))
     except (LLMEditError, ValidationError, ValueError):
         return
-    written = {line.shot: _line(line.caption) for line in answer.lines if line.shot in missing}
+    written = {line.shot: _line(line.caption.replace("/", " ")) for line in answer.lines if line.shot in missing}
     for position, index in enumerate(ordered):
         caption = written.get(index, "")
         neighbours = {_norm(lines[ordered[p]][0]) for p in (position - 1, position + 1) if 0 <= p < len(ordered)}
         if caption and not _bad_caption(caption, by_index[index].speech) and _norm(caption) not in neighbours:
             lines[index] = (caption, lines[index][1])
+
+
+TITLE_SYSTEM_PROMPT = (
+    "너는 인스타그램 릴스 제목 작가다. 영상 요약을 보고 첫 화면 제목 후보 3개를 쓴다. "
+    "제목은 글자 상자 두 개다. title_lead: 위에 작게 띄울 앞말(10자 이내), title: 아래 크게 띄울 핵심(12자 이내). "
+    "둘을 이어 읽으면 한 문장이 되고, 두 칸에 같은 낱말을 되풀이하지 마라. "
+    "피드를 넘기던 사람이 손을 멈추게 쓴다. 후보 3개는 서로 다른 공식(formula)으로 쓰고 ○○는 영상 요약의 낱말로 채운다. "
+    "밋밋한 요약('춤 연습 시작', '오늘의 일상')은 쓰지 마라. 이모지·마침표·'/' 없이. JSON만 출력하라."
+)
+TITLE_FORMULAS = tuple(name for name in HOOK_FORMULAS if name != "모드")
+
+
+def _ask_titles(complete: Completion, shots: Sequence[Shot], mode, count: int) -> list[TitleOption]:
+    """TODO 20: a title-only AI call (one job works better for the small AI than titles inside the full draft)."""
+    seen: list[str] = []
+    for shot in shots:
+        if shot.caption and shot.caption not in seen:
+            seen.append(shot.caption)
+    items = sorted({shot.item for shot in shots if shot.item}) if mode.order == "items" else []
+    prompt = (f"영상 종류: {mode.label}\n"
+              + (f"보여주는 옷·물건 {count}가지\n" if count else (f"보이는 옷·물건: {', '.join(items)}\n" if items else ""))
+              + "화면 요약:\n" + "\n".join(f"- {caption}" for caption in seen[:8])
+              + "\n\n제목 공식:\n" + "\n".join(f"- {name}: {HOOK_FORMULAS[name]}" for name in TITLE_FORMULAS))
+    schema = _AITitles.model_json_schema()
+    title = schema["$defs"]["_AITitle"]
+    title["properties"]["formula"] = {"type": "string", "enum": list(TITLE_FORMULAS)}
+    title["properties"]["title_lead"] = {"type": "string", "minLength": 1, "maxLength": 20}
+    title["required"] = ["formula", "title_lead", "title"]
+    schema["properties"]["titles"]["minItems"] = 3
+    schema["properties"]["titles"]["maxItems"] = 3
+    try:
+        answer = _AITitles.model_validate_json(complete(TITLE_SYSTEM_PROMPT, prompt, schema))
+    except Exception:  # noqa: BLE001 - extra titles are a bonus; the draft keeps its own title
+        return []
+    return [TitleOption(t.title_lead, t.title, t.formula) for t in answer.titles]
+
+
+SHORTEN_SYSTEM_PROMPT = (
+    "너는 인스타그램 릴스 편집자다. 화면에 띄울 한 줄 문구가 너무 길다. 뜻과 말투는 살리고 12자 안팎으로 줄여라. "
+    "꾸미는 말을 빼고 핵심 낱말만 남긴다. 마침표·이모지·쉼표 없이. JSON만 출력하라."
+)
+
+
+def _shorten_lines(complete: Completion, ordered, lines: dict, by_index: dict, mode) -> None:
+    """TODO 20: one small AI call for lines still over 14 characters after the rewrite (a one-job prompt works
+    better for the small AI than another full draft). A shortened line is used only when it fits and is usable."""
+    long = [index for index in ordered if len(lines[index][0]) > GOOD_CAPTION_CHARS]
+    if not long:
+        return
+    rows = "\n".join(f"[{index}] {lines[index][0]}" for index in long)
+    prompt = f"모드: {mode.label}\n줄일 문구:\n{rows}"
+    schema = _AIFill.model_json_schema()
+    schema["$defs"]["_AILine"]["properties"]["shot"] = {"type": "integer", "enum": list(long)}
+    try:
+        answer = _AIFill.model_validate_json(complete(SHORTEN_SYSTEM_PROMPT, prompt, schema))
+    except (LLMEditError, ValidationError, ValueError):
+        return
+    for line in answer.lines:
+        short = _line(line.caption.replace("/", " "))
+        if line.shot in long and short and len(short) <= GOOD_CAPTION_CHARS \
+                and not _bad_caption(short, by_index[line.shot].speech):
+            lines[line.shot] = (short, lines[line.shot][1])
 
 
 def _fill_with_item_kind(ordered, lines: dict, hook: int, has_title: bool) -> None:
@@ -551,17 +712,39 @@ def _ask(complete: Completion, prompt: str, shot_count: int, by_index: dict) -> 
     return ai, None
 
 
-def _copied_lines(ai: _AIReel, by_index: dict) -> list[int]:
-    """Shots whose line is beat counting, copied from what was heard, too long or in a foreign script."""
+def _copied_lines(ai: _AIReel, by_index: dict, rewrite: bool = False) -> list[int]:
+    """Shots whose line is beat counting, copied from what was heard, too long or in a foreign script.
+
+    ``rewrite``: also lines over 14 characters (asked once to be shorter, but still used when the rewrite is long).
+    """
+    bad = _needs_rewrite if rewrite else _bad_caption
     return [scene.shot for scene in ai.scenes if scene.shot in by_index
-            and _bad_caption(scene.caption, by_index[scene.shot].speech)]
+            and bad(scene.caption, by_index[scene.shot].speech)]
+
+
+def _merge_lines(ai: _AIReel, again: _AIReel, asked: Sequence[int], by_index: dict) -> _AIReel:
+    """TODO 20: take a rewritten line shot by shot when it is better (usable, and shorter or replacing an unusable one).
+
+    The first answer keeps its titles and its choice of shots: only the lines were asked for again, and on the user's
+    samples the rewrite's titles got worse ("왜 / 한 이유") while some of its lines got longer.
+    """
+    rewritten = {scene.shot: scene.caption for scene in again.scenes}
+    scenes = []
+    for scene in ai.scenes:
+        new = rewritten.get(scene.shot)
+        if scene.shot in asked and new and scene.shot in by_index:
+            speech = by_index[scene.shot].speech
+            if not _bad_caption(new, speech) and (_bad_caption(scene.caption, speech) or len(new) < len(scene.caption)):
+                scene = scene.model_copy(update={"caption": new})
+        scenes.append(scene)
+    return ai.model_copy(update={"scenes": scenes})
 
 
 def _rewrite_request(ai: _AIReel, copied: Sequence[int]) -> str:
     # Only the shot numbers: showing the copied line again made the small AI write it again.
     numbers = ", ".join(str(index) for index in copied)
-    return (f"\n\n다시 써라: 장면 {numbers}의 문구가 들린 말을 옮겼거나, 숫자 세기거나, 20자를 넘거나, "
-            "한국어가 아닌 글자가 섞였다. 그 장면들은 화면 설명만 보고 모드의 문구 예시 같은 말투로 새로 써라. "
+    return (f"\n\n다시 써라: 장면 {numbers}의 문구가 너무 길거나(14자 넘음), 들린 말을 옮겼거나, 숫자 세기거나, "
+            "한국어가 아닌 글자가 섞였다. 그 장면들은 화면 설명만 보고 모드의 문구 예시 같은 말투로 12자 안팎으로 새로 써라. "
             "나머지 장면은 그대로 둬도 된다. 전체 JSON을 다시 출력하라.")
 
 
@@ -701,6 +884,7 @@ def draft_from_json(data: dict) -> ReelDraft:
     data.pop(HISTORY_KEY, None)
     data["scenes"] = tuple(ReelScene(**scene) for scene in data["scenes"])
     data["notes"] = tuple(data.get("notes", ()))
+    data["title_options"] = tuple(TitleOption(**option) for option in data.get("title_options", ()))
     return ReelDraft(**data)
 
 

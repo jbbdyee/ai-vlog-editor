@@ -28,10 +28,10 @@ class ReelMode:
 MODES: tuple[ReelMode, ...] = (
     ReelMode("daily_vlog", "일상 브이로그", "timeline", "○○한 ○요일의 / ○○ 브이로그",
              "그 순간 상황을 친구에게 말하듯 짧게. 장난스러운 혼잣말도 좋다",
-             ("오늘은 집콕 데이", "커피 수혈 완료", "이거 완전 내 스타일", "하루 끝!")),
+             ("오늘은 집콕 데이", "커피 수혈 완료", "이거 완전 내 스타일", "이건 좀 웃겼다ㅋㅋ", "하루 끝!")),
     ReelMode("challenge", "도전기·연습 기록", "timeline", "○○의 / 첫 ○○ 도전기",
              "연습 과정과 감정을 짧게. 어려움, 칭찬, 성공 같은 변화가 보이게",
-             ("처음 뵙겠습니다", "동작 바로잡기", "손끝 디테일 살려요", "성공해서 신남ㅎㅎ", "폭풍 칭찬 받았어요", "연습 끝!")),
+             ("처음 뵙겠습니다", "동작 바로잡기", "손끝 디테일 살려요", "성공해서 신남ㅎㅎ", "생각보다 어렵네ㅋ", "폭풍 칭찬 받았어요", "연습 끝!")),
     ReelMode("try_on", "옷 입어보기·하울", "items", "직접 입어본 / ○○ N가지",
              "옷의 특징(핏, 색, 소재)과 솔직한 느낌을 짧게",
              ("핏이 탄탄해요", "뒤태 라인까지", "살랑이는 실루엣 최고", "솔직히 좀 작았어요", "완전 힙하고 예뻐요")),
@@ -52,6 +52,17 @@ MODES: tuple[ReelMode, ...] = (
              ("스쿼트 3세트", "하체 불타는 중", "마지막 한 개!", "오늘도 해냄")),
 )
 MODE_BY_KEY = {mode.key: mode for mode in MODES}
+
+# TODO 20: the AI writes three titles, each with a different formula, and Python picks one. Fill-in patterns only
+# (gemma3:4b copies full example titles). Modelled on the user's channel titles: a twist ("끝나자마자 폭우 쏟아지는
+# 첫 세차"), a flat claim ("우설은 무조건 두껍게") and a joking confession ("UCC 배우 출신입니다 ㅋ").
+HOOK_FORMULAS: dict[str, str] = {
+    "모드": "모드의 제목 틀 그대로",
+    "반전": "○○했는데 / ○○ (기대와 다른 결과)",
+    "단언": "○○은 / 무조건 ○○ (자신 있게 딱 잘라 말하기)",
+    "궁금증": "○○하다가 / ○○한 이유 (끝까지 봐야 답이 나오게)",
+    "고백": "사실 오늘 / ○○ 처음임ㅋ (장난스럽게 털어놓기)",
+}
 AUTO_MODE = "auto"
 
 # What the screen-reading AI may say a shot is doing (TODO 11). "자동" mode counts these instead of letting the

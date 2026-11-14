@@ -147,5 +147,25 @@ class InsertTest(unittest.TestCase):
         self.assertEqual([s.shot_index for s in same_turn.draft.scenes], [2, 3, 1])
 
 
+class NextTitleTest(unittest.TestCase):
+    """TODO 20: "다른 제목" goes through the AI's title candidates."""
+
+    def test_next_title_cycles_and_needs_candidates(self):
+        from dataclasses import replace
+        from backend.app.services.reel_draft import TitleOption
+        self.assertEqual(read("다른 제목으로 바꿔줘"), [Edit("next_title")])
+        options = (TitleOption("나만 아는 가수의", "첫 댄스곡 도전기", "모드"), TitleOption("처음인데", "칭찬 폭격", "반전"),
+                   TitleOption("", "춤은 무조건 거울 앞", "단언"))
+        current = replace(draft(), title_options=options)
+        once = apply_edits(current, SHOTS, [Edit("next_title")])
+        self.assertEqual((once.draft.title_lead, once.draft.title), ("처음인데", "칭찬 폭격"))
+        self.assertEqual(once.done, ("제목을 '처음인데 / 칭찬 폭격'(으)로 바꿨어요",))
+        twice = apply_edits(apply_edits(once.draft, SHOTS, [Edit("next_title")]).draft, SHOTS, [Edit("next_title")])
+        self.assertEqual(twice.draft.title, "첫 댄스곡 도전기", "back to the first after the last")
+        none = apply_edits(draft(), SHOTS, [Edit("next_title")])
+        self.assertEqual(none.draft.title, "첫 댄스곡 도전기")
+        self.assertIn("다른 제목 후보가 없어요", none.skipped[0])
+
+
 if __name__ == "__main__":
     unittest.main()

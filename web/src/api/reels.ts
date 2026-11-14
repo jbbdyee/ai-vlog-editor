@@ -36,6 +36,8 @@ export interface ReelScene {
   shot_caption: string;
 }
 
+export interface ReelTitleOption { lead: string; title: string; formula: string }
+
 export interface ReelDraft {
   format: string;
   mode: string;
@@ -47,6 +49,8 @@ export interface ReelDraft {
   /** TODO 14: small line above the title, its own text box. Older drafts have none. */
   title_lead?: string;
   title: string;
+  /** TODO 20: the AI's title candidates (different formulas), the one first used first. Older drafts have none. */
+  title_options?: ReelTitleOption[];
   engine: string;
   scenes: ReelScene[];
   shot_count: number;

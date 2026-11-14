@@ -787,6 +787,12 @@ class ReelSceneResponse(BaseModel):
     shot_caption: str
 
 
+class ReelTitleOptionResponse(BaseModel):
+    lead: str
+    title: str
+    formula: str = ""
+
+
 class ReelDraftResponse(BaseModel):
     format: str
     mode: str
@@ -797,6 +803,7 @@ class ReelDraftResponse(BaseModel):
     total_seconds: float
     title_lead: str = ""  # TODO 14: small line above the title (its own text box)
     title: str
+    title_options: list[ReelTitleOptionResponse] = []  # TODO 20: the AI's title candidates, the one first used first
     engine: str
     scenes: list[ReelSceneResponse]
     shot_count: int

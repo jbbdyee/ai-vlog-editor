@@ -157,7 +157,7 @@ class CaptionQualityTests(TestCase):
                             engine=("ollama", "gemma3:4b", complete))
         self.assertNotIn("1, 2, 3, 4, 5", calls[0])
         self.assertIn("들린 말(참고만): 호흡 진흙 호흡", calls[0])
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4, "draft, rewrite, fill, then the title-only call (TODO 20)")
         self.assertIn("다시 써라: 장면 1, 2의", calls[1])
         self.assertNotIn("호흡 진흙 호흡", calls[1], "copied shots lose their speech in the rewrite")
         self.assertIn("채울 장면: 2", calls[2])
@@ -387,3 +387,82 @@ class ReelChatHistoryApiTests(ReelDraftApiTests):
         self.assertEqual(self.client.get(f"/projects/{self.project_id}/reel-draft").json()["undo_count"], 1)
         undone = self.client.post(f"/projects/{self.project_id}/reel-draft/undo").json()
         self.assertEqual((undone["draft"]["title"], undone["undo_count"]), (original["draft"]["title"], 0))
+
+
+def by_prompt(draft, titles=None, more=()):
+    """Fake AI: the title-only call gets ``titles``, every other call the next answer (the draft first)."""
+    from backend.app.services.reel_draft import TITLE_SYSTEM_PROMPT
+    answers = iter([draft, *more])
+    calls = []
+
+    def complete(system, user, schema):
+        calls.append((system, user, schema))
+        if system == TITLE_SYSTEM_PROMPT:
+            if titles is None:
+                raise LLMEditError("LLM_UNAVAILABLE")
+            return json.dumps({"titles": titles}, ensure_ascii=False)
+        return json.dumps(next(answers), ensure_ascii=False)
+    return ("ollama", "gemma3:4b", complete), calls
+
+
+class HookTitleTests(TestCase):
+    """TODO 20: three more titles from a title-only call (different formulas) next to the draft's own title; Python
+    picks one. Lines over 14 characters are rewritten once, then shortened by a small call."""
+
+    def test_title_call_adds_candidates_and_a_screen_word_wins(self):
+        rows = [Shot(1, "s", "a.mp4", 0, 3, "연습실 거울 앞에서 춤을 배운다"), Shot(2, "s", "a.mp4", 3, 6, "선생님이 동작을 알려준다")]
+        fake, calls = by_prompt(
+            {"mode": "challenge", "title_lead": "오늘의", "title": "춤 연습 시작", "hook_shot": 1,
+             "scenes": [{"shot": 1, "caption": "거울 보며 따라하기"}, {"shot": 2, "caption": "동작 배우는 중"}]},
+            [{"formula": "반전", "title_lead": "처음 배웠는데", "title": "선생님 칭찬 폭격"},
+             {"formula": "단언", "title_lead": "춤 연습은", "title": "무조건 거울 앞 ✨"},
+             {"formula": "고백", "title_lead": "사실", "title": "사실 처음임"}])
+        draft = build_draft(rows, mode_key="challenge", pace_key="normal", target_seconds=6, engine=fake)
+        self.assertEqual((draft.title_lead, draft.title), ("처음 배웠는데", "선생님 칭찬 폭격"),
+                         "first candidate with a word from the screen; the bland draft title loses")
+        self.assertEqual([(o.lead, o.title, o.formula) for o in draft.title_options], [
+            ("처음 배웠는데", "선생님 칭찬 폭격", "반전"), ("춤 연습은", "무조건 거울 앞", "단언"), ("사실", "처음임", "고백"),
+            ("오늘의", "춤 연습 시작", "모드")])
+        system, user, schema = calls[-1]
+        self.assertEqual(schema["properties"]["titles"]["minItems"], 3)
+        self.assertNotIn("모드", schema["$defs"]["_AITitle"]["properties"]["formula"]["enum"])
+        self.assertIn("반전: ○○했는데 / ○○", user)
+        self.assertIn("- 연습실 거울 앞에서 춤을 배운다", user)
+
+    def test_without_the_title_call_the_draft_keeps_its_own_title(self):
+        fake, _ = by_prompt({"mode": "travel", "title_lead": "바다 보러", "title": "떠난 하루", "hook_shot": 1,
+                             "scenes": [{"shot": 1, "caption": "바다 앞 산책"}]})
+        draft = build_draft(shots([3]), mode_key="travel", pace_key="normal", target_seconds=3, engine=fake)
+        self.assertEqual((draft.title_lead, draft.title, draft.title_options), ("바다 보러", "떠난 하루", ()))
+
+    def test_lifted_examples_speech_and_repeats_lose(self):
+        from backend.app.services.reel_draft import TitleOption, _pick_title
+        rows = [Shot(1, "s", "a.mp4", 0, 3, "장발의 여성이 연습실에서 춤을 춘다", "호흡, 진흙, 호흡!")]
+        picked = _pick_title([TitleOption("처음 뵙겠습니다", "장발의 도전기", "반전"),
+                              TitleOption("첫 도전기", "장발의 첫 도전기", "모드"),
+                              TitleOption("호흡하다가", "진흙 호흡의 이유", "궁금증"),
+                              TitleOption("연습실에서", "춤 실력 폭발", "단언")], rows, ("처음 뵙겠습니다",))
+        self.assertEqual(picked[0].title, "춤 실력 폭발")
+
+    def test_long_lines_are_rewritten_then_shortened(self):
+        long1, long2 = "선생님 따라서 열심히 동작을 맞추는 중", "거울 앞에서 다 같이 포즈 잡기 성공"
+        first = {"mode": "challenge", "title_lead": "처음인데", "title": "칭찬 받음", "hook_shot": 1,
+                 "scenes": [{"shot": 1, "caption": "시작"}, {"shot": 2, "caption": long1}, {"shot": 3, "caption": long2}]}
+        second = {**first, "scenes": [{"shot": 1, "caption": "시작"}, {"shot": 2, "caption": "동작 / 맞추는 중"},
+                                      {"shot": 3, "caption": "거울 앞에서 다 같이 포즈 잡기 성공해서 신남"}]}
+        shorter = {"lines": [{"shot": 3, "caption": "거울 앞 포즈 성공"}]}
+        fake, calls = by_prompt(first, more=(second, shorter))
+        draft = build_draft(shots([2.5] * 3), mode_key="challenge", pace_key="normal", target_seconds=7, engine=fake)
+        self.assertIn("다시 써라: 장면 2, 3의 문구가 너무 길거나(14자 넘음)", calls[1][1])
+        self.assertIn("[3] 거울 앞에서 다 같이 포즈 잡기 성공", calls[2][1], "only the line still too long is shortened")
+        captions = {s.shot_index: s.caption for s in draft.scenes}
+        self.assertEqual(captions[2], "동작 맞추는 중", "shorter rewrite taken, no '/' in a line")
+        self.assertEqual(captions[3], "거울 앞 포즈 성공", "longer rewrite refused, then shortened")
+
+    def test_title_options_survive_saving(self):
+        from backend.app.services.reel_draft import TitleOption, draft_from_json
+        fake, _ = by_prompt({"mode": "travel", "title_lead": "a", "title": "b", "hook_shot": 1,
+                             "scenes": [{"shot": 1, "caption": "바다 앞 산책"}]}, [{"formula": "고백", "title_lead": "c", "title": "d"}])
+        draft = build_draft(shots([3]), mode_key="travel", pace_key="normal", target_seconds=3, engine=fake)
+        back = draft_from_json(json.loads(json.dumps(draft.to_json())))
+        self.assertEqual(set(back.title_options), {TitleOption("a", "b", "모드"), TitleOption("c", "d", "고백")})

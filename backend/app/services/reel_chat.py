@@ -24,7 +24,8 @@ from backend.app.services.reel_draft import ReelDraft, ReelScene, Shot, _clip, _
 from backend.app.services.reel_modes import DEFAULT_PACE, MIN_SHOT_SECONDS, PACES
 
 DEFAULT_STEP_SECONDS = 1.0
-Action = Literal["longer", "shorter", "caption", "clear_caption", "title", "remove", "move", "swap", "insert"]
+Action = Literal["longer", "shorter", "caption", "clear_caption", "title", "next_title", "remove", "move", "swap",
+                 "insert"]
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,8 @@ def _rule_edits(message: str, selected: int | None, count: int = 0) -> list[Edit
     amount = float(seconds.group(1)) if seconds else None
     if "제목" in words and quoted:
         return [Edit("title", text=quoted.group(1).strip())]
+    if re.search(r"다른\s*제목", words):  # TODO 20: the next of the AI's title candidates
+        return [Edit("next_title")]
     numbers = [int(n) for n in _NUMBER.findall(words)]
     if len(numbers) == 2 and re.search(r"바꿔|바꾸|순서|자리", words) and not re.search(r"자막|문구", words):
         return [Edit("swap", numbers[0], to=numbers[1])]
@@ -153,7 +156,7 @@ class _AIEdits(BaseModel):
 UNDERSTAND_SYSTEM_PROMPT = (
     "너는 릴스 편집 도우미다. 사용자의 말을 편집 목록(JSON)으로만 바꾼다. 장면 번호는 목록에 보이는 번호다. "
     "action: longer(장면 더 길게), shorter(더 짧게), caption(문구 넣기·바꾸기, 사용자가 문구를 말하지 않았으면 text는 null), "
-    "clear_caption(문구 지우기), title(첫 화면 제목 바꾸기, text 필수), remove(장면 빼기), move(장면 옮기기, to는 새 번호, 맨 뒤는 -1), "
+    "clear_caption(문구 지우기), title(첫 화면 제목 바꾸기, text 필수), next_title(제목 후보 중 다른 제목으로), remove(장면 빼기), move(장면 옮기기, to는 새 번호, 맨 뒤는 -1), "
     "swap(두 장면 자리 바꾸기, scene과 to에 두 번호), "
     "insert(안 쓴 컷 넣기, shot은 컷 번호이고 '아까 뺀 장면'이면 null, to는 넣을 장면 자리이고 말하지 않았으면 null). "
     "seconds는 사용자가 초를 말했을 때만 쓴다. '여기'·'이 장면'은 고른 장면이다. 말하지 않은 편집은 넣지 마라."
@@ -186,6 +189,7 @@ _NEEDS_WORD = {
     "remove": r"빼|지워|지우|삭제|없애|제거",
     "clear_caption": r"빼|지워|지우|삭제|없애|제거",
     "title": r"제목",
+    "next_title": r"제목",
     "move": r"옮|앞|뒤|순서|자리|처음|마지막",
     "swap": r"바꿔|바꾸|순서|자리",
     "insert": r"컷|뺀|뺐던|빠진|살려|되살",  # "자막 다시 써줘" must not put a cut back
@@ -308,6 +312,16 @@ def apply_edits(draft: ReelDraft, shots: Sequence[Shot], edits: Sequence[Edit], 
                 continue
             lead, title = ("", new) if "/" not in new else tuple(part.strip() for part in new.split("/", 1))
             done.append(f"제목을 '{new}'(으)로 바꿨어요")
+            continue
+        if edit.action == "next_title":
+            options = draft.title_options
+            if len(options) < 2:
+                skipped.append("다른 제목 후보가 없어요. 초안을 다시 만들면 후보 3개가 생겨요")
+                continue
+            now = next((n for n, o in enumerate(options) if (o.lead, o.title) == (lead, title)), -1)
+            option = options[(now + 1) % len(options)]
+            lead, title = option.lead, option.title
+            done.append(f"제목을 '{' / '.join(part for part in (lead, title) if part)}'(으)로 바꿨어요")
             continue
         if edit.scene is None or not 1 <= edit.scene <= len(scenes):
             skipped.append(f"{edit.scene}번 장면이 없어요" if edit.scene else "어느 장면인지 몰라요. 장면 카드를 눌러 고르거나 '3번'처럼 번호를 써 주세요")

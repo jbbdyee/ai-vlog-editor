@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Clapperboard, Download, Film, LoaderCircle, Plus, Send, Undo2 } from "lucide-react";
+import { Clapperboard, Download, Film, LoaderCircle, Plus, Send, Shuffle, Undo2 } from "lucide-react";
 import { ApiError } from "@/api/projects";
 import { formatDuration } from "@/api/story-direction";
-import { editReelDraft, getReelOptions, getReelStatus, getReelVideo, reelVideoSrc, startReelDraft, startReelVideo, undoReelDraft, type ReelOption, type ReelOptions, type ReelTextStyle, type ReelUnusedShot } from "@/api/reels";
+import { editReelDraft, getReelOptions, getReelStatus, getReelVideo, reelVideoSrc, startReelDraft, startReelVideo, undoReelDraft, type ReelDraft, type ReelOption, type ReelOptions, type ReelTextStyle, type ReelUnusedShot } from "@/api/reels";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -228,6 +228,41 @@ function ReelChat({ projectId, selected, undoCount, recentChanges, unusedShots, 
   </div>;
 }
 
+const formulaLabels: Record<string, string> = { 모드: "기본", 반전: "반전", 단언: "단언", 궁금증: "궁금증", 고백: "고백" };
+
+/** TODO 20: the AI wrote three titles by different formulas; switch with one click (kept in the undo history). */
+function TitleChoices({ projectId, draft, disabled, onChanged }: { projectId: string; draft: ReelDraft; disabled: boolean; onChanged: () => void }) {
+  const queryClient = useQueryClient();
+  const options = draft.title_options ?? [];
+  const pick = useMutation({
+    mutationFn: (text: string) => editReelDraft(projectId, text, null),
+    onSuccess: (value) => { queryClient.setQueryData(["reel-draft", projectId], value); if (value.done_edits.length) onChanged(); },
+  });
+  if (options.length < 2) return null;
+  const current = (draft.title_lead ?? "") + "|" + draft.title;
+  const busy = disabled || pick.isPending;
+  return <div className="mt-2 space-y-1" aria-label="제목 후보">
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-xs text-slate-400">AI 제목 후보</span>
+      <Button size="sm" variant="secondary" disabled={busy} onClick={() => pick.mutate("다른 제목")}>
+        <span className="flex items-center gap-1">{pick.isPending ? <LoaderCircle size={14} className="animate-spin" /> : <Shuffle size={14} />}다른 제목</span>
+      </Button>
+    </div>
+    <div className="flex flex-wrap gap-2">
+      {options.map((option) => {
+        const on = `${option.lead}|${option.title}` === current;
+        const text = [option.lead, option.title].filter(Boolean).join(" / ");
+        return <button key={text} type="button" aria-pressed={on} disabled={busy || on}
+          onClick={() => pick.mutate(`제목을 '${text}'로`)}
+          className={`min-w-0 rounded-full border px-3 py-1 text-left text-xs ${on ? "border-cyan-300/70 bg-cyan-300/10 text-cyan-100" : "border-white/15 text-slate-300 hover:border-white/30"}`}>
+          <span className="mr-1 text-slate-500">{formulaLabels[option.formula] ?? "후보"}</span>{text}
+        </button>;
+      })}
+    </div>
+    {pick.error && <Alert>{pick.error instanceof ApiError ? pick.error.message : "제목을 바꾸지 못했어요."}</Alert>}
+  </div>;
+}
+
 /** TODO 10: pick short/long, mode, pace and length, then the AI drafts a reel (order, length per shot, title, lines). */
 export function ReelDraftCard({ projectId, onPreview }: { projectId: string; onPreview?: (range: PreviewRange) => void }) {
   const queryClient = useQueryClient();
@@ -293,6 +328,7 @@ export function ReelDraftCard({ projectId, onPreview }: { projectId: string; onP
           <p className="text-xs text-slate-400">첫 화면 제목</p>
           {draft.title_lead && <p className="text-sm text-slate-300">{draft.title_lead}</p>}
           <p className="text-xl font-semibold text-slate-50">{draft.title}</p>
+          <TitleChoices projectId={projectId} draft={draft} disabled={running} onChanged={() => setEditTick((tick) => tick + 1)} />
           <p className="mt-1 text-sm text-slate-300 tabular-nums">{draft.mode_label} · {draft.pace_label} · 합계 <b className="text-slate-50">{formatDuration(draft.total_seconds)}</b> (목표 {draft.target_seconds}초) · 장면 {draft.scenes.length}개 / 나눈 장면 {draft.shot_count}개</p>
           <p className="mt-1 text-xs text-slate-500">{byAi ? `AI 초안 (${draft.engine.replace("llm:", "")})` : "AI 없이 촬영 순서대로 만든 기본 초안"}</p>
           {draft.notes.map((note) => <p key={note} className="text-xs text-amber-200">{note}</p>)}
