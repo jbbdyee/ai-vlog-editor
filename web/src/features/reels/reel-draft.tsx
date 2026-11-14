@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Clapperboard, Download, Film, LoaderCircle, Send, Undo2 } from "lucide-react";
+import { Clapperboard, Download, Film, LoaderCircle, Plus, Send, Undo2 } from "lucide-react";
 import { ApiError } from "@/api/projects";
 import { formatDuration } from "@/api/story-direction";
-import { editReelDraft, getReelOptions, getReelStatus, getReelVideo, reelVideoSrc, startReelDraft, startReelVideo, undoReelDraft, type ReelOption, type ReelOptions, type ReelTextStyle } from "@/api/reels";
+import { editReelDraft, getReelOptions, getReelStatus, getReelVideo, reelVideoSrc, startReelDraft, startReelVideo, undoReelDraft, type ReelOption, type ReelOptions, type ReelTextStyle, type ReelUnusedShot } from "@/api/reels";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -71,14 +71,17 @@ function TextStylePicker({ options, value, onChange, disabled }: { options: Reel
       </div>
     </div>
     <Choices label="포인트 색" options={options.text_colors ?? []} value={value.color} onChange={(color) => onChange({ ...value, color })} disabled={disabled} />
-    <Choices label="문구 위치" options={options.text_positions ?? []} value={value.position} onChange={(position) => onChange({ ...value, position })} disabled={disabled} />
+    <div className="space-y-1">
+      <Choices label="문구 위치" options={options.text_positions ?? []} value={value.position} onChange={(position) => onChange({ ...value, position })} disabled={disabled} />
+      <p className="text-xs text-slate-500">가로로 찍은 장면은 고른 위치와 상관없이 문구가 영상 바로 아래 띠에 들어가요.</p>
+    </div>
     <Choices label="글자 크기" options={options.text_sizes ?? []} value={value.size} onChange={(size) => onChange({ ...value, size })} disabled={disabled} />
     {(options.text_motions?.length ?? 0) > 0 && <Choices label="글자 움직임" options={options.text_motions ?? []} value={value.motion ?? "pop"} onChange={(motion) => onChange({ ...value, motion })} disabled={disabled} />}
   </div>;
 }
 
 /** TODO 12: turn the saved draft into a 9:16 video with the title, name tags and lines burned in. */
-function ReelVideoPanel({ projectId, draftKey, draftRunning, options }: { projectId: string; draftKey: string; draftRunning: boolean; options?: ReelOptions }) {
+function ReelVideoPanel({ projectId, draftKey, draftRunning, options, auto, onAutoChange, editTick }: { projectId: string; draftKey: string; draftRunning: boolean; options?: ReelOptions; auto: boolean; onAutoChange: (on: boolean) => void; editTick: number }) {
   const queryClient = useQueryClient();
   const [textStyle, setTextStyle] = useState<ReelTextStyle>(defaultTextStyle);
   const [styleSynced, setStyleSynced] = useState(false);
@@ -96,6 +99,17 @@ function ReelVideoPanel({ projectId, draftKey, draftRunning, options }: { projec
   useEffect(() => {
     if (video?.text_style && !styleSynced) { setTextStyle(video.text_style); setStyleSynced(true); }
   }, [video, styleSynced]);
+  // TODO 18: after a chat edit, make the video again with the same look until it matches the draft. Edits made
+  // while it is being made are caught up by one more round when it finishes.
+  const [wanted, setWanted] = useState(false);
+  useEffect(() => { if (editTick > 0) setWanted(true); }, [editTick]);
+  const failed = status.data?.status === "FAILED" || start.isError;
+  const startVideo = start.mutate;
+  useEffect(() => {
+    if (!wanted || running || draftRunning || status.isFetching) return;
+    if (!auto || !video || video.matches_draft || failed) { setWanted(false); return; }
+    startVideo();
+  }, [wanted, auto, video, running, draftRunning, failed, status.isFetching, startVideo]);
   return <div className="space-y-3 rounded-xl border border-white/10 bg-white/[.03] p-3" aria-label="세로 영상">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div className="min-w-0">
@@ -106,6 +120,10 @@ function ReelVideoPanel({ projectId, draftKey, draftRunning, options }: { projec
         <span className="flex items-center gap-2">{running ? <LoaderCircle size={16} className="animate-spin" /> : <Film size={16} />}{running ? "세로 영상 만드는 중…" : video ? "세로 영상 다시 만들기" : "세로 영상 만들기"}</span>
       </Button>
     </div>
+    <label className="flex items-center gap-2 text-sm text-slate-200">
+      <input id="reel-auto-video" type="checkbox" checked={auto} onChange={(event) => onAutoChange(event.target.checked)} className="h-4 w-4 accent-cyan-300" />
+      초안을 말로 고치면 세로 영상도 다시 만들기
+    </label>
     {options && <TextStylePicker options={options} value={textStyle} onChange={setTextStyle} disabled={running || draftRunning} />}
     {status.data?.status === "RUNNING" && <p role="status" className="text-sm text-cyan-200 tabular-nums">
       {status.data.step}{status.data.total > 0 ? ` · ${status.data.done}/${status.data.total}개` : ""}
@@ -119,7 +137,7 @@ function ReelVideoPanel({ projectId, draftKey, draftRunning, options }: { projec
       <div className="min-w-0 space-y-2 text-sm text-slate-300">
         <p className="tabular-nums">길이 <b className="text-slate-50">{formatDuration(video.duration_seconds)}</b> · 장면 {video.scene_count}개 · {(video.file_size_bytes / 1024 / 1024).toFixed(1)}MB</p>
         {video.text_style && options?.text_templates && <p className="text-xs text-slate-400">글자 템플릿: {options.text_templates.find((t) => t.key === video.text_style?.template)?.label ?? video.text_style.template}</p>}
-        {!video.matches_draft && <p className="text-xs text-amber-200">초안을 다시 만들어서 이 영상은 예전 초안으로 만든 것입니다. 지금 초안으로 보려면 다시 만들어 주세요.</p>}
+        {!video.matches_draft && !(auto && (wanted || running)) && <p className="text-xs text-amber-200">초안이 바뀌어서 이 영상은 예전 초안으로 만든 것입니다. 지금 초안으로 보려면 다시 만들어 주세요.</p>}
         <a href={reelVideoSrc(video)} download="reel.mp4" className="inline-flex items-center gap-1.5 text-cyan-300 underline"><Download size={14} />영상 내려받기</a>
       </div>
     </div>}
@@ -136,7 +154,10 @@ const editErrors: Record<string, string> = {
 const quickEdits = [["더 길게", "여기 더 길게"], ["더 짧게", "여기 더 짧게"], ["자막 새로", "여기 자막 다시 써줘"], ["장면 빼기", "여기 빼"]] as const;
 
 /** TODO 16: change the draft by talking ("3번 더 길게"); "여기" is the scene picked in the list below. */
-function ReelChat({ projectId, selected, canUndo, disabled, onChanged }: { projectId: string; selected: number | null; canUndo: boolean; disabled: boolean; onChanged: () => void }) {
+function ReelChat({ projectId, selected, undoCount, recentChanges, unusedShots, autoVideo, disabled, onChanged, onPreview }: {
+  projectId: string; selected: number | null; undoCount: number; recentChanges: string[]; unusedShots: ReelUnusedShot[];
+  autoVideo: boolean; disabled: boolean; onChanged: () => void; onPreview?: (range: PreviewRange) => void;
+}) {
   const queryClient = useQueryClient();
   const [message, setMessage] = useState("");
   const [result, setResult] = useState<{ done: string[]; skipped: string[] } | null>(null);
@@ -151,7 +172,11 @@ function ReelChat({ projectId, selected, canUndo, disabled, onChanged }: { proje
   });
   const undo = useMutation({
     mutationFn: () => undoReelDraft(projectId),
-    onSuccess: (value) => { queryClient.setQueryData(["reel-draft", projectId], value); setResult({ done: ["고치기 전 초안으로 되돌렸어요"], skipped: [] }); onChanged(); },
+    onSuccess: (value) => {
+      queryClient.setQueryData(["reel-draft", projectId], value);
+      setResult({ done: [value.undone ? `되돌렸어요: ${value.undone}` : "고치기 전 초안으로 되돌렸어요"], skipped: [] });
+      onChanged();
+    },
   });
   const busy = disabled || edit.isPending || undo.isPending;
   const send = (text: string) => { if (text.trim() && !busy) edit.mutate(text.trim()); };
@@ -169,15 +194,36 @@ function ReelChat({ projectId, selected, canUndo, disabled, onChanged }: { proje
       <Button type="submit" size="sm" disabled={busy || !message.trim()}>
         <span className="flex items-center gap-1">{edit.isPending ? <LoaderCircle size={14} className="animate-spin" /> : <Send size={14} />}고치기</span>
       </Button>
-      {canUndo && <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => undo.mutate()}>
-        <span className="flex items-center gap-1"><Undo2 size={14} />되돌리기</span>
+      {undoCount > 0 && <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => undo.mutate()}>
+        <span className="flex items-center gap-1"><Undo2 size={14} />되돌리기 ({undoCount}번 가능)</span>
       </Button>}
     </form>
     {result && <div role="status" className="space-y-0.5 text-sm">
       {result.done.map((line) => <p key={line} className="text-emerald-200">✓ {line}</p>)}
       {result.skipped.map((line) => <p key={line} className="text-amber-200">· {line}</p>)}
-      {result.done.length > 0 && <p className="text-xs text-slate-500">세로 영상에 반영하려면 위에서 세로 영상을 다시 만들어 주세요.</p>}
+      {result.done.length > 0 && !autoVideo && <p className="text-xs text-slate-500">세로 영상에 반영하려면 위에서 세로 영상을 다시 만들어 주세요.</p>}
     </div>}
+    {recentChanges.length > 0 && <div className="text-xs text-slate-400">
+      <p className="font-semibold text-slate-500">최근 고친 것</p>
+      <ul className="list-inside list-disc">{recentChanges.map((line, index) => <li key={`${index}:${line}`}>{line}</li>)}</ul>
+    </div>}
+    {unusedShots.length > 0 && <details className="rounded-lg border border-white/10 p-2">
+      <summary className="cursor-pointer text-sm text-slate-200">안 쓴 컷 {unusedShots.length}개 <span className="text-xs text-slate-500">· 눌러서 초안에 넣기 (촬영 순서 자리에 들어가요)</span></summary>
+      <ul className="mt-2 space-y-2">
+        {unusedShots.map((shot) => <li key={shot.index} className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-lg bg-[#0b1420] p-2">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-slate-500 tabular-nums"><b className="text-slate-300">컷 {shot.index}</b> · {shot.source_filename} · {shot.start_seconds.toFixed(1)}–{shot.end_seconds.toFixed(1)}초</p>
+            <p className="text-xs text-slate-400">AI가 본 화면: {shot.caption || "설명 없음"}</p>
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="secondary" onClick={() => onPreview?.({ candidateId: `reel:${shot.index}`, sourceId: shot.source_video_id, start: shot.start_seconds, end: shot.end_seconds })}>미리보기</Button>
+            <Button size="sm" disabled={busy} aria-label={`컷 ${shot.index} 넣기`} onClick={() => send(`${shot.index}번 컷 넣어줘`)}>
+              <span className="flex items-center gap-1"><Plus size={14} />넣기</span>
+            </Button>
+          </div>
+        </li>)}
+      </ul>
+    </details>}
     {failure && <Alert>{failure instanceof ApiError ? (failure.code && editErrors[failure.code]) || failure.message : "초안을 고치지 못했어요."}</Alert>}
   </div>;
 }
@@ -212,6 +258,9 @@ export function ReelDraftCard({ projectId, onPreview }: { projectId: string; onP
   const sceneCount = draft?.scenes.length ?? 0;
   useEffect(() => { setSelected(null); }, [sceneCount]);
   const picked = selected !== null && selected <= sceneCount ? selected : null;
+  // TODO 18: on by default; a chat edit bumps the tick so the video panel makes the video again.
+  const [autoVideo, setAutoVideo] = useState(true);
+  const [editTick, setEditTick] = useState(0);
   return <Card id="reel-draft" className="mt-3 scroll-mt-24 sm:mt-6 sm:scroll-mt-3">
     <CardHeader>
       <CardTitle>숏폼·롱폼 만들기</CardTitle>
@@ -249,12 +298,15 @@ export function ReelDraftCard({ projectId, onPreview }: { projectId: string; onP
           {draft.notes.map((note) => <p key={note} className="text-xs text-amber-200">{note}</p>)}
         </div>
         <ReelVideoPanel projectId={projectId} draftRunning={running} options={options.data}
-          draftKey={`${draft.mode}|${draft.title_lead ?? ""}|${draft.title}|${draft.total_seconds}|${draft.scenes.map((s) => `${s.shot_index}:${s.caption}`).join(",")}`} />
-        <ReelChat projectId={projectId} selected={picked} canUndo={Boolean(status.data?.can_undo)} disabled={running} onChanged={() => undefined} />
+          draftKey={`${draft.mode}|${draft.title_lead ?? ""}|${draft.title}|${draft.total_seconds}|${draft.scenes.map((s) => `${s.shot_index}:${s.start_seconds}-${s.end_seconds}:${s.label}:${s.caption}`).join(",")}`}
+          auto={autoVideo} onAutoChange={setAutoVideo} editTick={editTick} />
+        <ReelChat projectId={projectId} selected={picked} disabled={running} onPreview={onPreview} autoVideo={autoVideo}
+          undoCount={status.data?.undo_count ?? (status.data?.can_undo ? 1 : 0)} recentChanges={status.data?.recent_changes ?? []}
+          unusedShots={status.data?.unused_shots ?? []} onChanged={() => setEditTick((tick) => tick + 1)} />
         <ol className="space-y-2">
           {draft.scenes.map((scene, index) => <li key={`${scene.shot_index}:${index}`} className={`flex min-w-0 flex-wrap items-start justify-between gap-2 rounded-xl border p-3 ${picked === index + 1 ? "border-fuchsia-300/60 bg-fuchsia-300/[.06]" : "border-white/10 bg-[#0b1420]"}`}>
             <button type="button" aria-pressed={picked === index + 1} aria-label={`${index + 1}번 장면 고르기`} onClick={() => setSelected(picked === index + 1 ? null : index + 1)} className="min-w-0 flex-1 text-left">
-              <p className="text-xs text-slate-500 tabular-nums">{index + 1}. {scene.is_hook ? <span className="mr-1 rounded-full bg-amber-300/15 px-2 py-0.5 font-semibold text-amber-200">맨 앞 장면</span> : null}{scene.source_filename} · {scene.start_seconds.toFixed(1)}–{scene.end_seconds.toFixed(1)}초 ({(scene.end_seconds - scene.start_seconds).toFixed(1)}초)</p>
+              <p className="text-xs text-slate-500 tabular-nums">{index + 1}. <span className="mr-1 text-slate-600">컷 {scene.shot_index}</span>{scene.is_hook ? <span className="mr-1 rounded-full bg-amber-300/15 px-2 py-0.5 font-semibold text-amber-200">맨 앞 장면</span> : null}{scene.source_filename} · {scene.start_seconds.toFixed(1)}–{scene.end_seconds.toFixed(1)}초 ({(scene.end_seconds - scene.start_seconds).toFixed(1)}초)</p>
               {scene.label && <p className="mt-1 text-xs font-semibold text-cyan-200">{scene.label}</p>}
               <p className="mt-0.5 text-base font-semibold text-slate-50">{scene.caption || <span className="text-slate-500">(문구 없음)</span>}</p>
               {scene.shot_caption && <p className="mt-0.5 text-xs text-slate-400">AI가 본 화면: {scene.shot_caption}</p>}

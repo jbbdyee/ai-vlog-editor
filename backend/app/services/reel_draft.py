@@ -691,12 +691,14 @@ def shots_from_json(rows: Sequence[dict]) -> list[Shot]:
     return [Shot(**row) for row in rows]
 
 
-PREVIOUS_KEY = "previous_draft"  # TODO 16: the draft before the last chat edit, kept for "되돌리기"
+PREVIOUS_KEY = "previous_draft"  # TODO 16: the draft before the last chat edit (older saves only)
+HISTORY_KEY = "edit_history"  # TODO 18: the drafts before the last chat edits, newest first, for "되돌리기" many times
 
 
 def draft_from_json(data: dict) -> ReelDraft:
     data = dict(data)
     data.pop(PREVIOUS_KEY, None)
+    data.pop(HISTORY_KEY, None)
     data["scenes"] = tuple(ReelScene(**scene) for scene in data["scenes"])
     data["notes"] = tuple(data.get("notes", ()))
     return ReelDraft(**data)

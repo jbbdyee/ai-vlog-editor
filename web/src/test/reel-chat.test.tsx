@@ -51,7 +51,7 @@ describe("TODO 16 reel chat edits", () => {
     await userEvent.click(screen.getByRole("button", { name: "고치기" }));
     expect(sent[1]).toEqual({ message: "3번 자막 빼줘", selected: 2 });
 
-    await userEvent.click(screen.getByRole("button", { name: "되돌리기" }));
+    await userEvent.click(screen.getByRole("button", { name: "되돌리기 (1번 가능)" }));
     expect(await screen.findByText("✓ 고치기 전 초안으로 되돌렸어요")).toBeInTheDocument();
     expect(undone).toBe(true);
   });
@@ -68,5 +68,50 @@ describe("TODO 16 reel chat edits", () => {
     await userEvent.type(await screen.findByLabelText("고칠 내용"), "좀 신나게");
     await userEvent.click(screen.getByRole("button", { name: "고치기" }));
     expect(await screen.findByText(/알아듣지 못했어요/)).toBeInTheDocument();
+  });
+});
+
+describe("TODO 18 put cuts back, undo many times, remake the video by itself", () => {
+  it("puts an unused cut in and makes the video again with the same look", async () => {
+    const sent: unknown[] = [];
+    const videoPosts: unknown[] = [];
+    let edited = false;
+    const video = (matches: boolean) => ({ duration_seconds: 6, file_size_bytes: 1024 * 1024, scene_count: 3, matches_draft: matches,
+      url: `/projects/${project}/reel-video/file?v=${matches ? 2 : 1}`, text_style: { template: "clean", color: "auto", position: "bottom", size: "normal", motion: "pop" } });
+    const unused = [{ index: 4, source_video_id: source, source_filename: "dance.mp4", start_seconds: 16, end_seconds: 20, caption: "바닥에 앉아 물을 마신다" }];
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith("/reel-options")) return Promise.resolve(response({ ...options, text_templates: [{ key: "clean", label: "깔끔 감성", hint: "" }], text_positions: [{ key: "bottom", label: "아래" }] }));
+      if (url.endsWith("/reel-video") && init?.method === "POST") {
+        videoPosts.push(JSON.parse(String(init.body)));
+        return Promise.resolve(response({ project_id: project, status: "RUNNING", step: "영상", done: 0, total: 0, error_code: null, video: video(false) }));
+      }
+      if (url.endsWith("/reel-video")) {
+        const fresh = !edited || videoPosts.length > 0;
+        return Promise.resolve(response({ project_id: project, status: "COMPLETED", step: "완료", done: 0, total: 0, error_code: null, video: video(fresh) }));
+      }
+      if (url.endsWith("/reel-draft/edit")) {
+        sent.push(JSON.parse(String(init?.body)));
+        edited = true;
+        return Promise.resolve(response(status({ draft: { ...draft(), scenes: [...draft().scenes, scene(4, "물 마시는 중")] }, undo_count: 3,
+          recent_changes: ["컷 4을 4번 장면으로 넣었어요 (2.5초)", "2번 장면을 뺐어요"], unused_shots: [], done_edits: ["컷 4을 4번 장면으로 넣었어요 (2.5초)"], skipped_edits: [] })));
+      }
+      return Promise.resolve(response(status({ draft: draft(), undo_count: 2, recent_changes: ["2번 장면을 뺐어요"], unused_shots: unused })));
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><ReelDraftCard projectId={project} /></QueryClientProvider>);
+
+    expect(await screen.findByRole("button", { name: "되돌리기 (2번 가능)" })).toBeInTheDocument();
+    expect(screen.getByText("2번 장면을 뺐어요")).toBeInTheDocument();
+    expect(screen.getByText("컷 5")).toBeInTheDocument();  // the scene card shows its cut number
+    expect(await screen.findByText(/가로로 찍은 장면은 고른 위치와 상관없이/)).toBeInTheDocument();
+    expect(screen.getByLabelText("초안을 말로 고치면 세로 영상도 다시 만들기")).toBeChecked();
+    await screen.findByLabelText("완성된 세로 영상");
+
+    await userEvent.click(screen.getByText(/안 쓴 컷 1개/));
+    await userEvent.click(screen.getByRole("button", { name: "컷 4 넣기" }));
+    expect(sent).toEqual([{ message: "4번 컷 넣어줘", selected: null }]);
+    expect(await screen.findByRole("button", { name: "되돌리기 (3번 가능)" })).toBeInTheDocument();
+    await vi.waitFor(() => expect(videoPosts).toHaveLength(1));
+    expect(videoPosts[0]).toMatchObject({ text_style: { template: "clean", position: "bottom" } });
   });
 });

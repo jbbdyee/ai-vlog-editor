@@ -15,8 +15,8 @@ from backend.app.models import Project, SourceVideo
 from backend.app.models.reel import ProjectReelDraft
 from backend.app.services.media_probe import probe_media
 from backend.app.services.reel_chat import EditResult
-from backend.app.services.reel_draft import (PREVIOUS_KEY, ReelDraft, SourceInput, analysis_fingerprint, analyze_shots,
-                                             build_draft, draft_from_json, shots_from_json, shots_to_json)
+from backend.app.services.reel_draft import (HISTORY_KEY, PREVIOUS_KEY, ReelDraft, Shot, SourceInput,
+                                             analysis_fingerprint, analyze_shots, build_draft, draft_from_json, shots_from_json, shots_to_json)
 
 
 class ReelProjectNotFound(LookupError):
@@ -72,9 +72,34 @@ def saved_draft(session: Session, project_id: UUID) -> ReelDraft | None:
     return draft_from_json(record.draft) if record is not None else None
 
 
-def can_undo(session: Session, project_id: UUID) -> bool:
+MAX_HISTORY = 10  # TODO 18: how many chat edits can be undone
+
+
+def _history(data: dict) -> list[dict]:
+    """[{"draft": ..., "change": "3번 장면 2.0초 → 3.0초"}], newest first. Older saves kept one previous draft."""
+    history = data.get(HISTORY_KEY)
+    if isinstance(history, list):
+        return [entry for entry in history if isinstance(entry, dict) and entry.get("draft")]
+    previous = data.get(PREVIOUS_KEY)
+    return [{"draft": previous, "change": ""}] if previous else []
+
+
+def edit_history(session: Session, project_id: UUID) -> list[dict]:
     record = session.get(ProjectReelDraft, project_id)
-    return bool(record is not None and record.draft.get(PREVIOUS_KEY))
+    return _history(record.draft) if record is not None else []
+
+
+def can_undo(session: Session, project_id: UUID) -> bool:
+    return bool(edit_history(session, project_id))
+
+
+def unused_shots(session: Session, project_id: UUID) -> list[Shot]:
+    """TODO 18: the cuts the draft does not use, in filmed order."""
+    record = session.get(ProjectReelDraft, project_id)
+    if record is None:
+        return []
+    used = {scene["shot_index"] for scene in record.draft.get("scenes", ())}
+    return [shot for shot in shots_from_json(record.shots) if shot.index not in used]
 
 
 # --- TODO 16: change the saved draft by talking to it ---
@@ -89,8 +114,8 @@ def _busy(project_id: UUID) -> str | None:
     with _lock:
         if project_id in _jobs and _jobs[project_id].status == "RUNNING":
             return "REEL_DRAFT_RUNNING"
-        if project_id in _render_jobs and _render_jobs[project_id].status == "RUNNING":
-            return "REEL_VIDEO_RUNNING"
+    # TODO 18: a video being made read its draft when it started, so editing meanwhile is safe; the screen makes
+    # the video again afterwards when the draft moved on.
     return None
 
 
@@ -111,33 +136,39 @@ def edit_reel_draft(factory: sessionmaker[Session], project_id: UUID, message: s
         if draft is None:
             raise ReelEditRefused("REEL_DRAFT_MISSING")
         shots = shots_from_json(record.shots)
+        history = _history(record.draft)
     if selected is not None and not 1 <= selected <= len(draft.scenes):
         selected = None
     try:
-        edits, _ = understand(message, draft, selected, complete)
+        edits, _ = understand(message, draft, selected, complete, shots)
     except NotUnderstood as error:
         raise ReelEditRefused("REEL_EDIT_NOT_UNDERSTOOD") from error
-    result = apply_edits(draft, shots, edits, complete=complete)
+    earlier = [draft_from_json(entry["draft"]) for entry in history]
+    result = apply_edits(draft, shots, edits, complete=complete, earlier=earlier)
     if result.done:
+        entry = {"draft": draft.to_json(), "change": " · ".join(result.done)}
         with factory() as session:
             record = session.get(ProjectReelDraft, project_id)
-            record.draft = {**result.draft.to_json(), PREVIOUS_KEY: draft.to_json()}
+            record.draft = {**result.draft.to_json(), HISTORY_KEY: [entry, *history][:MAX_HISTORY]}
             session.commit()
     return result
 
 
-def undo_reel_draft(factory: sessionmaker[Session], project_id: UUID) -> None:
+def undo_reel_draft(factory: sessionmaker[Session], project_id: UUID) -> str:
+    """Go back one chat edit; returns what that edit had changed ("" for older saves)."""
     if (code := _busy(project_id)) is not None:
         raise ReelEditRefused(code)
     with factory() as session:
         if session.get(Project, project_id) is None:
             raise ReelProjectNotFound(str(project_id))
         record = session.get(ProjectReelDraft, project_id)
-        previous = record.draft.get(PREVIOUS_KEY) if record is not None else None
-        if not previous:
+        history = _history(record.draft) if record is not None else []
+        if not history:
             raise ReelEditRefused("REEL_UNDO_EMPTY")
-        record.draft = dict(previous)
+        last, rest = history[0], history[1:]
+        record.draft = {**last["draft"], HISTORY_KEY: rest}
         session.commit()
+        return str(last.get("change") or "")
 
 
 def start_reel_draft(project_id: UUID, factory: sessionmaker[Session], resolve: Callable[[str], Path],

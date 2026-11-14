@@ -28,8 +28,8 @@ from backend.app.services.project_processing import process_project
 from backend.app.services.edit_request import MAX_REQUEST_LENGTH
 from backend.app.services.llm_edit_interpreter import interpret_with_llm
 from backend.app.services.story_direction import load_story_inputs, rebuild_direction, recommend_story_direction
-from backend.app.services.project_reel import (ReelEditRefused, ReelOptions, ReelProjectNotFound, can_undo,
-                                              edit_reel_draft, job_state, reel_output_dir, render_job_state,
+from backend.app.services.project_reel import (ReelEditRefused, ReelOptions, ReelProjectNotFound, edit_history,
+                                              edit_reel_draft, unused_shots, job_state, reel_output_dir, render_job_state,
                                               saved_draft, start_reel_draft, start_reel_render, undo_reel_draft)
 from backend.app.services.reel_render import draft_fingerprint, saved_video
 from backend.app.services import reel_text
@@ -804,6 +804,16 @@ class ReelDraftResponse(BaseModel):
     fallback_reason: str | None = None
 
 
+class ReelUnusedShotResponse(BaseModel):
+    """TODO 18: a cut (piece of the sources, numbered in filmed order) that the draft does not use."""
+    index: int
+    source_video_id: UUID
+    source_filename: str
+    start_seconds: float
+    end_seconds: float
+    caption: str
+
+
 class ReelDraftStatusResponse(BaseModel):
     project_id: UUID
     status: str
@@ -813,15 +823,24 @@ class ReelDraftStatusResponse(BaseModel):
     error_code: str | None = None
     draft: ReelDraftResponse | None = None
     can_undo: bool = False  # TODO 16: the draft before the last chat edit is kept
+    undo_count: int = 0  # TODO 18: how many chat edits can be undone (up to 10)
+    recent_changes: list[str] = []  # TODO 18: the last chat edits, newest first
+    unused_shots: list[ReelUnusedShotResponse] = []  # TODO 18: cuts the draft does not use, to put back
 
 
 def _reel_status_sync(factory, project_id) -> ReelDraftStatusResponse:
     with factory() as session:
         draft = saved_draft(session, project_id)
-        undo = can_undo(session, project_id)
+        history = edit_history(session, project_id)
+        unused = unused_shots(session, project_id)
     job = job_state(project_id)
     return ReelDraftStatusResponse(
-        project_id=project_id, status=job.status, step=job.step, done=job.done, total=job.total, can_undo=undo,
+        project_id=project_id, status=job.status, step=job.step, done=job.done, total=job.total,
+        can_undo=bool(history), undo_count=len(history),
+        recent_changes=[entry["change"] for entry in history if entry.get("change")][:3],
+        unused_shots=[ReelUnusedShotResponse(index=shot.index, source_video_id=shot.source_video_id,
+                                             source_filename=shot.source_filename, start_seconds=shot.start_seconds,
+                                             end_seconds=shot.end_seconds, caption=shot.caption) for shot in unused],
         error_code=job.error_code, draft=None if draft is None else ReelDraftResponse(**{
             **draft.to_json(), "scenes": [ReelSceneResponse(**vars(scene)) for scene in draft.scenes],
             "notes": list(draft.notes)}))
@@ -890,13 +909,17 @@ async def edit_project_reel_draft(request: Request, project_id: UUID, payload: R
         raise _reel_edit_error(error) from error
 
 
-def _reel_undo_sync(factory, project_id) -> ReelDraftStatusResponse:
-    undo_reel_draft(factory, project_id)
-    return _reel_status_sync(factory, project_id)
+class ReelUndoResponse(ReelDraftStatusResponse):
+    undone: str = ""  # TODO 18: what the undone edit had changed
 
 
-@router.post("/{project_id}/reel-draft/undo", response_model=ReelDraftStatusResponse)
-async def undo_project_reel_draft(request: Request, project_id: UUID) -> ReelDraftStatusResponse:
+def _reel_undo_sync(factory, project_id) -> ReelUndoResponse:
+    undone = undo_reel_draft(factory, project_id)
+    return ReelUndoResponse(**_reel_status_sync(factory, project_id).model_dump(), undone=undone)
+
+
+@router.post("/{project_id}/reel-draft/undo", response_model=ReelUndoResponse)
+async def undo_project_reel_draft(request: Request, project_id: UUID) -> ReelUndoResponse:
     try:
         return await run_in_threadpool(_reel_undo_sync, _session_factory(request), project_id)
     except ReelProjectNotFound as error:

@@ -64,6 +64,20 @@ export interface ReelStatus {
   draft: ReelDraft | null;
   /** TODO 16: the draft before the last chat edit is kept, so "되돌리기" works. */
   can_undo?: boolean;
+  /** TODO 18: how many chat edits can be undone (up to 10), the last ones, and the cuts the draft does not use. */
+  undo_count?: number;
+  recent_changes?: string[];
+  unused_shots?: ReelUnusedShot[];
+}
+
+/** TODO 18: a cut (piece of the sources, numbered in filmed order) that the draft does not use. */
+export interface ReelUnusedShot {
+  index: number;
+  source_video_id: string;
+  source_filename: string;
+  start_seconds: number;
+  end_seconds: number;
+  caption: string;
 }
 
 /** TODO 16: what a chat edit changed and what it could not. */
@@ -83,7 +97,7 @@ function checkOptions(value: ReelOptions): ReelOptions {
   return value;
 }
 
-function checkStatus(value: ReelStatus, id: string): ReelStatus {
+function checkStatus<T extends ReelStatus>(value: T, id: string): T {
   if (!value || value.project_id !== id || typeof value.status !== "string" || (value.draft && !Array.isArray(value.draft.scenes))) {
     throw new ApiError("릴스 초안 응답을 확인할 수 없습니다.");
   }
@@ -117,9 +131,9 @@ export async function editReelDraft(id: string, message: string, selected: numbe
   } catch (error) { return unsupported(error); }
 }
 
-export async function undoReelDraft(id: string): Promise<ReelStatus> {
+export async function undoReelDraft(id: string): Promise<ReelStatus & { undone?: string }> {
   try {
-    return checkStatus(await request<ReelStatus>(`/projects/${id}/reel-draft/undo`, { method: "POST" }), id);
+    return checkStatus(await request<ReelStatus & { undone?: string }>(`/projects/${id}/reel-draft/undo`, { method: "POST" }), id);
   } catch (error) { return unsupported(error); }
 }
 

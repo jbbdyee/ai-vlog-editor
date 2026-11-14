@@ -4,7 +4,7 @@ import json
 import unittest
 
 from backend.app.services.reel_chat import Edit, NotUnderstood, apply_edits, understand
-from backend.app.services.reel_draft import PREVIOUS_KEY, ReelDraft, ReelScene, Shot, draft_from_json
+from backend.app.services.reel_draft import HISTORY_KEY, PREVIOUS_KEY, ReelDraft, ReelScene, Shot, draft_from_json
 
 SOURCE = "22222222-2222-4222-8222-222222222222"
 
@@ -105,8 +105,46 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(len(result.skipped), 2)
 
     def test_saved_previous_draft_is_ignored_when_reading(self):
-        data = {**draft().to_json(), PREVIOUS_KEY: draft().to_json()}
+        data = {**draft().to_json(), PREVIOUS_KEY: draft().to_json(), HISTORY_KEY: [{"draft": draft().to_json()}]}
         self.assertEqual(draft_from_json(data), draft())
+
+
+# TODO 18: cuts 4 and 5 are not in the draft
+MORE_SHOTS = [*SHOTS, shot(4, 12, 20, "바닥에 앉아 물을 마신다"), shot(5, 20, 22)]
+
+
+class InsertTest(unittest.TestCase):
+    def test_reading_put_back_sentences(self):
+        self.assertEqual(read("12번 컷 넣어줘"), [Edit("insert", shot=12)])
+        self.assertEqual(read("컷 4 2번 뒤에 넣어줘"), [Edit("insert", to=3, shot=4)])
+        self.assertEqual(read("4번 컷 맨 앞에 추가"), [Edit("insert", to=1, shot=4)])
+        self.assertEqual(read("4번 컷 여기 뒤에 넣어", selected=2), [Edit("insert", to=3, shot=4)])
+        self.assertEqual(read("아까 뺀 장면 다시 넣어줘"), [Edit("insert")])
+        self.assertEqual(read("여기 자막 다시 써줘", selected=1), [Edit("caption", 1)])  # not a cut
+
+    def test_new_cut_goes_in_filmed_order_with_a_caption(self):
+        result = apply_edits(draft(), MORE_SHOTS, [Edit("insert", shot=4)])
+        self.assertEqual([s.shot_index for s in result.draft.scenes], [3, 1, 2, 4])
+        new = result.draft.scenes[3]
+        self.assertEqual((new.start_seconds, new.end_seconds), (15.1, 16.9))  # "빠르게" pace: 1.8 s from the middle
+        self.assertEqual(new.caption, "바닥에 앉아 물을 마신다")
+        self.assertIn("컷 4을 4번 장면으로 넣었어요", result.done[0])
+
+    def test_put_back_where_asked_and_refuse_used_or_missing(self):
+        result = apply_edits(draft(), MORE_SHOTS, [Edit("insert", to=2, shot=5), Edit("insert", shot=1),
+                                                   Edit("insert", shot=9)])
+        self.assertEqual([s.shot_index for s in result.draft.scenes], [3, 5, 1, 2])
+        self.assertEqual(result.skipped, ("컷 1은 이미 3번 장면이에요", "컷 9이 없어요 (컷은 1~5번)"))
+
+    def test_removed_scene_comes_back_as_it_was(self):
+        before = draft()
+        removed = apply_edits(before, MORE_SHOTS, [Edit("remove", 2)]).draft
+        back = apply_edits(removed, MORE_SHOTS, [Edit("insert")], earlier=[before])
+        self.assertEqual(back.draft.scenes, before.scenes)
+        nothing = apply_edits(before, MORE_SHOTS, [Edit("insert")])
+        self.assertIn("다시 넣을 장면을 못 찾았어요", nothing.skipped[0])
+        same_turn = apply_edits(before, MORE_SHOTS, [Edit("remove", 3), Edit("insert", to=1)])
+        self.assertEqual([s.shot_index for s in same_turn.draft.scenes], [2, 3, 1])
 
 
 if __name__ == "__main__":

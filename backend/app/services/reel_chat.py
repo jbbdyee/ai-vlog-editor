@@ -7,7 +7,8 @@ Two steps, the same split as the rest of the reel code (Python owns every timest
    (the user's sources are already cut, so going past it would show the next cut), and never below 1 second.
 
 Scene numbers are the numbers the screen shows (1 = the first scene of the reel). "여기 / 이 장면" is the scene the
-user picked on the screen.
+user picked on the screen. TODO 18: a "컷" is a piece of the sources in filmed order (``Shot.index``), so a cut the
+draft does not use can be put back ("12번 컷 넣어줘", "아까 뺀 장면 다시 넣어줘").
 """
 
 from __future__ import annotations
@@ -19,11 +20,11 @@ from typing import Literal, Sequence
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from backend.app.services.llm_edit_interpreter import Completion, LLMEditError
-from backend.app.services.reel_draft import ReelDraft, ReelScene, Shot, _line, _short
-from backend.app.services.reel_modes import MIN_SHOT_SECONDS
+from backend.app.services.reel_draft import ReelDraft, ReelScene, Shot, _clip, _line, _short
+from backend.app.services.reel_modes import DEFAULT_PACE, MIN_SHOT_SECONDS, PACES
 
 DEFAULT_STEP_SECONDS = 1.0
-Action = Literal["longer", "shorter", "caption", "clear_caption", "title", "remove", "move", "swap"]
+Action = Literal["longer", "shorter", "caption", "clear_caption", "title", "remove", "move", "swap", "insert"]
 
 
 @dataclass(frozen=True)
@@ -32,7 +33,8 @@ class Edit:
     scene: int | None = None  # 1-based position on the screen
     seconds: float | None = None
     text: str | None = None  # caption / title; None for "caption" means "write one for me"
-    to: int | None = None  # move: new 1-based position
+    to: int | None = None  # move / insert: new 1-based position (-1 = the end; insert: None = filmed order)
+    shot: int | None = None  # insert: the cut number; None means "the scene removed last"
 
 
 @dataclass(frozen=True)
@@ -65,11 +67,43 @@ def _scene_ref(text: str, selected: int | None, count: int) -> int | None:
     return selected if (_HERE.search(text) or selected) else None
 
 
+_CUT = re.compile(r"(\d+)\s*번\s*컷|컷\s*(\d+)(?:\s*번)?")
+_PUT_IN = r"넣|추가|살려|되살|다시"
+_REMOVED = re.compile(r"(아까|방금|전에|빠진|뺐던|뺀)\s*(뺀\s*)?(장면|컷|거|것)")
+
+
+def _insert_edit(words: str, selected: int | None) -> Edit | None:
+    """TODO 18: "12번 컷 넣어줘", "컷 12 3번 뒤에", "아까 뺀 장면 다시 넣어줘"."""
+    if not re.search(_PUT_IN, words):
+        return None
+    cut = _CUT.search(words)
+    if cut:
+        shot = int(cut.group(1) or cut.group(2))
+        rest = words.replace(cut.group(0), " ")
+    elif _REMOVED.search(words):
+        shot, rest = None, _REMOVED.sub(" ", words)
+    else:
+        return None
+    to = None
+    place = re.search(r"(\d+)\s*번\s*(?:장면\s*)?(뒤|다음|앞)", rest)
+    if place:
+        to = int(place.group(1)) + (0 if place.group(2) == "앞" else 1)
+    elif re.search(r"맨\s*앞|처음에|처음으로", rest):
+        to = 1
+    elif re.search(r"맨\s*뒤|마지막에|마지막으로|끝에|끝으로", rest):
+        to = -1
+    elif selected and _HERE.search(rest):
+        to = selected if re.search(r"앞", rest) else selected + 1
+    return Edit("insert", to=to, shot=shot)
+
+
 def _rule_edits(message: str, selected: int | None, count: int = 0) -> list[Edit]:
     """Plain rules for the sentences people actually type; [] when the sentence needs the AI."""
     text = message.strip()
     quoted = _QUOTED.search(text)
     words = text if not quoted else text.replace(quoted.group(0), " ")
+    if (insert := _insert_edit(words, selected)) is not None:
+        return [insert]
     seconds = _SECONDS.search(words)
     amount = float(seconds.group(1)) if seconds else None
     if "제목" in words and quoted:
@@ -108,6 +142,7 @@ class _AIEdit(BaseModel):
     seconds: float | None = None
     text: str | None = Field(default=None, max_length=40)
     to: int | None = None
+    shot: int | None = None
 
 
 class _AIEdits(BaseModel):
@@ -119,21 +154,26 @@ UNDERSTAND_SYSTEM_PROMPT = (
     "너는 릴스 편집 도우미다. 사용자의 말을 편집 목록(JSON)으로만 바꾼다. 장면 번호는 목록에 보이는 번호다. "
     "action: longer(장면 더 길게), shorter(더 짧게), caption(문구 넣기·바꾸기, 사용자가 문구를 말하지 않았으면 text는 null), "
     "clear_caption(문구 지우기), title(첫 화면 제목 바꾸기, text 필수), remove(장면 빼기), move(장면 옮기기, to는 새 번호, 맨 뒤는 -1), "
-    "swap(두 장면 자리 바꾸기, scene과 to에 두 번호). "
+    "swap(두 장면 자리 바꾸기, scene과 to에 두 번호), "
+    "insert(안 쓴 컷 넣기, shot은 컷 번호이고 '아까 뺀 장면'이면 null, to는 넣을 장면 자리이고 말하지 않았으면 null). "
     "seconds는 사용자가 초를 말했을 때만 쓴다. '여기'·'이 장면'은 고른 장면이다. 말하지 않은 편집은 넣지 마라."
 )
 
 
-def _ai_edits(message: str, draft: ReelDraft, selected: int | None, complete: Completion) -> list[Edit]:
+def _ai_edits(message: str, draft: ReelDraft, selected: int | None, complete: Completion,
+              shots: Sequence[Shot] = ()) -> list[Edit]:
     rows = "\n".join(f"{n}. 문구: {scene.caption or '(없음)'} | 화면: {scene.shot_caption or '설명 없음'}"
                      for n, scene in enumerate(draft.scenes, start=1))
+    used = {scene.shot_index for scene in draft.scenes}
+    unused = "\n".join(f"컷 {shot.index}: {shot.caption or '설명 없음'}" for shot in shots if shot.index not in used)
     prompt = (f"첫 화면 제목: {draft.title_lead} {draft.title}\n장면 목록:\n{rows}\n"
-              f"고른 장면: {selected or '없음'}\n\n사용자의 말: {message}")
+              + (f"안 쓴 컷:\n{unused}\n" if unused else "")
+              + f"고른 장면: {selected or '없음'}\n\n사용자의 말: {message}")
     try:
         answer = _AIEdits.model_validate_json(complete(UNDERSTAND_SYSTEM_PROMPT, prompt, _AIEdits.model_json_schema()))
     except (LLMEditError, ValidationError, ValueError) as error:
         raise NotUnderstood(getattr(error, "code", "LLM_SCHEMA_INVALID")) from error
-    edits = [Edit(e.action, e.scene, e.seconds, (e.text or "").strip() or None, e.to) for e in answer.edits]
+    edits = [Edit(e.action, e.scene, e.seconds, (e.text or "").strip() or None, e.to, e.shot) for e in answer.edits]
     # The small AI adds edits nobody asked for ("제목 좀 신나게" with a scene picked also removed that scene).
     # An edit that changes a lot stays only when the sentence has a word for it.
     edits = [edit for edit in edits if edit.action not in _NEEDS_WORD or re.search(_NEEDS_WORD[edit.action], message)]
@@ -148,17 +188,19 @@ _NEEDS_WORD = {
     "title": r"제목",
     "move": r"옮|앞|뒤|순서|자리|처음|마지막",
     "swap": r"바꿔|바꾸|순서|자리",
+    "insert": r"컷|뺀|뺐던|빠진|살려|되살",  # "자막 다시 써줘" must not put a cut back
 }
 
 
-def understand(message: str, draft: ReelDraft, selected: int | None, complete: Completion | None) -> tuple[list[Edit], str]:
+def understand(message: str, draft: ReelDraft, selected: int | None, complete: Completion | None,
+               shots: Sequence[Shot] = ()) -> tuple[list[Edit], str]:
     """Edits plus who read the sentence ("rule" or "ai")."""
     edits = _rule_edits(message, selected, len(draft.scenes))
     if edits:
         return edits, "rule"
     if complete is None:
         raise NotUnderstood("LLM_NOT_CONFIGURED")
-    return _ai_edits(message, draft, selected, complete), "ai"
+    return _ai_edits(message, draft, selected, complete, shots), "ai"
 
 
 # --- 2. applying the edits -----------------------------------------------------------------------------------------
@@ -196,14 +238,69 @@ def _seconds(value: float) -> str:
     return f"{value:.1f}초"
 
 
+def _filmed_place(scenes: list[ReelScene], shot_index: int) -> int:
+    """0-based place that keeps filmed order; the first scene stays the hook."""
+    for position in range(1, len(scenes)):
+        if scenes[position].shot_index > shot_index:
+            return position
+    return len(scenes)
+
+
+def _insert(edit: Edit, scenes: list[ReelScene], by_index: dict[int, Shot], earlier: dict[int, ReelScene],
+            removed: list[int], draft: ReelDraft, complete: Completion | None) -> tuple[str | None, str | None]:
+    """TODO 18: put a cut back. Returns (done, skipped)."""
+    used = {scene.shot_index: n for n, scene in enumerate(scenes, start=1)}
+    index = edit.shot
+    if index is None:
+        index = next((i for i in removed if i not in used), None)
+        if index is None:
+            return None, "다시 넣을 장면을 못 찾았어요. 아래 '안 쓴 컷'에서 고르거나 '12번 컷 넣어줘'처럼 컷 번호를 써 주세요"
+    if index in used:
+        return None, f"컷 {index}은 이미 {used[index]}번 장면이에요"
+    shot = by_index.get(index)
+    if shot is None:
+        return None, f"컷 {index}이 없어요 (컷은 1~{max(by_index, default=0)}번)"
+    old = earlier.get(index)  # the cut was in an earlier version: same length and caption as then
+    if old is not None:
+        scene = replace(old, is_hook=False)
+    else:
+        start, end = _clip(shot, PACES.get(draft.pace, PACES[DEFAULT_PACE])[1])
+        label = shot.item if any(s.label for s in scenes) else ""  # name tags only in item modes (try-on)
+        scene = ReelScene(shot.index, shot.source_video_id, shot.source_filename, start, end, "", label,
+                          False, shot.caption)
+    if edit.to is None:
+        position = _filmed_place(scenes, index)
+    elif edit.to == -1 or edit.to > len(scenes):
+        position = len(scenes)
+    else:
+        position = max(0, edit.to - 1)
+    scenes.insert(position, scene)
+    if not scene.caption:
+        scenes[position] = replace(scene, caption=_write_caption(scenes, position, draft, complete))
+    return f"컷 {index}을 {position + 1}번 장면으로 넣었어요 ({_seconds(scene.end_seconds - scene.start_seconds)})", None
+
+
 def apply_edits(draft: ReelDraft, shots: Sequence[Shot], edits: Sequence[Edit], *,
-                complete: Completion | None = None) -> EditResult:
+                complete: Completion | None = None, earlier: Sequence[ReelDraft] = ()) -> EditResult:
+    """``earlier``: older versions of the draft, newest first (TODO 18: "아까 뺀 장면" comes back as it was)."""
     by_index = {shot.index: shot for shot in shots}
     scenes = list(draft.scenes)
     lead, title = draft.title_lead, draft.title
     done: list[str] = []
     skipped: list[str] = []
+    earlier_scenes: dict[int, ReelScene] = {}
+    removed: list[int] = []  # cuts that left the draft, the latest first
+    current = {scene.shot_index for scene in draft.scenes}
+    for version in earlier:
+        for old in version.scenes:
+            earlier_scenes.setdefault(old.shot_index, old)
+            if old.shot_index not in current and old.shot_index not in removed:
+                removed.append(old.shot_index)
     for edit in edits:
+        if edit.action == "insert":
+            ok, why = _insert(edit, scenes, by_index, earlier_scenes, removed, draft, complete)
+            (done if ok else skipped).append(ok or why)
+            continue
         if edit.action == "title":
             new = _line(edit.text or "")
             if not new:
@@ -251,7 +348,8 @@ def apply_edits(draft: ReelDraft, shots: Sequence[Shot], edits: Sequence[Edit], 
             if len(scenes) <= 1:
                 skipped.append("장면이 하나뿐이라 뺄 수 없어요")
                 continue
-            scenes.pop(position)
+            removed.insert(0, scenes.pop(position).shot_index)
+            earlier_scenes[scene.shot_index] = scene
             done.append(f"{name}을 뺐어요")
         elif edit.action == "swap":
             if edit.to is None or not 1 <= edit.to <= len(scenes) or edit.to == edit.scene:

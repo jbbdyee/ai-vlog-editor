@@ -341,3 +341,49 @@ class ReelDraftApiTests(TestCase):
         self.assertEqual((bad.status_code, bad.json()["detail"]["code"]), (422, "REEL_OPTION_INVALID"))
         missing = self.client.get(f"/projects/{uuid4()}/reel-draft")
         self.assertEqual(missing.status_code, 404)
+
+
+class ReelChatHistoryApiTests(ReelDraftApiTests):
+    """TODO 18: put a removed scene back, undo many times, and edit while a video is being made."""
+
+    def test_put_back_and_undo_many_times(self):
+        with patch.object(project_reel, "analyze_shots", self.fake_analyze), \
+                patch("backend.app.services.reel_draft.configured_engine", return_value=None):
+            self.client.post(f"/projects/{self.project_id}/reel-draft", json={"mode": "travel", "pace": "fast", "target_seconds": 15})
+            original = self.wait()
+        self.assertEqual((original["undo_count"], original["unused_shots"]), (0, []))
+        edit = lambda message: self.client.post(f"/projects/{self.project_id}/reel-draft/edit",  # noqa: E731
+                                                json={"message": message}).json()
+        with patch("backend.app.services.llm_edit_interpreter.configured_engine", return_value=None):
+            removed = edit("2번 빼")
+            self.assertEqual([shot["index"] for shot in removed["unused_shots"]],
+                             [original["draft"]["scenes"][1]["shot_index"]])
+            edit("1번 자막 '안녕' 추가")
+            # a video being made does not block editing any more
+            project_reel._render_jobs[self.project_id] = project_reel.ReelJob(status="RUNNING", step="영상")
+            self.addCleanup(project_reel._render_jobs.pop, self.project_id, None)
+            back = edit("아까 뺀 장면 다시 넣어줘")
+        self.assertTrue(back["done_edits"][0].startswith("컷 "))
+        self.assertEqual(back["draft"]["scenes"], [{**original["draft"]["scenes"][0], "caption": "안녕"},
+                                                   *original["draft"]["scenes"][1:]])
+        self.assertEqual((back["undo_count"], back["unused_shots"]), (3, []))
+        self.assertEqual(back["recent_changes"][1], "1번 장면 문구 → '안녕'")
+        undone = [self.client.post(f"/projects/{self.project_id}/reel-draft/undo").json() for _ in range(3)]
+        self.assertEqual([u["undo_count"] for u in undone], [2, 1, 0])
+        self.assertEqual(undone[0]["undone"], back["done_edits"][0])
+        self.assertEqual(undone[-1]["draft"], original["draft"])
+        self.assertEqual(self.client.post(f"/projects/{self.project_id}/reel-draft/undo").status_code, 409)
+
+    def test_older_save_with_one_previous_draft_can_still_undo(self):
+        with patch.object(project_reel, "analyze_shots", self.fake_analyze), \
+                patch("backend.app.services.reel_draft.configured_engine", return_value=None):
+            self.client.post(f"/projects/{self.project_id}/reel-draft", json={"mode": "travel", "pace": "fast", "target_seconds": 15})
+            original = self.wait()
+        from backend.app.models.reel import ProjectReelDraft
+        with self.factory() as session:
+            record = session.get(ProjectReelDraft, self.project_id)
+            record.draft = {**record.draft, "title": "고친 제목", "previous_draft": dict(record.draft)}
+            session.commit()
+        self.assertEqual(self.client.get(f"/projects/{self.project_id}/reel-draft").json()["undo_count"], 1)
+        undone = self.client.post(f"/projects/{self.project_id}/reel-draft/undo").json()
+        self.assertEqual((undone["draft"]["title"], undone["undo_count"]), (original["draft"]["title"], 0))
