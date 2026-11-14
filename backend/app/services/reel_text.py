@@ -148,6 +148,9 @@ TEMPLATES: tuple[Template, ...] = (
              JUA, JUA, "soft", "tint", "pink", "bottom", 76, 50, 62, 110, "pill"),
     Template("basic", "기본", "맑은 고딕 흰 글씨에 검은 테두리", MALGUN, MALGUN, "thick", "thick", "mint", "bottom",
              74, 52, 96, 96),
+    # TODO 22: popular travel/food reels put every caption line on its own coloured band, like a highlighter.
+    Template("marker", "형광펜 띠", "줄마다 색 띠를 깐 진한 글씨, 제목도 띠 위에 (여행·맛집·정보)",
+             PRETENDARD_SEMI, BLACK_HAN, "marker", "marker", "yellow", "bottom", 62, 46, 54, 84),
 )
 TEMPLATE_BY_KEY = {t.key: t for t in TEMPLATES}
 DEFAULT_TEMPLATE = "basic"
@@ -164,6 +167,9 @@ SIZES: dict[str, tuple[str, float]] = {"small": ("작게", 0.86), "normal": ("�
 # first frame (it doubles as the feed preview), so every motion is finished within a quarter of a second.
 MOTIONS: dict[str, str] = {"pop": "톡", "rise": "스르륵", "none": "없음"}
 DEFAULT_MOTION = "pop"
+# TODO 22: popular reels keep the title up for the whole video. "first" is how it worked before (first scene only).
+TITLE_TIMES: dict[str, str] = {"first": "첫 장면만", "hold": "끝까지"}
+DEFAULT_TITLE_TIME = "first"
 AUTO = "auto"
 
 
@@ -174,10 +180,11 @@ class TextStyle:
     position: str = AUTO
     size: str = "normal"
     motion: str = DEFAULT_MOTION
+    title_time: str = DEFAULT_TITLE_TIME
 
     def to_json(self) -> dict[str, str]:
         return {"template": self.template, "color": self.color, "position": self.position, "size": self.size,
-                "motion": self.motion}
+                "motion": self.motion, "title_time": self.title_time}
 
 
 def normalize(style: TextStyle | dict | None) -> TextStyle:
@@ -191,6 +198,7 @@ def normalize(style: TextStyle | dict | None) -> TextStyle:
         position=data.get("position") if data.get("position") in POSITIONS else AUTO,
         size=data.get("size") if data.get("size") in SIZES else "normal",
         motion=data.get("motion") if data.get("motion") in MOTIONS else DEFAULT_MOTION,
+        title_time=data.get("title_time") if data.get("title_time") in TITLE_TIMES else DEFAULT_TITLE_TIME,
     )
 
 
@@ -358,10 +366,11 @@ class _Writer:
                 f"\\fsp{spacing}")
         self._event(layer, start, end, tags, line.text)
 
-    def pill(self, layer, start, end, center_x, top, width, height, fill, alpha="00", role="title_small") -> None:
+    def pill(self, layer, start, end, center_x, top, width, height, fill, alpha="00", role="title_small",
+             radius: float | None = None) -> None:
         """Rounded box drawn behind a line (anchored at its top centre, so a "pop" grows it evenly)."""
         w, h = round(width), round(height)
-        r = min(h // 2, round(height * 0.42))
+        r = min(h // 2, round(height * 0.42) if radius is None else round(radius))
         path = (f"m {r} 0 l {w - r} 0 b {w} 0 {w} 0 {w} {r} l {w} {h - r} b {w} {h} {w} {h} {w - r} {h} "
                 f"l {r} {h} b 0 {h} 0 {h} 0 {h - r} l 0 {r} b 0 0 0 0 {r} 0")
         tags = (f"\\an8{self._place(center_x, top, role)}\\1c{_color(fill)}\\1a&H{alpha}&\\bord0\\shad0"
@@ -400,6 +409,12 @@ class _Writer:
             self.text(1, start, end, y, line, fill, border=round(size * (0.06 if tinted else 0.03), 1),
                       border_color=_shade(accent, 0.6) if tinted else "#17171B",
                       border_alpha="10" if tinted else "40", blur=0.8)
+        elif look == "marker":  # TODO 22: each line on its own coloured band (highlighter), dark letters on it
+            pad_x, pad_y = size * 0.32, size * 0.10
+            band = accent if line.role != "title_small" else "#FFFFFF"  # the small lead-in sits on white
+            self.pill(0, start, end, WIDTH / 2, y - pad_y, line.width + pad_x * 2, size * 1.16 + pad_y * 2,
+                      band, "10", role=line.role, radius=size * 0.16)
+            self.text(1, start, end, y, line, "#111114" if _is_light(band) else "#FFFFFF")
         elif look == "box" and emphasized:  # coloured pill behind the name tag and the big title line
             pad_x, pad_y = size * 0.46, size * 0.22
             self.pill(0, start, end, WIDTH / 2, y - pad_y, line.width + pad_x * 2, size * 1.14 + pad_y * 2, accent,
@@ -413,6 +428,8 @@ class _Writer:
     def advance(self, line: _Line) -> float:
         look = self.t.caption_look if line.role == "caption" else self.t.accent_look
         pill = look == "box" and line.role in ("title_big", "tag")
+        if look == "marker":
+            return line.size * (LINE_GAP + 0.18)  # bands sit close but never touch
         return line.size * (LINE_GAP + (0.36 if pill else 0.0))  # pills need air between them
 
     def height(self, lines: Sequence[_Line]) -> float:
@@ -532,7 +549,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     # Most titles sit at the top. A template whose title sits mid-frame (like the pill badge) moves it up when the
     # lines are mid-frame too; when a top title meets top lines, the lines wait right under it.
     title_place = template.title_place
-    if title_place == "middle" and place == "middle":
+    hold = style.title_time == "hold"
+    if (title_place == "middle" and place == "middle") or hold:  # a title kept up all along stays out of the middle
         title_place = "top"
     title_band = boxes[0] if boxes else None
     if title_band:
@@ -544,7 +562,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         start, end = ass_time(t), ass_time(t + length)
         caption, label, title = clean_text(scene.caption), clean_text(scene.label), clean_text(draft.title)
         if index == 0 and title:
-            title_end = min(total, max(length, TITLE_MIN_SECONDS))
+            title_end = total if hold else min(total, max(length, TITLE_MIN_SECONDS))
             writer.motion = (None if style.motion == "none"
                              else _Motion(style.motion, _ms(title_end), fade_out=title_end < total - 0.001))
             title_bottom = _title(writer, template, title, start, ass_time(title_end), f"title_{title_place}",
@@ -579,4 +597,5 @@ def options() -> dict:
         "positions": [{"key": AUTO, "label": "템플릿 기본"}] + [{"key": k, "label": v} for k, v in POSITIONS.items()],
         "sizes": [{"key": k, "label": v[0]} for k, v in SIZES.items()],
         "motions": [{"key": k, "label": v} for k, v in MOTIONS.items()],
+        "title_times": [{"key": k, "label": v} for k, v in TITLE_TIMES.items()],
     }

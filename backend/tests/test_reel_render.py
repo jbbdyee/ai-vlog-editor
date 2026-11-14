@@ -173,6 +173,35 @@ class SubtitleTextTests(TestCase):
         self.assertNotIn("\\move", still)
         self.assertEqual(normalize({"motion": "spin"}).motion, "pop")
 
+    def test_title_kept_up_until_the_end_sits_at_the_top_with_the_lines_under_it(self):
+        """TODO 22: popular travel/food reels keep the title on screen for the whole video."""
+        reel = self.three_scenes()
+        total = "0:00:05.00"
+        held = build_ass(reel, TextStyle("clean", position="top", title_time="hold", motion="none"))
+        title = self.line_of(held, "중에 골라줘")
+        self.assertIn(f",{total},", title, "ends with the video")
+        self.assertNotIn("\\fade", title)
+        y_title = int(title.split("\\pos(")[1].split(")")[0].split(",")[1])
+        self.assertLess(y_title, 600, "the clean template's mid-frame title moves to the top when it stays")
+        last = self.line_of(held, "핏 예쁘지?")
+        self.assertGreater(int(last.split("\\pos(")[1].split(")")[0].split(",")[1]), y_title, "lines wait under it")
+        fades = self.line_of(build_ass(reel, TextStyle("pixel", title_time="hold")), "중에 골라줘")
+        self.assertNotRegex(fades, r"\\fade\(255,0,255", "no fade-out when it stays to the end")
+        self.assertEqual(build_ass(reel, TextStyle("pixel")), build_ass(reel, TextStyle("pixel", title_time="first")))
+        self.assertEqual(normalize({"title_time": "later"}).title_time, "first")
+
+    def test_marker_template_puts_every_line_on_its_own_coloured_band(self):
+        """TODO 22: a highlighter band per line (wrapped lines get one each), dark letters on a light band."""
+        reel = draft(scene(1, "s1", 0, 3, "후쿠오카 첫날 라멘 맛집 줄 서서 먹은 후기", hook=True), title="후쿠오카 맛집")
+        ass = build_ass(reel, TextStyle("marker", motion="none"))
+        rows = [r.split("}")[-1] for r in ass.splitlines() if r.startswith("Dialogue")]
+        bands = [r for r in ass.splitlines() if "\\p1" in r]
+        words = [r for r in rows if not r.startswith("m ")]
+        self.assertGreaterEqual(len(words), 3, "title + a wrapped two-line caption")
+        self.assertEqual(len(bands), len(words), "one band per line")
+        self.assertIn("\\1c&H4AE1FF&", " ".join(bands), "yellow band by default")
+        self.assertIn("\\1c&H141111&", self.line_of(ass, "맛집"), "dark letters on a light band")
+
     def test_diary_template_uses_the_ownglyph_hand_and_sparkles_the_lead_in(self):
         from dataclasses import replace
         two = replace(draft(scene(1, "s1", 0, 3, "회 진짜 맛있어", hook=True), title="고흥 회 맛집"), title_lead="새벽에 달려간")

@@ -50,7 +50,7 @@ function videoErrorText(code: string | null | undefined, error?: unknown): strin
   return (code && videoErrors[code]) || "세로 영상을 만들지 못했습니다. 다시 시도해 주세요.";
 }
 
-const defaultTextStyle: ReelTextStyle = { template: "clean", color: "auto", position: "auto", size: "normal", motion: "pop" };
+const defaultTextStyle: ReelTextStyle = { template: "clean", color: "auto", position: "auto", size: "normal", motion: "pop", title_time: "first" };
 
 /** TODO 13: pick the text template, colour, place and size before making the video (TODO 15: and the motion). */
 function TextStylePicker({ options, value, onChange, disabled }: { options: ReelOptions; value: ReelTextStyle; onChange: (value: ReelTextStyle) => void; disabled: boolean }) {
@@ -77,6 +77,10 @@ function TextStylePicker({ options, value, onChange, disabled }: { options: Reel
     </div>
     <Choices label="글자 크기" options={options.text_sizes ?? []} value={value.size} onChange={(size) => onChange({ ...value, size })} disabled={disabled} />
     {(options.text_motions?.length ?? 0) > 0 && <Choices label="글자 움직임" options={options.text_motions ?? []} value={value.motion ?? "pop"} onChange={(motion) => onChange({ ...value, motion })} disabled={disabled} />}
+    {(options.text_title_times?.length ?? 0) > 0 && <div className="space-y-1">
+      <Choices label="제목 띄우기" options={options.text_title_times ?? []} value={value.title_time ?? "first"} onChange={(title_time) => onChange({ ...value, title_time })} disabled={disabled} />
+      <p className="text-xs text-slate-500">'끝까지'를 고르면 제목이 영상 내내 위쪽에 남아요 (인기 여행·맛집 릴스 방식).</p>
+    </div>}
   </div>;
 }
 

@@ -15,12 +15,14 @@ export interface ReelOptions {
   text_sizes?: ReelOption[];
   /** TODO 15: how the title and lines come on screen. */
   text_motions?: ReelOption[];
+  /** TODO 22: title on the first scene only, or kept up until the end. */
+  text_title_times?: ReelOption[];
 }
 
 export interface ReelTextTemplate extends ReelOption { hint: string }
 
 /** How the title, name tags and lines look in the vertical video. "auto" follows the template. */
-export interface ReelTextStyle { template: string; color: string; position: string; size: string; motion?: string }
+export interface ReelTextStyle { template: string; color: string; position: string; size: string; motion?: string; title_time?: string }
 
 export interface ReelScene {
   shot_index: number;

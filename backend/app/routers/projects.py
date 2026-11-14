@@ -752,6 +752,7 @@ class ReelOptionsResponse(BaseModel):
     text_positions: list[ReelOptionItem]
     text_sizes: list[ReelOptionItem]
     text_motions: list[ReelOptionItem] = []  # TODO 15: how the title and lines come on screen
+    text_title_times: list[ReelOptionItem] = []  # TODO 22: title on the first scene only or all along
 
 
 @router.get("/reel-options", response_model=ReelOptionsResponse)
@@ -764,7 +765,7 @@ async def get_reel_options() -> ReelOptionsResponse:
         paces=[ReelOptionItem(key=key, label=f"{label} (장면당 약 {seconds:g}초)") for key, (label, seconds) in PACES.items()],
         lengths=list(SHORT_LENGTHS), default_length=DEFAULT_SHORT_SECONDS,
         text_templates=text["templates"], text_colors=text["colors"], text_positions=text["positions"],
-        text_sizes=text["sizes"], text_motions=text["motions"],
+        text_sizes=text["sizes"], text_motions=text["motions"], text_title_times=text["title_times"],
     )
 
 
@@ -943,6 +944,7 @@ class ReelTextStyle(BaseModel):
     position: str = Field(default=reel_text.AUTO, max_length=24)
     size: str = Field(default="normal", max_length=24)
     motion: str = Field(default=reel_text.DEFAULT_MOTION, max_length=24)  # TODO 15
+    title_time: str = Field(default=reel_text.DEFAULT_TITLE_TIME, max_length=24)  # TODO 22
 
 
 class ReelVideoRequest(BaseModel):
