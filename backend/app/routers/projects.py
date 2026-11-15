@@ -33,7 +33,7 @@ from backend.app.services.project_reel import (ReelEditRefused, ReelOptions, Ree
                                               edit_reel_draft, unused_shots, job_state, reel_output_dir, render_job_state,
                                               saved_draft, start_reel_draft, start_reel_render, undo_reel_draft)
 from backend.app.services.reel_render import draft_fingerprint, saved_video
-from backend.app.services import longform_captions, reel_text
+from backend.app.services import face_mosaic, longform_captions, reel_text
 from backend.app.services.reel_modes import (AUTO_MODE, DEFAULT_PACE, DEFAULT_SHORT_SECONDS, MODE_BY_KEY, MODES, PACES,
                                              SHORT_LENGTHS)
 from backend.app.services.story_length import (LENGTH_OPTIONS, Moment, accept_minutes, fit_to_length, footage_seconds,
@@ -961,6 +961,73 @@ class ReelOptionsResponse(BaseModel):
     text_title_times: list[ReelOptionItem] = []  # TODO 22: title on the first scene only or all along
 
 
+# ---- TODO 25: my face (shared by every project) + hiding other people's faces --------------------------------------
+
+_face_models = face_mosaic.FaceModels()
+
+
+class MyFacePhoto(BaseModel):
+    id: str
+    filename: str
+    url: str
+
+
+class MyFaceResponse(BaseModel):
+    photos: list[MyFacePhoto]
+    model_available: bool
+    threshold: float
+
+
+def _face_dir(request: Request) -> Path:
+    return face_mosaic.face_dir(request.app.state.project_render_output_root)
+
+
+def _my_face_response(request: Request) -> MyFaceResponse:
+    photos = face_mosaic.load_my_face(_face_dir(request)).photos
+    return MyFaceResponse(photos=[MyFacePhoto(id=p["id"], filename=p.get("filename", ""),
+                                              url=f"/projects/my-face/{p['id']}/image") for p in photos],
+                          model_available=_face_models.available(), threshold=face_mosaic.SIM_ME)
+
+
+def _face_http_error(error: face_mosaic.FaceMosaicError) -> HTTPException:
+    return HTTPException(status_code=422 if error.code != "FACE_MODEL_MISSING" else 503,
+                         detail={"code": error.code, "message": error.message or error.code})
+
+
+@router.get("/my-face", response_model=MyFaceResponse)
+async def get_my_face(request: Request) -> MyFaceResponse:
+    return await run_in_threadpool(_my_face_response, request)
+
+
+@router.post("/my-face", response_model=MyFaceResponse)
+async def add_my_face_photo(request: Request, file: UploadFile = File(...)) -> MyFaceResponse:
+    data = await file.read(20 * 1024 * 1024 + 1)
+    if len(data) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail={"code": "FACE_PHOTO_TOO_BIG", "message": "사진은 20MB까지 올릴 수 있습니다."})
+    try:
+        await run_in_threadpool(face_mosaic.add_photo, _face_dir(request), data, file.filename or "photo", _face_models)
+    except face_mosaic.FaceMosaicError as error:
+        raise _face_http_error(error) from error
+    return await run_in_threadpool(_my_face_response, request)
+
+
+@router.delete("/my-face/{photo_id}", response_model=MyFaceResponse)
+async def remove_my_face_photo(request: Request, photo_id: str) -> MyFaceResponse:
+    try:
+        await run_in_threadpool(face_mosaic.remove_photo, _face_dir(request), photo_id)
+    except face_mosaic.FaceMosaicError as error:
+        raise HTTPException(status_code=404, detail={"code": error.code, "message": error.message}) from error
+    return await run_in_threadpool(_my_face_response, request)
+
+
+@router.get("/my-face/{photo_id}/image", response_class=FileResponse)
+async def get_my_face_image(request: Request, photo_id: str) -> FileResponse:
+    path = await run_in_threadpool(face_mosaic.face_image, _face_dir(request), photo_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail={"code": "FACE_PHOTO_MISSING", "message": "No such photo."})
+    return FileResponse(path, media_type="image/jpeg")
+
+
 @router.get("/reel-options", response_model=ReelOptionsResponse)
 async def get_reel_options() -> ReelOptionsResponse:
     """Short-form choices from one settings file (reel_modes), so the screen never has its own copy."""
@@ -1293,6 +1360,10 @@ async def start_project_captioned_video(request: Request, project_id: UUID) -> C
     if srt is None:
         raise HTTPException(status_code=409, detail={"code": "CAPTION_NO_LINES",
                                                      "message": "This render has no spoken lines (SRT)."})
+    # TODO 25: when other people's faces are already hidden on this render, the captions go on top of that video.
+    hidden = face_mosaic.saved_video(face_mosaic.output_dir(request.app.state.project_render_output_root, project_id))
+    if hidden is not None and hidden.render_id == render_id:
+        video = hidden.path
     reason = longform_captions.start_captioning(project_id, video, srt, render_id,
                                                 request.app.state.project_render_output_root)
     if reason is not None:
@@ -1314,6 +1385,82 @@ async def get_project_captioned_video_file(request: Request, project_id: UUID) -
         raise HTTPException(status_code=404, detail={"code": "CAPTION_VIDEO_MISSING", "message": "No captioned video yet."})
     return FileResponse(video.path, media_type="video/mp4", filename="vlog-captioned.mp4",
                         content_disposition_type="inline")
+
+
+class FaceVideoInfo(BaseModel):
+    render_id: str
+    duration_seconds: float
+    file_size_bytes: int
+    frames: int
+    frames_hidden: int
+    faces_hidden: int
+    frames_with_me: int
+    photo_count: int
+    matches_render: bool
+    url: str
+
+
+class FaceVideoStatusResponse(BaseModel):
+    project_id: UUID
+    status: str
+    done: int
+    total: int
+    error_code: str | None = None
+    latest_render_id: str | None = None
+    photo_count: int
+    model_available: bool
+    video: FaceVideoInfo | None = None
+
+
+def _face_video_status(request: Request, project_id: UUID) -> FaceVideoStatusResponse:
+    latest = _latest_render_files(request, project_id)
+    job = face_mosaic.job_state(project_id)
+    video = face_mosaic.saved_video(face_mosaic.output_dir(request.app.state.project_render_output_root, project_id))
+    info = None
+    if video is not None:
+        stamp = int(video.path.stat().st_mtime)
+        info = FaceVideoInfo(render_id=video.render_id, duration_seconds=video.duration_seconds,
+                             file_size_bytes=video.file_size_bytes, photo_count=video.photo_count,
+                             matches_render=latest is not None and latest[0] == video.render_id,
+                             url=f"/projects/{project_id}/face-video/file?v={stamp}", **vars(video.stats))
+    return FaceVideoStatusResponse(project_id=project_id, status=job.status, done=job.done, total=job.total,
+                                   error_code=job.error_code, latest_render_id=latest[0] if latest else None,
+                                   photo_count=len(face_mosaic.load_my_face(_face_dir(request)).photos),
+                                   model_available=_face_models.available(), video=info)
+
+
+@router.post("/{project_id}/face-video", response_model=FaceVideoStatusResponse, status_code=202)
+async def start_project_face_video(request: Request, project_id: UUID) -> FaceVideoStatusResponse:
+    """TODO 25: pixelate every face but mine on the last completed long-form render."""
+    await _snapshot_or_404(request, project_id)
+    latest = await run_in_threadpool(_latest_render_files, request, project_id)
+    if latest is None:
+        raise HTTPException(status_code=409, detail={"code": "FACE_RENDER_MISSING", "message": "Render the long-form video first."})
+    my_face = await run_in_threadpool(face_mosaic.load_my_face, _face_dir(request))
+    if my_face.prints is None:
+        raise HTTPException(status_code=409, detail={"code": "FACE_NOT_REGISTERED", "message": "Register your face photos first."})
+    if not _face_models.available():
+        raise HTTPException(status_code=503, detail={"code": "FACE_MODEL_MISSING", "message": "Face models or OpenCV are missing."})
+    render_id, video, _ = latest
+    reason = face_mosaic.start_blurring(project_id, video, render_id, request.app.state.project_render_output_root,
+                                        my_face, _face_models)
+    if reason is not None:
+        raise HTTPException(status_code=409, detail={"code": reason, "message": "Faces are already being hidden."})
+    return await run_in_threadpool(_face_video_status, request, project_id)
+
+
+@router.get("/{project_id}/face-video", response_model=FaceVideoStatusResponse)
+async def get_project_face_video(request: Request, project_id: UUID) -> FaceVideoStatusResponse:
+    await _snapshot_or_404(request, project_id)
+    return await run_in_threadpool(_face_video_status, request, project_id)
+
+
+@router.get("/{project_id}/face-video/file", response_class=FileResponse)
+async def get_project_face_video_file(request: Request, project_id: UUID) -> FileResponse:
+    video = face_mosaic.saved_video(face_mosaic.output_dir(request.app.state.project_render_output_root, project_id))
+    if video is None:
+        raise HTTPException(status_code=404, detail={"code": "FACE_VIDEO_MISSING", "message": "No face-hidden video yet."})
+    return FileResponse(video.path, media_type="video/mp4", filename="vlog-faces.mp4", content_disposition_type="inline")
 
 def _read_scene_edit_plan_sync(factory, project_id):
     with factory() as session:

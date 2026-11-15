@@ -13,6 +13,7 @@ idna==3.19
 jsonschema==4.26.0
 mcp==2.2.0
 openai==3.19.2
+opencv-python-headless==5.0.0.93
 pydantic==2.13.4
 pydantic_core==2.46.4
 python-dotenv==1.2.2
