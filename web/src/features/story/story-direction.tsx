@@ -1,9 +1,9 @@
-import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
-import { Compass, ListOrdered, LoaderCircle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { Compass, ListOrdered, LoaderCircle, NotebookPen } from "lucide-react";
 import { ApiError } from "@/api/projects";
 import type { ClipRange } from "@/api/edit-render";
-import { formatDuration, getStoryDirection, type StoryDirection } from "@/api/story-direction";
+import { formatDuration, getDayBrief, getStoryDirection, type StoryDirection } from "@/api/story-direction";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -38,10 +38,17 @@ export function toPlanDraft(direction: StoryDirection): StoryPlanDraft {
 export function StoryDirectionCard({ projectId, onPreview, onApply }: { projectId: string; onPreview?: (range: PreviewRange) => void; onApply?: (draft: StoryPlanDraft) => void }) {
   // Keep the last result on screen while a new length is being fitted.
   const [value, setValue] = useState<StoryDirection>();
+  // TODO 23: the user's own "오늘 있었던 일" note, loaded once and sent (and saved) with each fresh recommendation.
+  const [brief, setBrief] = useState("");
+  const [briefTouched, setBriefTouched] = useState(false);
+  const saved = useQuery({ queryKey: ["day-brief", projectId], queryFn: () => getDayBrief(projectId), staleTime: Infinity });
+  useEffect(() => { if (!briefTouched && saved.data) setBrief(saved.data); }, [saved.data, briefTouched]);
   const direction = useMutation({
-    mutationFn: (change?: { targetMinutes: number; from: StoryDirection }) => getStoryDirection(projectId, change),
-    onSuccess: setValue,
+    mutationFn: (change?: { targetMinutes: number; from: StoryDirection }) => getStoryDirection(projectId, change, change ? undefined : brief),
+    // A length change keeps the earlier chapters, so it keeps the note they were made with too.
+    onSuccess: (next, change) => setValue(change ? { ...next, day_brief: change.from.day_brief } : next),
   });
+  const usedBrief = value?.day_brief;
   const fresh = direction.isPending && !direction.variables;
   const refitting = direction.isPending && !!direction.variables;
   const byAi = value?.engine.startsWith("llm:");
@@ -51,6 +58,14 @@ export function StoryDirectionCard({ projectId, onPreview, onApply }: { projectI
       <CardDescription>올린 영상 전체를 보고 어떤 순서로 어떤 이야기를 만들지 챕터로 추천합니다. 아직 저장되지는 않습니다.</CardDescription>
     </CardHeader>
     <CardContent className="space-y-4">
+      <div className="space-y-1.5">
+        <label htmlFor="day-brief" className="flex items-center gap-2 text-sm font-semibold text-slate-100"><NotebookPen size={15} />오늘 있었던 일</label>
+        <textarea id="day-brief" value={brief} maxLength={1000} rows={3} disabled={direction.isPending}
+          onChange={(event) => { setBriefTouched(true); setBrief(event.target.value); }}
+          placeholder="예: 아침엔 교실에서 친구들과 수다, 오후엔 팀 회의에서 내 아이디어 발표, 저녁은 치킨. 제일 재밌었던 건 아침 수다."
+          className="w-full rounded-xl border border-white/15 bg-[#0b1420] px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-300 focus:outline-none disabled:opacity-60" />
+        <p className="text-xs text-slate-500">몇 줄만 적어도 AI가 이 순서와 사건을 이야기의 뼈대로 삼습니다. 추천을 누르면 이 프로젝트에 저장됩니다.</p>
+      </div>
       <Button onClick={() => direction.mutate(undefined)} disabled={direction.isPending}>
         <span className="flex items-center gap-2">{fresh ? <LoaderCircle size={16} className="animate-spin" /> : <Compass size={16} />}{fresh ? "추천 만드는 중… (최대 1분 30초)" : value ? "다시 추천받기" : "추천 편집 방향 만들기"}</span>
       </Button>
@@ -60,6 +75,7 @@ export function StoryDirectionCard({ projectId, onPreview, onApply }: { projectI
           <p className="text-lg font-semibold text-slate-50">{value.title}</p>
           <p className="text-sm text-slate-300">{value.summary}</p>
           <p className="mt-1 text-xs text-slate-500">{byAi ? `AI 추천 (${value.engine.replace("llm:", "")})` : "AI 없이 영상 순서대로 묶은 기본 흐름"}</p>
+          {byAi && usedBrief && <p className="mt-1 text-xs text-cyan-200">'오늘 있었던 일'을 반영한 추천입니다.</p>}
           {value.notes.map((note) => <p key={note} className="text-xs text-amber-200">{note}</p>)}
         </div>
         <div className="space-y-2 rounded-xl border border-cyan-300/20 bg-cyan-300/[.04] p-3" aria-label="목표 길이">

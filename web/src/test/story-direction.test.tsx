@@ -21,11 +21,18 @@ function renderCard(onPreview = vi.fn()) {
   return onPreview;
 }
 
+// TODO 23: the card also loads the saved "오늘 있었던 일" note; answer that request here so `fetcher` sees only story calls.
+function stubFetch(fetcher: (url: string, init?: RequestInit) => Promise<Response>, brief = "") {
+  vi.stubGlobal("fetch", (url: string, init?: RequestInit) => String(url).endsWith("/day-brief")
+    ? Promise.resolve(new Response(JSON.stringify({ text: brief }), { status: 200, headers: { "Content-Type": "application/json" } }))
+    : fetcher(url, init));
+}
+
 beforeEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("recommended story direction", () => {
   it("asks the server and shows chapters with scenes that can be previewed", async () => {
-    const fetcher = vi.fn().mockResolvedValue(json(200, direction)); vi.stubGlobal("fetch", fetcher);
+    const fetcher = vi.fn().mockResolvedValue(json(200, direction)); stubFetch(fetcher);
     const onPreview = renderCard();
     await userEvent.click(screen.getByRole("button", { name: /추천 편집 방향 만들기/ }));
     expect(await screen.findByText("도쿄 여행")).toBeTruthy();
@@ -41,7 +48,7 @@ describe("recommended story direction", () => {
   it("shows the recommended length and changes only the length when another one is picked", async () => {
     const longer = { ...direction, target_minutes: 15, total_seconds: 880, notes: [], chapters: [{ ...direction.chapters[0], scenes: [{ ...scene, clip_end_seconds: 45 }], total_seconds: 45 }] };
     const fetcher = vi.fn().mockResolvedValueOnce(json(200, direction)).mockResolvedValueOnce(json(200, longer));
-    vi.stubGlobal("fetch", fetcher);
+    stubFetch(fetcher);
     renderCard();
     await userEvent.click(screen.getByRole("button", { name: /추천 편집 방향 만들기/ }));
     expect(await screen.findByText(/추천 8분/)).toBeTruthy();
@@ -59,8 +66,24 @@ describe("recommended story direction", () => {
     expect(body.reuse.chapters[0].candidate_ids).toEqual([scene.candidate_id]);
   });
 
+  it("shows the saved day note, sends the edited one with a fresh recommendation, and keeps it on a length change", async () => {
+    const withBrief = { ...direction, day_brief: "아침 수다, 팀 회의 발표" };
+    const fetcher = vi.fn().mockResolvedValueOnce(json(200, withBrief)).mockResolvedValueOnce(json(200, { ...direction, target_minutes: 15, day_brief: "" }));
+    stubFetch(fetcher, "아침 수다");
+    renderCard();
+    const box = await screen.findByDisplayValue("아침 수다");
+    await userEvent.type(box, ", 팀 회의 발표");
+    await userEvent.click(screen.getByRole("button", { name: /추천 편집 방향 만들기/ }));
+    expect(await screen.findByText("'오늘 있었던 일'을 반영한 추천입니다.")).toBeTruthy();
+    expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({ day_brief: "아침 수다, 팀 회의 발표" });
+    await userEvent.click(screen.getByRole("button", { name: "15분" }));
+    await screen.findByRole("button", { name: "15분", pressed: true });
+    expect(JSON.parse(fetcher.mock.calls[1][1].body).day_brief).toBeUndefined();
+    expect(screen.getByText("'오늘 있었던 일'을 반영한 추천입니다.")).toBeTruthy();
+  });
+
   it("explains when scene analysis has not run yet", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(409, { detail: { code: "NO_SCENE_CANDIDATES", message: "x" } })));
+    stubFetch(vi.fn().mockResolvedValue(json(409, { detail: { code: "NO_SCENE_CANDIDATES", message: "x" } })));
     renderCard();
     await userEvent.click(screen.getByRole("button", { name: /추천 편집 방향 만들기/ }));
     expect(await screen.findByText("장면 후보가 없습니다. 먼저 장면 분석을 실행해 주세요.")).toBeTruthy();

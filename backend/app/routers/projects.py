@@ -28,6 +28,7 @@ from backend.app.services.project_processing import process_project
 from backend.app.services.edit_request import MAX_REQUEST_LENGTH
 from backend.app.services.llm_edit_interpreter import interpret_with_llm
 from backend.app.services.story_direction import load_story_inputs, rebuild_direction, recommend_story_direction
+from backend.app.services.day_brief import MAX_CHARS as DAY_BRIEF_MAX_CHARS, load_day_brief, save_day_brief
 from backend.app.services.project_reel import (ReelEditRefused, ReelOptions, ReelProjectNotFound, edit_history,
                                               edit_reel_draft, unused_shots, job_state, reel_output_dir, render_job_state,
                                               saved_draft, start_reel_draft, start_reel_render, undo_reel_draft)
@@ -644,6 +645,11 @@ class StoryDirectionResponse(BaseModel):
     total_seconds: float
     max_seconds: float
     footage_seconds: float
+    day_brief: str = ""  # TODO 23: the "오늘 있었던 일" note this recommendation used
+
+
+class DayBriefBody(BaseModel):
+    text: str = Field(default="", max_length=DAY_BRIEF_MAX_CHARS)
 
 
 class StoryReuseChapter(BaseModel):
@@ -666,6 +672,8 @@ class StoryReuse(BaseModel):
 class StoryDirectionRequest(BaseModel):
     target_minutes: int | None = Field(default=None, ge=1, le=60)
     reuse: StoryReuse | None = None
+    # TODO 23: sent with a fresh recommendation and saved for the project (empty clears it). None = use the saved one.
+    day_brief: str | None = Field(default=None, max_length=DAY_BRIEF_MAX_CHARS)
 
 
 def _load_story_inputs_sync(factory, project_id):
@@ -693,6 +701,7 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
     if not candidates:
         raise HTTPException(status_code=409, detail={"code": "NO_SCENE_CANDIDATES", "message": "Run scene analysis before requesting a story direction."})
     footage = footage_seconds(timing)
+    brief = ""
     if payload.reuse is not None:
         reuse = payload.reuse
         try:
@@ -703,7 +712,11 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
         except ValueError as error:
             raise HTTPException(status_code=409, detail={"code": "STORY_SCENES_GONE", "message": "The earlier recommendation has no scenes left."}) from error
     else:
-        direction = await run_in_threadpool(recommend_story_direction, candidates, filenames, None, footage / 60 or None)
+        output_root = request.app.state.project_render_output_root
+        brief = (save_day_brief(output_root, project_id, payload.day_brief) if payload.day_brief is not None
+                 else load_day_brief(output_root, project_id))
+        direction = await run_in_threadpool(recommend_story_direction, candidates, filenames, None,
+                                            footage / 60 or None, brief)
     if accept_minutes(direction.recommended_minutes, footage):
         recommended = direction.recommended_minutes
         length_reason = direction.length_reason or "AI가 영상 내용을 보고 추천한 길이입니다."
@@ -732,7 +745,14 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
         chapters=chapters, target_minutes=target, recommended_minutes=recommended, length_reason=length_reason,
         length_options=sorted({*LENGTH_OPTIONS, recommended}), total_seconds=fit.total_seconds,
         max_seconds=fit.max_seconds, footage_seconds=round(footage, 3),
+        day_brief=brief,
     )
+
+
+@router.get("/{project_id}/day-brief", response_model=DayBriefBody)
+async def get_project_day_brief(request: Request, project_id: UUID) -> DayBriefBody:
+    """TODO 23: the saved "오늘 있었던 일" note (empty when none)."""
+    return DayBriefBody(text=load_day_brief(request.app.state.project_render_output_root, project_id))
 
 
 class ReelOptionItem(BaseModel):

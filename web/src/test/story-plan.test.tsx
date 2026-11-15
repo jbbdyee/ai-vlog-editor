@@ -22,6 +22,13 @@ const direction = {
   ],
 };
 
+// TODO 23: the card also loads the saved "오늘 있었던 일" note; answer that request here so `fetcher` sees only story calls.
+function stubFetch(fetcher: (url: string, init?: RequestInit) => Promise<Response>, brief = "") {
+  vi.stubGlobal("fetch", (url: string, init?: RequestInit) => String(url).endsWith("/day-brief")
+    ? Promise.resolve(new Response(JSON.stringify({ text: brief }), { status: 200, headers: { "Content-Type": "application/json" } }))
+    : fetcher(url, init));
+}
+
 beforeEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("story direction -> edit plan", () => {
@@ -33,7 +40,7 @@ describe("story direction -> edit plan", () => {
   });
 
   it("the card button hands the draft to the page", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(direction)));
+    stubFetch(vi.fn().mockResolvedValue(response(direction)));
     const onApply = vi.fn();
     const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
     render(<QueryClientProvider client={client}><StoryDirectionCard projectId={project} onApply={onApply} /></QueryClientProvider>);
@@ -49,7 +56,7 @@ describe("story direction -> edit plan", () => {
       if (url.includes("/renders?")) return Promise.resolve(response({ project_id: project, items: [], next_cursor: null }));
       return Promise.resolve(response({ project_id: project, status: "NOT_STARTED", render_id: null, is_active: false, succeeded: false, failed: false, safe_error_code: null, download_available: false, output: null, hard_subtitle_status: "NOT_STARTED", hard_subtitle_error_code: null, hard_subtitle_download_available: false, hard_subtitle_download_url: null }));
     });
-    vi.stubGlobal("fetch", fetcher);
+    stubFetch(fetcher);
     const draft: StoryPlanDraft = { candidateIds: [c, gone, a, b], chapterById: { [c]: "챕터 1. 도착", [a]: "챕터 1. 도착", [b]: "챕터 2. 야경" }, nonce: 1 };
     const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     render(<QueryClientProvider client={client}><EditRender projectId={project} storyDraft={draft} /></QueryClientProvider>);
@@ -74,7 +81,7 @@ describe("story direction -> edit plan", () => {
       if (url.includes("/renders?")) return Promise.resolve(response({ project_id: project, items: [], next_cursor: null }));
       return Promise.resolve(response({ project_id: project, status: "NOT_STARTED", render_id: null, is_active: false, succeeded: false, failed: false, safe_error_code: null, download_available: false, output: null, hard_subtitle_status: "NOT_STARTED", hard_subtitle_error_code: null, hard_subtitle_download_available: false, hard_subtitle_download_url: null }));
     });
-    vi.stubGlobal("fetch", fetcher);
+    stubFetch(fetcher);
     const draft: StoryPlanDraft = { candidateIds: [b, a], chapterById: { [a]: "챕터 1. 연습", [b]: "챕터 1. 연습" }, rangeById: { [a]: { start_seconds: 0, end_seconds: 30 }, [b]: { start_seconds: 35, end_seconds: 65 } }, nonce: 2 };
     const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     render(<QueryClientProvider client={client}><EditRender projectId={project} storyDraft={draft} /></QueryClientProvider>);

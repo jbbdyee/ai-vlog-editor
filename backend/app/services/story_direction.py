@@ -79,12 +79,22 @@ SYSTEM_PROMPT = (
     "챕터를 3~6개 만들되 장면이 적으면 더 적게 만든다. 각 챕터에는 짧은 제목, 보여줄 내용(description), "
     "그렇게 묶고 배치한 이유(reason), 재생 순서대로 장면 번호(scenes)를 적는다. "
     "한 장면은 한 챕터에만 넣고, 이야기에 맞지 않는 장면은 빼도 된다. 챕터 순서가 곧 영상의 흐름이다. "
-    "보통은 시작(도착·준비) → 전개(주요 활동) → 마무리(정리·소감) 흐름이 자연스럽다. "
+    "{shape}"
     "화면 설명이 없으면 대사와 시간 순서로 판단하고, 대사도 없으면 촬영 순서를 따른다. "
     "장면은 나중에 앞뒤로 넓혀서 쓰므로, 이야기에 쓸 만한 장면은 되도록 많이 넣는다. "
     "영상 내용과 목적을 보고 완성 영상에 알맞은 길이를 분 단위로 recommended_minutes에, 그 이유를 length_reason에 적는다 "
     "(보통 원본의 1/5~1/3, 예: 30분짜리 레슨은 5~10분). "
     "목록에 있는 번호만 쓴다. 모든 글은 한국어로 쓴다. JSON만 출력하라."
+)
+DEFAULT_SHAPE = "보통은 시작(도착·준비) → 전개(주요 활동) → 마무리(정리·소감) 흐름이 자연스럽다. "
+SYSTEM_PROMPT = SYSTEM_PROMPT.replace("{shape}", DEFAULT_SHAPE)
+
+# TODO 23: the user's own note about the day goes first in the request and outranks the guesses above.
+BRIEF_RULE = (
+    "사용자가 직접 적은 '오늘 있었던 일'이 함께 온다. 이것이 가장 정확한 정보다. "
+    "그 설명에 나온 사건과 순서를 이야기의 뼈대로 삼고, 챕터 제목·설명도 그 설명의 말과 사건에 맞춘다. "
+    "설명에서 중요하다고 한 일에는 장면을 더 많이 넣는다. 장면 목록과 설명이 다르면 설명을 믿는다. "
+    "챕터를 장면 번호 순서대로 기계적으로 나누지 말고, 설명의 사건마다 어울리는 장면을 골라 묶는다."
 )
 
 
@@ -201,15 +211,20 @@ def rebuild_direction(candidates: Sequence[ActiveCandidateSummary], filenames: d
 
 def recommend_story_direction(candidates: Sequence[ActiveCandidateSummary], filenames: dict[UUID, str],
                               engine: tuple[str, str, Completion] | None = None,
-                              footage_minutes: float | None = None) -> StoryDirection:
+                              footage_minutes: float | None = None, day_brief: str = "") -> StoryDirection:
     scenes = _ordered_scenes(candidates, filenames)
     engine = engine if engine is not None else configured_engine()
     if engine is None:
         return _rule_direction(scenes, "AI 설정이 없어 영상 순서대로 묶었습니다.", None)
     provider, model, complete = engine
+    brief = (day_brief or "").strip()
     try:
         footage = f"원본 영상 전체 길이: 약 {footage_minutes:.0f}분\n" if footage_minutes else ""
-        raw = complete(SYSTEM_PROMPT, f"{footage}장면 목록(번호 1~{len(scenes)}, 영상 {len({s.source_index for s in scenes})}개):\n"
+        brief_block = f"오늘 있었던 일(사용자가 직접 적음):\n{brief}\n\n" if brief else ""
+        # With a note, drop the generic "도착·준비 → 전개 → 마무리" shape so the small model follows the note instead.
+        system = f"{SYSTEM_PROMPT.replace(DEFAULT_SHAPE, '')} {BRIEF_RULE}" if brief else SYSTEM_PROMPT
+        raw = complete(system,
+                       f"{brief_block}{footage}장면 목록(번호 1~{len(scenes)}, 영상 {len({s.source_index for s in scenes})}개):\n"
                                       f"{_scene_table(scenes)}", _constrained_schema(len(scenes)))
         plan = LLMStoryPlan.model_validate_json(raw)
         chapters, notes = _apply(plan, scenes)

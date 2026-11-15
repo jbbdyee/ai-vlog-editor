@@ -35,11 +35,28 @@ export interface StoryDirection {
   total_seconds: number;
   max_seconds: number;
   footage_seconds: number;
+  /** TODO 23: the "오늘 있었던 일" note this recommendation used ("" when none, or when only the length changed). */
+  day_brief?: string;
 }
 
-/** Without a target the server (AI) recommends the length; with `from` only the length changes, the chapters stay. */
-export async function getStoryDirection(id: string, change?: { targetMinutes: number; from: StoryDirection }): Promise<StoryDirection> {
+/** TODO 23: the saved "오늘 있었던 일" note. An old server without it gives "" instead of an error. */
+export async function getDayBrief(id: string): Promise<string> {
+  try {
+    const value = await request<{ text?: unknown }>(`/projects/${id}/day-brief`);
+    return typeof value?.text === "string" ? value.text : "";
+  } catch {
+    return "";
+  }
+}
+
+/** Without a target the server (AI) recommends the length; with `from` only the length changes, the chapters stay.
+ * A fresh recommendation can carry the day note (`dayBrief`), which the server also saves for the project. */
+export async function getStoryDirection(id: string, change?: { targetMinutes: number; from: StoryDirection }, dayBrief?: string): Promise<StoryDirection> {
   const init: RequestInit = { method: "POST" };
+  if (!change && dayBrief !== undefined) {
+    init.headers = { "Content-Type": "application/json" };
+    init.body = JSON.stringify({ day_brief: dayBrief.trim() });
+  }
   if (change) {
     const { from } = change;
     init.headers = { "Content-Type": "application/json" };

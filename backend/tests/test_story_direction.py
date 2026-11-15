@@ -119,3 +119,47 @@ class StoryDirectionApiTests(TestCase):
         response = self.client.post(f"/projects/{empty_id}/story-direction")
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["detail"]["code"], "NO_SCENE_CANDIDATES")
+
+
+class DayBriefTests(TestCase):
+    """TODO 23: the user's "오늘 있었던 일" note goes first in the AI request and is kept per project."""
+
+    def test_brief_leads_the_request_and_adds_the_brief_rule(self):
+        seen = []
+
+        def complete(system, user, schema):
+            seen.append((system, user))
+            return json.dumps({"title": "t", "summary": "s", "chapters": [chapter("도착", [1])]})
+        recommend_story_direction(ALL, NAMES, ("fake", "m", complete), day_brief="  공항 도착, 저녁 라멘이 핵심  ")
+        recommend_story_direction(ALL, NAMES, ("fake", "m", complete))
+        (system, user), (plain_system, plain_user) = seen
+        self.assertTrue(user.startswith("오늘 있었던 일(사용자가 직접 적음):\n공항 도착, 저녁 라멘이 핵심\n"))
+        self.assertIn("설명을 믿는다", system)
+        self.assertNotIn("오늘 있었던 일", plain_user)
+        self.assertNotIn("설명을 믿는다", plain_system)
+        self.assertNotIn("도착·준비", system)  # the generic shape gives way to the note
+        self.assertIn("도착·준비", plain_system)
+
+
+class DayBriefApiTests(TestCase):
+    setUp = qa03.RenderIntegrityApiTests.setUp
+    url = qa03.RenderIntegrityApiTests.url
+
+    def test_brief_is_saved_reused_and_cleared(self):
+        self.assertEqual(self.client.get(self.url("/day-brief")).json(), {"text": ""})
+        seen = []
+
+        def complete(system, user, schema):
+            seen.append(user)
+            return json.dumps({"title": "t", "summary": "s", "chapters": [chapter("하루", [1])]})
+        with patch("backend.app.services.story_direction.configured_engine", return_value=("fake", "m", complete)):
+            first = self.client.post(self.url("/story-direction"), json={"day_brief": "학원에서 팀 회의"})
+            again = self.client.post(self.url("/story-direction"))  # no note sent -> the saved one is used
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual((first.json()["day_brief"], again.json()["day_brief"]), ("학원에서 팀 회의", "학원에서 팀 회의"))
+        self.assertTrue(all("학원에서 팀 회의" in user for user in seen))
+        self.assertEqual(self.client.get(self.url("/day-brief")).json(), {"text": "학원에서 팀 회의"})
+        with patch("backend.app.services.story_direction.configured_engine", return_value=None):
+            cleared = self.client.post(self.url("/story-direction"), json={"day_brief": ""})
+        self.assertEqual(cleared.json()["day_brief"], "")
+        self.assertEqual(self.client.get(self.url("/day-brief")).json(), {"text": ""})
