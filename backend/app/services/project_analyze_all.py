@@ -1,4 +1,4 @@
-"""Server-side "전체 분석": runs transcript → scenes → vision one after another.
+"""Server-side "전체 분석": runs transcript → scenes → vision → voice one after another.
 
 The browser used to hand each step to the next, so a closed or background tab stalled the run.
 This keeps that hand-off on the server. State lives in this process only (lost on restart);
@@ -15,12 +15,13 @@ from threading import Event, Lock
 from uuid import UUID
 
 ACTIVE_STATUSES = frozenset({"QUEUED", "RUNNING"})
-RUNNING_PHASES = frozenset({"transcript", "scenes", "vision"})
+RUNNING_PHASES = frozenset({"transcript", "scenes", "vision", "voice"})
 
 
 @dataclass(frozen=True)
 class AnalyzeAllState:
-    phase: str = "idle"  # idle | transcript | scenes | vision | done | failed
+    phase: str = "idle"  # idle | transcript | scenes | vision | voice | done | failed
+    voice_skipped: bool = False  # TODO 24: ④ 목소리 was skipped because "my voice" is not registered yet
     error: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -44,6 +45,11 @@ class AnalyzeAllSteps:
     vision_needed: Callable[[], bool]
     start_vision: Callable[[], object]
     vision_status: Callable[[], str]
+    # TODO 24 ④ 목소리: optional so older wiring (and tests) keep working without it.
+    voice_registered: Callable[[], bool] = lambda: False
+    voice_needed: Callable[[], bool] = lambda: False
+    start_voice: Callable[[], object] = lambda: None
+    voice_status: Callable[[], str] = lambda: "IDLE"
 
 
 class StepFailed(Exception):
@@ -122,6 +128,17 @@ class AnalyzeAllRegistry:
                 self._wait_while(lambda: steps.vision_status() in ACTIVE_STATUSES)
                 if steps.vision_status() == "FAILED":
                     raise StepFailed("화면 설명이 실패했습니다. 내 컴퓨터의 Ollama가 켜져 있는지 확인해 주세요.")
+
+            # ④ 목소리 (내 목소리를 등록한 경우만)
+            self._set(project_id, phase="voice")
+            if not steps.voice_registered():
+                self._set(project_id, voice_skipped=True)
+            elif steps.voice_status() == "RUNNING" or steps.voice_needed():
+                if steps.voice_status() != "RUNNING":
+                    steps.start_voice()
+                self._wait_while(lambda: steps.voice_status() == "RUNNING")
+                if steps.voice_status() == "FAILED":
+                    raise StepFailed("목소리 분석이 실패했습니다. 대사 목록 카드에서 이유를 확인해 주세요.")
 
             self._set(project_id, phase="done", finished_at=_now())
         except StepFailed as error:

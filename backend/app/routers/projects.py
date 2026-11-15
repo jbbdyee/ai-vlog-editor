@@ -40,6 +40,8 @@ from backend.app.services.story_length import (LENGTH_OPTIONS, Moment, accept_mi
                                                length_notes, load_source_timing, rule_minutes)
 from backend.app.services.project_scene_vision import start_vision, stored_vision_state, vision_status
 from backend.app.services.project_analyze_all import AnalyzeAllSteps
+from backend.app.services import speaker_voice
+from backend.app.services.speaker_voice import VoiceRunRegistry, VoiceSource
 from backend.app.services.project_scene_execution import SceneRunStatus
 from backend.app.services.project_scene_processing import (
     SceneSourceOutcome,
@@ -518,12 +520,14 @@ class AnalyzeAllStatusResponse(BaseModel):
     error: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    voice_skipped: bool = False  # TODO 24: ④ 목소리 skipped because "my voice" is not registered
 
 
 def _analyze_all_response(request: Request, project_id: UUID) -> AnalyzeAllStatusResponse:
     state = request.app.state.project_analyze_all_registry.state(project_id)
     return AnalyzeAllStatusResponse(project_id=project_id, phase=state.phase, running=state.running, error=state.error,
-                                    started_at=state.started_at, finished_at=state.finished_at)
+                                    started_at=state.started_at, finished_at=state.finished_at,
+                                    voice_skipped=state.voice_skipped)
 
 
 def _analyze_all_steps(request: Request, project_id: UUID) -> AnalyzeAllSteps:
@@ -569,6 +573,10 @@ def _analyze_all_steps(request: Request, project_id: UUID) -> AnalyzeAllSteps:
         vision_needed=vision_needed,
         start_vision=lambda: start_vision(project_id, factory, state.source_storage),
         vision_status=lambda: vision_status(project_id)["status"],
+        voice_registered=lambda: _load_my_voice(request, project_id).centroid is not None,
+        voice_needed=lambda: bool(_voice_registry(request).pending(project_id, _voice_sources_sync(request, project_id))),
+        start_voice=lambda: _voice_registry(request).start(project_id, lambda: _voice_sources_sync(request, project_id)),
+        voice_status=lambda: _voice_registry(request).state(project_id).status,
     )
 
 
@@ -585,6 +593,184 @@ async def start_project_analyze_all(request: Request, project_id: UUID) -> Analy
 async def get_project_analyze_all(request: Request, project_id: UUID) -> AnalyzeAllStatusResponse:
     await _snapshot_or_404(request, project_id)
     return _analyze_all_response(request, project_id)
+
+
+# ---------- TODO 24: 대사 목록 · 내 목소리 ----------
+
+def _voice_registry(request: Request) -> VoiceRunRegistry:
+    state = request.app.state
+    registry = getattr(state, "voice_run_registry", None)
+    if registry is None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        registry = VoiceRunRegistry(ThreadPoolExecutor(max_workers=1, thread_name_prefix="cutory-voice"),
+                                    state.project_render_output_root)
+        state.voice_run_registry = registry
+    return registry
+
+
+def _load_my_voice(request: Request, project_id: UUID) -> speaker_voice.MyVoice:
+    return speaker_voice.load_my_voice(request.app.state.project_render_output_root, project_id)
+
+
+class _VoiceProjectMissing(Exception):
+    pass
+
+
+def _transcribed_sources_sync(factory, project_id: UUID) -> list[SourceVideo]:
+    with factory() as session:
+        if session.get(Project, project_id) is None:
+            raise _VoiceProjectMissing
+        rows = session.scalars(select(SourceVideo).where(SourceVideo.project_id == project_id)
+                               .order_by(SourceVideo.original_filename, SourceVideo.created_at)).all()
+        for row in rows:
+            _ = row.transcript  # load while the session is open
+        session.expunge_all()
+        return list(rows)
+
+
+def _segments(source: SourceVideo) -> tuple[dict, ...]:
+    if source.transcript is None or not isinstance(source.transcript.segments, list):
+        return ()
+    return tuple(item for item in source.transcript.segments
+                 if isinstance(item, dict) and str(item.get("text", "")).strip())
+
+
+def _voice_sources_sync(request: Request, project_id: UUID) -> list[VoiceSource]:
+    storage = request.app.state.source_storage
+    return [VoiceSource(source.id, storage.resolve(source.storage_reference), _segments(source))
+            for source in _transcribed_sources_sync(_session_factory(request), project_id) if source.transcript is not None]
+
+
+class TranscriptLineResponse(BaseModel):
+    start_seconds: float
+    end_seconds: float
+    text: str
+    speaker: str | None = None  # me | other | unknown; None = not scored yet (or scored for an older "my voice")
+    score: float | None = None
+    my_voice: bool = False  # this line was registered as "이건 내 목소리"
+
+
+class TranscriptSourceResponse(BaseModel):
+    source_video_id: UUID
+    original_filename: str
+    lines: list[TranscriptLineResponse]
+    voice_current: bool
+
+
+class MyVoiceSampleResponse(BaseModel):
+    source_video_id: UUID
+    start_seconds: float
+    text: str
+
+
+class VoiceRunResponse(BaseModel):
+    status: str
+    done: int
+    total: int
+    error: str | None = None
+
+
+class TranscriptLinesResponse(BaseModel):
+    project_id: UUID
+    sources: list[TranscriptSourceResponse]
+    my_voice: list[MyVoiceSampleResponse]
+    threshold: float
+    model_available: bool
+    voice_run: VoiceRunResponse
+
+
+class MyVoiceRequest(BaseModel):
+    source_video_id: UUID
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(gt=0)
+    text: str = Field(default="", max_length=500)
+
+
+def _transcript_lines_sync(request: Request, project_id: UUID) -> TranscriptLinesResponse:
+    output_root = request.app.state.project_render_output_root
+    registry = _voice_registry(request)
+    voice = speaker_voice.load_my_voice(output_root, project_id)
+    marked = {(item["source_video_id"], round(float(item["start"]), 2)) for item in voice.samples}
+    sources = []
+    for source in _transcribed_sources_sync(_session_factory(request), project_id):
+        segments = _segments(source)
+        stored = speaker_voice.load_speaker_scores(output_root, project_id, source.id) or {}
+        current = bool(voice.version and stored.get("voice_version") == voice.version
+                       and stored.get("line_count") == len(segments))
+        scores = stored.get("scores") if current else None
+        lines = []
+        for index, segment in enumerate(segments):
+            score = scores[index] if scores else None
+            start = float(segment["start_seconds"])
+            lines.append(TranscriptLineResponse(
+                start_seconds=start, end_seconds=float(segment["end_seconds"]), text=str(segment["text"]).strip(),
+                speaker=speaker_voice.speaker_label(score) if scores else None, score=score,
+                my_voice=(str(source.id), round(start, 2)) in marked))
+        sources.append(TranscriptSourceResponse(source_video_id=source.id, original_filename=source.original_filename,
+                                                lines=lines, voice_current=current or not segments))
+    run = registry.state(project_id)
+    return TranscriptLinesResponse(
+        project_id=project_id, sources=sources,
+        my_voice=[MyVoiceSampleResponse(source_video_id=item["source_video_id"], start_seconds=float(item["start"]),
+                                        text=item.get("text", "")) for item in voice.samples],
+        threshold=speaker_voice.MY_VOICE_THRESHOLD,
+        model_available=getattr(registry.embedder, "available", lambda: True)(),
+        voice_run=VoiceRunResponse(status=run.status, done=run.done, total=run.total, error=run.error))
+
+
+@router.get("/{project_id}/transcript-lines", response_model=TranscriptLinesResponse)
+async def get_project_transcript_lines(request: Request, project_id: UUID) -> TranscriptLinesResponse:
+    """TODO 24: every transcript line, with 나/다른 사람 when the voice step has scored it."""
+    try:
+        return await run_in_threadpool(_transcript_lines_sync, request, project_id)
+    except _VoiceProjectMissing as error:
+        raise _project_not_found() from error
+
+
+@router.post("/{project_id}/my-voice", response_model=TranscriptLinesResponse)
+async def add_project_my_voice(request: Request, project_id: UUID, payload: MyVoiceRequest) -> TranscriptLinesResponse:
+    """TODO 24: "이건 내 목소리" — adds this line's voice print to my voice (up to 10 lines are averaged)."""
+    def work():
+        sources = {item.id: item for item in _transcribed_sources_sync(_session_factory(request), project_id)}
+        source = sources.get(payload.source_video_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail={"code": "SOURCE_NOT_FOUND", "message": "영상을 찾을 수 없습니다."})
+        speaker_voice.add_my_voice_sample(
+            request.app.state.project_render_output_root, project_id, source_video_id=source.id,
+            media_path=request.app.state.source_storage.resolve(source.storage_reference),
+            start=payload.start_seconds, end=max(payload.end_seconds, payload.start_seconds + 0.1), text=payload.text,
+            embedder=_voice_registry(request).embedder)
+        return _transcript_lines_sync(request, project_id)
+    try:
+        return await run_in_threadpool(work)
+    except _VoiceProjectMissing as error:
+        raise _project_not_found() from error
+    except speaker_voice.SpeakerVoiceError as error:
+        raise HTTPException(status_code=422, detail={"code": "MY_VOICE_FAILED", "message": str(error)}) from error
+
+
+@router.delete("/{project_id}/my-voice", response_model=TranscriptLinesResponse)
+async def clear_project_my_voice(request: Request, project_id: UUID) -> TranscriptLinesResponse:
+    """TODO 24: forget the registered voice lines (the 나/다른 사람 marks disappear until registered again)."""
+    try:
+        await run_in_threadpool(_transcribed_sources_sync, _session_factory(request), project_id)
+    except _VoiceProjectMissing as error:
+        raise _project_not_found() from error
+    speaker_voice.clear_my_voice(request.app.state.project_render_output_root, project_id)
+    return await run_in_threadpool(_transcript_lines_sync, request, project_id)
+
+
+@router.post("/{project_id}/voice-scan", response_model=VoiceRunResponse, status_code=202)
+async def start_project_voice_scan(request: Request, project_id: UUID) -> VoiceRunResponse:
+    """TODO 24: ④ 목소리 on its own — scores every line that is not up to date with my voice."""
+    await _snapshot_or_404(request, project_id)
+    registry = _voice_registry(request)
+    if not registry.start(project_id, lambda: _voice_sources_sync(request, project_id)):
+        raise HTTPException(status_code=409, detail={"code": "VOICE_SCAN_ALREADY_ACTIVE",
+                                                     "message": "목소리 분석이 이미 진행 중입니다."})
+    run = registry.state(project_id)
+    return VoiceRunResponse(status=run.status, done=run.done, total=run.total, error=run.error)
 
 
 @router.post("/{project_id}/edit-suggestions", response_model=EditSuggestionResponse)

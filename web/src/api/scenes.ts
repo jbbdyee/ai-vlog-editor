@@ -110,7 +110,7 @@ export async function getSceneVision(id: string): Promise<SceneVisionStatus> {
 export async function startSceneVision(id: string): Promise<SceneVisionStatus> {
   return request<SceneVisionStatus>(`/projects/${id}/scene-vision`, { method: "POST" }, 202);
 }
-export type AnalyzeAllPhase = "idle" | "transcript" | "scenes" | "vision" | "done" | "failed";
+export type AnalyzeAllPhase = "idle" | "transcript" | "scenes" | "vision" | "voice" | "done" | "failed";
 /** The server-side "전체 분석" run: it keeps going even after the page is closed. */
 export interface AnalyzeAllStatus {
   project_id: string;
@@ -119,6 +119,8 @@ export interface AnalyzeAllStatus {
   error: string | null;
   started_at: string | null;
   finished_at: string | null;
+  /** TODO 24: ④ 목소리 was skipped because my voice is not registered yet. */
+  voice_skipped?: boolean;
 }
 export async function getAnalyzeAll(id: string): Promise<AnalyzeAllStatus> {
   const value = await request<AnalyzeAllStatus>(`/projects/${id}/analyze-all`);

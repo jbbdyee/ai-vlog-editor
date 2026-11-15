@@ -10,7 +10,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-/** Shows the server-side "전체 분석" run (transcript → scenes → vision); the server hands each step to the next. */
+/** Shows the server-side "전체 분석" run (transcript → scenes → vision → voice); the server hands each step to the next. */
 type Phase = AnalyzeAllPhase;
 type Tone = "ok" | "run" | "warn" | "bad" | "idle";
 
@@ -19,6 +19,7 @@ const phaseLabels: Record<Phase, string> = {
   transcript: "① 대사 받아쓰는 중",
   scenes: "② 장면 찾는 중",
   vision: "③ 화면 설명 만드는 중",
+  voice: "④ 목소리로 내 말 찾는 중",
   done: "전체 분석이 끝났습니다.",
   failed: "전체 분석이 중간에 멈췄습니다.",
 };
@@ -30,7 +31,7 @@ const toneClass: Record<Tone, string> = {
   bad: "border-rose-300/40 text-rose-200",
   idle: "border-white/10 text-slate-500",
 };
-const order: Phase[] = ["transcript", "scenes", "vision"];
+const order: Phase[] = ["transcript", "scenes", "vision", "voice"];
 
 function errorText(error: unknown): string {
   return error instanceof ApiError ? `${error.message}${error.code ? ` (${error.code})` : ""}` : "요청을 완료하지 못했습니다.";
@@ -102,7 +103,7 @@ export function AnalyzeAll({ projectId, pollMs = 2000 }: { projectId: string; po
   const wasRunning = useRef(false);
   useEffect(() => {
     if (wasRunning.current && !running) {
-      for (const key of ["project", "processing", "scene-processing", "scene-diagnostics", "scene-candidates", "scene-vision"]) void client.invalidateQueries({ queryKey: [key, projectId] });
+      for (const key of ["project", "processing", "scene-processing", "scene-diagnostics", "scene-candidates", "scene-vision", "transcript-lines"]) void client.invalidateQueries({ queryKey: [key, projectId] });
     }
     wasRunning.current = running;
   }, [running, client, projectId]);
@@ -127,18 +128,20 @@ export function AnalyzeAll({ projectId, pollMs = 2000 }: { projectId: string; po
   const candidateList = candidates.data?.candidates ?? [];
   const stepTone = (step: Phase): Tone => {
     if (phase === step) return "run";
+    if (step === "voice" && phase === "done" && run.data?.voice_skipped) return "idle";
     if (phase === "done" || (running && order.indexOf(phase) > order.indexOf(step))) return "ok";
     return "idle";
   };
 
   return <Card id="analyze-all" className="mt-3 scroll-mt-24 sm:mt-6 sm:scroll-mt-3">
-    <CardHeader><div className="mb-2 flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-300/10 text-cyan-300 sm:mb-4 sm:h-11 sm:w-11"><ListChecks size={20} /></div><CardTitle>전체 분석</CardTitle><CardDescription>버튼 한 번으로 올린 영상 전체를 ① 대사 → ② 장면 → ③ 화면 설명 순서로 분석합니다. 이미 끝난 단계는 건너뜁니다. 모두 내 컴퓨터에서 돌아갑니다.</CardDescription></CardHeader>
+    <CardHeader><div className="mb-2 flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-300/10 text-cyan-300 sm:mb-4 sm:h-11 sm:w-11"><ListChecks size={20} /></div><CardTitle>전체 분석</CardTitle><CardDescription>버튼 한 번으로 올린 영상 전체를 ① 대사 → ② 장면 → ③ 화면 설명 → ④ 목소리 순서로 분석합니다. ④는 대사 목록에서 내 목소리를 등록했을 때만 합니다. 이미 끝난 단계는 건너뜁니다. 모두 내 컴퓨터에서 돌아갑니다.</CardDescription></CardHeader>
     <CardContent className="space-y-3 sm:space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[.03] p-4">
         <div className="min-w-0"><p className="text-xs text-slate-500">지금 단계</p><p role="status" className="mt-1 font-medium text-white">{phaseLabels[phase]}</p></div>
-        <div className="flex flex-wrap gap-2">{order.map((step, index) => <Chip key={step} tone={stepTone(step)}>{["① 대사", "② 장면", "③ 화면 설명"][index]}</Chip>)}</div>
+        <div className="flex flex-wrap gap-2">{order.map((step, index) => <Chip key={step} tone={stepTone(step)}>{["① 대사", "② 장면", "③ 화면 설명", "④ 목소리"][index]}</Chip>)}</div>
       </div>
       <p className="text-sm text-slate-300">영상 {sources.length}개 중 대사 완료 {completed}개 · 추천 장면 {candidateList.length}개 · 화면 설명 {candidateList.filter((item) => item.visual_caption).length}개</p>
+      {phase === "done" && run.data?.voice_skipped && <p className="text-xs text-slate-400">④ 목소리는 건너뛰었습니다. 아래 '대사 목록'에서 내가 말한 줄에 [이건 내 목소리]를 누르면 줄마다 나/다른 사람이 표시됩니다.</p>}
       {error && <Alert>{error}</Alert>}
       {processing.isError && <Alert>{errorText(processing.error)}</Alert>}
       <div className="flex flex-wrap gap-3">

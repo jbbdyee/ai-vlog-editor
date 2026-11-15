@@ -12,6 +12,7 @@ import { StoryDirectionCard, type StoryPlanDraft } from "@/features/story/story-
 import { SourcePreview, type PreviewRange } from "@/features/projects/source-preview";
 import { UploadQueue } from "@/features/projects/upload-queue";
 import { AnalyzeAll } from "@/features/projects/analyze-all";
+import { TranscriptLines } from "@/features/projects/transcript-lines";
 import { ReelDraftCard } from "@/features/reels/reel-draft";
 
 function errorText(error: unknown): string {
@@ -110,6 +111,7 @@ export function ProjectPage() {
     </div>
     <AnalyzeAll key={`analyze:${projectId}`} projectId={projectId} />
     <SourcePreview key={`preview:${projectId}`} projectId={projectId} sources={status?.sources ?? []} range={previewRange?.sourceId && status?.sources.some((source) => source.source_video_id === previewRange.sourceId) ? previewRange : null} onClearRange={() => setPreviewRange(null)} />
+    <TranscriptLines key={`lines:${projectId}`} projectId={projectId} onPreview={preview} />
     <SceneAnalysis key={`scene:${projectId}`} projectId={projectId} processing={status} onPreview={preview} />
     <ReelDraftCard key={`reel:${projectId}`} projectId={projectId} onPreview={preview} />
     <StoryDirectionCard key={`story:${projectId}`} projectId={projectId} onPreview={preview} onApply={setStoryDraft} />

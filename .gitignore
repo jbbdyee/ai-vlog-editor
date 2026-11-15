@@ -246,3 +246,6 @@ outputs/
 evaluation/audio/*
 !evaluation/audio/.gitkeep
 /assets/reel-fonts/
+
+# 목소리 모델 등 큰 모델 파일 (TODO 24)
+/assets/models/
