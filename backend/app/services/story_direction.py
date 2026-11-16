@@ -211,7 +211,8 @@ def rebuild_direction(candidates: Sequence[ActiveCandidateSummary], filenames: d
 
 def recommend_story_direction(candidates: Sequence[ActiveCandidateSummary], filenames: dict[UUID, str],
                               engine: tuple[str, str, Completion] | None = None,
-                              footage_minutes: float | None = None, day_brief: str = "") -> StoryDirection:
+                              footage_minutes: float | None = None, day_brief: str = "",
+                              rules: Sequence[str] = ()) -> StoryDirection:
     scenes = _ordered_scenes(candidates, filenames)
     engine = engine if engine is not None else configured_engine()
     if engine is None:
@@ -221,11 +222,15 @@ def recommend_story_direction(candidates: Sequence[ActiveCandidateSummary], file
     try:
         footage = f"원본 영상 전체 길이: 약 {footage_minutes:.0f}분\n" if footage_minutes else ""
         brief_block = f"오늘 있었던 일(사용자가 직접 적음):\n{brief}\n\n" if brief else ""
+        # TODO 27: the user's saved editing rules (shared by every project). Placed after the scene table and kept
+        # short: in front of it, gemma3:4b wrote long chapter texts and its JSON got cut off.
+        rule_block = ("\n\n내 편집 규칙(장면 고르기·순서에 참고, 장면 길이는 프로그램이 맞춤. 설명은 평소처럼 짧게):\n"
+                      + "\n".join(f"- {rule}" for rule in rules)) if rules else ""
         # With a note, drop the generic "도착·준비 → 전개 → 마무리" shape so the small model follows the note instead.
         system = f"{SYSTEM_PROMPT.replace(DEFAULT_SHAPE, '')} {BRIEF_RULE}" if brief else SYSTEM_PROMPT
         raw = complete(system,
                        f"{brief_block}{footage}장면 목록(번호 1~{len(scenes)}, 영상 {len({s.source_index for s in scenes})}개):\n"
-                                      f"{_scene_table(scenes)}", _constrained_schema(len(scenes)))
+                                      f"{_scene_table(scenes)}{rule_block}", _constrained_schema(len(scenes)))
         plan = LLMStoryPlan.model_validate_json(raw)
         chapters, notes = _apply(plan, scenes)
         return StoryDirection(plan.title.strip(), plan.summary.strip(), chapters, f"llm:{provider}/{model}", notes,

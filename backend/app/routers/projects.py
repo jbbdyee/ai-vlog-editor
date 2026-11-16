@@ -33,7 +33,7 @@ from backend.app.services.project_reel import (ReelEditRefused, ReelOptions, Ree
                                               edit_reel_draft, unused_shots, job_state, reel_output_dir, render_job_state,
                                               saved_draft, start_reel_draft, start_reel_render, undo_reel_draft)
 from backend.app.services.reel_render import draft_fingerprint, saved_video
-from backend.app.services import edit_brain, face_mosaic, longform_captions, longform_chat, reel_text
+from backend.app.services import edit_brain, edit_rules, face_mosaic, longform_captions, longform_chat, reel_text, scene_thumbs
 from backend.app.services.reel_modes import (AUTO_MODE, DEFAULT_PACE, DEFAULT_SHORT_SECONDS, MODE_BY_KEY, MODES, PACES,
                                              SHORT_LENGTHS)
 from backend.app.services.story_length import (LENGTH_OPTIONS, Moment, accept_minutes, fit_to_length, footage_seconds,
@@ -832,6 +832,8 @@ class StoryDirectionResponse(BaseModel):
     max_seconds: float
     footage_seconds: float
     day_brief: str = ""  # TODO 23: the "오늘 있었던 일" note this recommendation used
+    rules_used: list[str] = []  # TODO 27: the "내 편집 규칙" this recommendation read
+    max_cut_seconds: float | None = None  # TODO 27: a "N초 넘지 않게" rule kept on every scene
 
 
 class DayBriefBody(BaseModel):
@@ -888,6 +890,7 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
         raise HTTPException(status_code=409, detail={"code": "NO_SCENE_CANDIDATES", "message": "Run scene analysis before requesting a story direction."})
     footage = footage_seconds(timing)
     brief = ""
+    rules_used: list[str] = []
     if payload.reuse is not None:
         reuse = payload.reuse
         try:
@@ -901,8 +904,10 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
         output_root = request.app.state.project_render_output_root
         brief = (save_day_brief(output_root, project_id, payload.day_brief) if payload.day_brief is not None
                  else load_day_brief(output_root, project_id))
+        rules = edit_rules.rule_texts(output_root)
         direction = await run_in_threadpool(recommend_story_direction, candidates, filenames, None,
-                                            footage / 60 or None, brief)
+                                            footage / 60 or None, brief, rules)
+        rules_used = rules if direction.engine.startswith("llm:") else []
     if accept_minutes(direction.recommended_minutes, footage):
         recommended = direction.recommended_minutes
         length_reason = direction.length_reason or "AI가 영상 내용을 보고 추천한 길이입니다."
@@ -915,6 +920,15 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
     fit = fit_to_length([Moment(s.candidate.source_video_id, float(s.candidate.start_seconds), float(s.candidate.end_seconds))
                          for s in scenes], timing, target * 60)
     clip_of = {s.candidate.candidate_id: clip for s, clip in zip(scenes, fit.clips)}
+    # TODO 27: "한 컷은 N초 넘지 않게" is also kept by Python (the small local AI cannot set scene lengths)
+    max_cut = edit_rules.max_cut_seconds(edit_rules.rule_texts(request.app.state.project_render_output_root))
+    capped = 0
+    if max_cut:
+        for key, (clip_start, clip_end) in list(clip_of.items()):
+            if clip_end - clip_start > max_cut + 1e-3:
+                middle = (clip_start + clip_end) / 2
+                clip_of[key] = (round(middle - max_cut / 2, 3), round(middle + max_cut / 2, 3))
+                capped += 1
     chapters = []
     for chapter in direction.chapters:
         scene_rows = [StorySceneResponse(
@@ -927,11 +941,14 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
             total_seconds=round(sum(r.clip_end_seconds - r.clip_start_seconds for r in scene_rows), 3)))
     return StoryDirectionResponse(
         project_id=project_id, title=direction.title, summary=direction.summary, engine=direction.engine,
-        notes=list(direction.notes) + list(length_notes(fit)), fallback_reason=direction.fallback_reason,
+        notes=list(direction.notes) + list(length_notes(fit))
+        + ([f"내 규칙대로 {max_cut:g}초가 넘는 장면 {capped}개를 {max_cut:g}초로 줄였습니다."] if capped else []),
+        fallback_reason=direction.fallback_reason,
         chapters=chapters, target_minutes=target, recommended_minutes=recommended, length_reason=length_reason,
-        length_options=sorted({*LENGTH_OPTIONS, recommended}), total_seconds=fit.total_seconds,
+        length_options=sorted({*LENGTH_OPTIONS, recommended}),
+        total_seconds=round(sum(chapter.total_seconds for chapter in chapters), 3) if capped else fit.total_seconds,
         max_seconds=fit.max_seconds, footage_seconds=round(footage, 3),
-        day_brief=brief,
+        day_brief=brief, rules_used=rules_used, max_cut_seconds=max_cut,
     )
 
 
@@ -966,7 +983,17 @@ class ChatUnusedResponse(BaseModel):
     speech: str
 
 
+class ChatChoiceResponse(BaseModel):
+    candidate_id: UUID
+    source_video_id: UUID
+    start_seconds: float
+    end_seconds: float
+    kind: str
+    label: str
+
+
 class ChatMessageResponse(BaseModel):
+    id: str | None = None
     role: str
     text: str
     at_seconds: float | None = None
@@ -976,6 +1003,11 @@ class ChatMessageResponse(BaseModel):
     error: str | None = None
     changed: list[str] = []
     undo: bool = False
+    undone: bool = False  # TODO 27: taken back with 되돌리기 (not sent to the AI again)
+    no_change: bool = False  # TODO 27: nothing in the plan changed
+    choices: list[ChatChoiceResponse] = []  # TODO 27: "다른 장면으로" pictures
+    for_cut: int | None = None
+    picked: int | None = None
 
 
 class ChatBrainResponse(BaseModel):
@@ -1055,7 +1087,8 @@ def _chat_view(session: Session, output_root: Path, project_id: UUID,
 
 
 def _chat_http_error(error: longform_chat.ChatEditError) -> HTTPException:
-    code = 409 if error.code in ("NO_EDIT_PLAN", "NOTHING_TO_UNDO", "UNDO_SCENES_GONE") else \
+    code = 409 if error.code in ("NO_EDIT_PLAN", "NOTHING_TO_UNDO", "UNDO_SCENES_GONE", "CHOICE_ALREADY_PICKED",
+                                 "CHOICE_STALE") else \
         503 if error.code == "BRAIN_UNAVAILABLE" else 502 if error.code.startswith(("LLM_", "CLAUDE_")) else 422
     return HTTPException(status_code=code, detail={"code": error.code, "message": error.message})
 
@@ -1089,7 +1122,72 @@ async def send_project_chat_edit(request: Request, project_id: UUID, payload: Ch
     key = payload.brain if payload.brain in brains else edit_brain.default_brain_key(brains)
     brain = brains.get(key) if key else None
     return await _chat_work(request, project_id, lambda session, root: longform_chat.send_message(
-        session, root, project_id, payload.message, payload.at_seconds, brain))
+        session, root, project_id, payload.message, payload.at_seconds, brain, edit_rules.rule_texts(root)))
+
+
+class EditRuleResponse(BaseModel):
+    id: str
+    text: str
+
+
+class EditRulesResponse(BaseModel):
+    rules: list[EditRuleResponse]
+
+
+class EditRuleRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+
+
+def _rules_view(rules: list[dict]) -> EditRulesResponse:
+    return EditRulesResponse(rules=[EditRuleResponse(id=rule["id"], text=rule["text"]) for rule in rules])
+
+
+@router.get("/edit-rules", response_model=EditRulesResponse)
+async def get_edit_rules(request: Request) -> EditRulesResponse:
+    """TODO 27: "내 편집 규칙", shared by every project."""
+    return _rules_view(edit_rules.load_rules(request.app.state.project_render_output_root))
+
+
+@router.post("/edit-rules", response_model=EditRulesResponse)
+async def add_edit_rule(request: Request, payload: EditRuleRequest) -> EditRulesResponse:
+    """TODO 27: save one chat sentence as a rule (the [00:32] stamp is dropped, same text is kept once)."""
+    try:
+        return _rules_view(edit_rules.add_rule(request.app.state.project_render_output_root, payload.text))
+    except edit_rules.EditRuleError as error:
+        raise HTTPException(status_code=422, detail={"code": error.code, "message": error.message}) from error
+
+
+@router.delete("/edit-rules/{rule_id}", response_model=EditRulesResponse)
+async def delete_edit_rule(request: Request, rule_id: str) -> EditRulesResponse:
+    return _rules_view(edit_rules.delete_rule(request.app.state.project_render_output_root, rule_id))
+
+
+class ChatPickRequest(BaseModel):
+    message_id: str = Field(min_length=1, max_length=40)
+    choice: int = Field(ge=-1, le=20)
+
+
+@router.post("/{project_id}/chat-edit/pick", response_model=ChatEditResponse)
+async def pick_project_chat_edit(request: Request, project_id: UUID, payload: ChatPickRequest) -> ChatEditResponse:
+    """TODO 27: put the picked "다른 장면으로" picture in place of the cut (-1 keeps the cut)."""
+    return await _chat_work(request, project_id, lambda session, root: longform_chat.pick_choice(
+        session, root, project_id, payload.message_id, payload.choice))
+
+
+@router.get("/{project_id}/sources/{source_id}/thumb", response_class=FileResponse)
+async def get_project_source_thumb(request: Request, project_id: UUID, source_id: UUID,
+                                   at: float = Query(ge=0, le=86400)) -> FileResponse:
+    """TODO 27: a small picture (320 wide) of one moment of a source video, made once and reused."""
+    storage = request.app.state.source_storage
+    if not isinstance(storage, LocalSourceStorage):
+        raise HTTPException(status_code=500, detail={"code": "SOURCE_STORAGE_UNAVAILABLE"})
+    path = await run_in_threadpool(_source_media_path, _session_factory(request), storage, project_id, source_id)
+    try:
+        thumb = await run_in_threadpool(scene_thumbs.scene_thumb, request.app.state.project_render_output_root,
+                                        project_id, source_id, path, round(at, 3))
+    except scene_thumbs.ThumbError as error:
+        raise HTTPException(status_code=500, detail={"code": "THUMB_FAILED"}) from error
+    return FileResponse(thumb, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
 
 @router.post("/{project_id}/chat-edit/undo", response_model=ChatEditResponse)

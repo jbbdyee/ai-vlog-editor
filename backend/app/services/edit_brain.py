@@ -1,7 +1,7 @@
 """TODO 26: the "편집 두뇌" for chat editing — one place that picks which AI reads a sentence.
 
 Two brains fill the same small JSON form:
-- ``ollama``: the local AI already used by the rest of the app (free, CUTORY_EDIT_LLM_MODEL, default gemma3:4b).
+- ``ollama``: the local AI (free; CUTORY_CHAT_LLM_MODEL, default qwen2.5:7b since TODO 27).
 - ``claude``: Claude through the official SDK (paid, needs ANTHROPIC_API_KEY; model CUTORY_CLAUDE_MODEL,
   default claude-haiku-5-5, the cheapest one).
 
@@ -18,9 +18,10 @@ from typing import Callable
 
 import httpx
 
-from backend.app.services.llm_edit_interpreter import DEFAULT_OLLAMA_MODEL, LLMEditError
+from backend.app.services.llm_edit_interpreter import OLLAMA_NUM_CTX, LLMEditError
 
 DEFAULT_CLAUDE_MODEL = "claude-haiku-5-5"
+DEFAULT_CHAT_OLLAMA_MODEL = "qwen2.5:7b"
 TIMEOUT_SECONDS = 90.0
 # USD per 1M tokens (input, output). Used only for the rough cost shown on screen.
 PRICES = {"claude-haiku-5-5": (0.10, 0.50), "claude-sonnet-5-5": (2.0, 10.0), "claude-opus-5-5": (4.0, 20.0)}
@@ -53,7 +54,7 @@ def _ollama(model: str, base: str) -> Brain:
     def ask(system: str, user: str, schema: dict) -> BrainReply:
         try:
             response = httpx.post(f"{base}/api/chat", timeout=TIMEOUT_SECONDS, json={
-                "model": model, "stream": False, "format": schema, "options": {"temperature": 0},
+                "model": model, "stream": False, "format": schema, "options": {"temperature": 0, "num_ctx": OLLAMA_NUM_CTX},
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
         except httpx.TimeoutException as error:
             raise LLMEditError("LLM_TIMEOUT") from error
@@ -115,7 +116,9 @@ def available_brains() -> dict[str, Brain]:
         else:
             brains["claude"] = _claude(os.environ.get("CUTORY_CLAUDE_MODEL") or DEFAULT_CLAUDE_MODEL, key)
     if os.environ.get("CUTORY_EDIT_LLM_PROVIDER", "").strip().lower() == "ollama":
-        model = os.environ.get("CUTORY_EDIT_LLM_MODEL") or DEFAULT_OLLAMA_MODEL
+        # TODO 27: chat editing has its own local model (qwen2.5:7b did best in the TODO 26 trial); the story
+        # direction and reel captions keep CUTORY_EDIT_LLM_MODEL.
+        model = os.environ.get("CUTORY_CHAT_LLM_MODEL") or DEFAULT_CHAT_OLLAMA_MODEL
         base = (os.environ.get("OLLAMA_BASE_URL") or "http://127.0.0.1:11434").rstrip("/")
         brains["ollama"] = _ollama(model, base)
     return brains

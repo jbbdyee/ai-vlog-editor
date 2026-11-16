@@ -1,0 +1,39 @@
+"""TODO 27: "내 편집 규칙" saved from the chat, shared by every project, read by the story direction."""
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from backend.app.services import edit_rules, story_direction
+
+
+class RuleFileTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp()) / "projects"  # like outputs/projects
+
+    def test_add_strips_stamp_dedupes_and_deletes(self):
+        rules = edit_rules.add_rule(self.root, "[01:00]  한 컷은 8초   넘지 않게")
+        self.assertEqual([rule["text"] for rule in rules], ["한 컷은 8초 넘지 않게"])
+        self.assertTrue((self.root.parent / "me" / "edit_rules.json").is_file())
+        self.assertEqual(len(edit_rules.add_rule(self.root, "한 컷은 8초 넘지 않게")), 1)
+        self.assertEqual(edit_rules.delete_rule(self.root, rules[0]["id"]), [])
+        with self.assertRaises(edit_rules.EditRuleError):
+            edit_rules.add_rule(self.root, "  ")
+
+    def test_max_cut_seconds(self):
+        self.assertEqual(edit_rules.max_cut_seconds(["한 컷은 8초 넘지 않게", "친구 수다는 살려"]), 8.0)
+        self.assertEqual(edit_rules.max_cut_seconds(["컷은 10초 이하로", "5초를 넘기지 마"]), 5.0)
+        self.assertIsNone(edit_rules.max_cut_seconds(["공항 장면은 꼭 넣어"]))
+
+
+class StoryPromptTests(unittest.TestCase):
+    def test_rules_go_into_the_prompt(self):
+        seen = {}
+
+        def complete(system, user, schema):
+            seen["user"] = user
+            return "not json"  # falls back to the rule direction; the prompt is what matters here
+        story_direction.recommend_story_direction([], {}, ("ollama", "test", complete), None, "",
+                                                  ["한 컷은 8초 넘지 않게"])
+        self.assertIn("내 편집 규칙", seen["user"])
+        self.assertIn("- 한 컷은 8초 넘지 않게", seen["user"])

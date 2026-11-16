@@ -26,6 +26,9 @@ from backend.app.services.project_scene_candidates import ActiveCandidateSummary
 
 DEFAULT_OLLAMA_MODEL = "gemma3:4b"
 TIMEOUT_SECONDS = 90.0
+# TODO 27: Ollama keeps only 4096 tokens by default. The scene table of a 30+ scene day already takes ~3500,
+# so the answer was cut off mid-JSON (done_reason "length"). 8192 leaves room for the answer.
+OLLAMA_NUM_CTX = 8192
 EVIDENCE_LABELS = {"TRANSCRIPT_REACTION_CUE": "리액션 발화", "TRANSCRIPT_STRUCTURE": "말하는 구간",
                    "AUDIO_ACTIVITY": "소리 활동", "VISUAL_ACTIVITY": "화면 움직임"}
 
@@ -85,7 +88,7 @@ def _ollama_completion(base: str, model: str) -> Completion:
     def call(system: str, user: str, schema: dict) -> str:
         try:
             response = httpx.post(f"{base}/api/chat", timeout=TIMEOUT_SECONDS, json={
-                "model": model, "stream": False, "format": schema, "options": {"temperature": 0},
+                "model": model, "stream": False, "format": schema, "options": {"temperature": 0, "num_ctx": OLLAMA_NUM_CTX},
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
         except httpx.TimeoutException as error:
             raise LLMEditError("LLM_TIMEOUT") from error

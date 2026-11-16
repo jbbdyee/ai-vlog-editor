@@ -26,7 +26,18 @@ export interface ChatUnused {
   speech: string;
 }
 
+/** TODO 27: one "다른 장면으로" picture to put in place of a cut. */
+export interface ChatChoice {
+  candidate_id: string;
+  source_video_id: string;
+  start_seconds: number;
+  end_seconds: number;
+  kind: "unused" | "same";
+  label: string;
+}
+
 export interface ChatMessage {
+  id?: string | null;
   role: "user" | "assistant";
   text: string;
   at_seconds: number | null;
@@ -36,6 +47,11 @@ export interface ChatMessage {
   error: string | null;
   changed: string[];
   undo: boolean;
+  undone?: boolean;
+  no_change?: boolean;
+  choices?: ChatChoice[];
+  for_cut?: number | null;
+  picked?: number | null;
 }
 
 export interface ChatEditView {
@@ -60,6 +76,31 @@ export function getChatEdit(id: string): Promise<ChatEditView> {
 
 export function sendChatEdit(id: string, message: string, atSeconds: number | null, brain: string | null): Promise<ChatEditView> {
   return request<ChatEditView>(`/projects/${id}/chat-edit`, { method: "POST", headers: json, body: JSON.stringify({ message, at_seconds: atSeconds, brain }) });
+}
+
+/** TODO 27: put the picked picture in place of the cut (-1 = keep the cut). */
+export function pickChatChoice(id: string, messageId: string, choice: number): Promise<ChatEditView> {
+  return request<ChatEditView>(`/projects/${id}/chat-edit/pick`, { method: "POST", headers: json, body: JSON.stringify({ message_id: messageId, choice }) });
+}
+
+/** TODO 27: a small picture of one moment of a source video. */
+export function thumbUrl(projectId: string, sourceId: string, seconds: number): string {
+  return `/api/projects/${projectId}/sources/${sourceId}/thumb?at=${seconds.toFixed(3)}`;
+}
+
+/** TODO 27: "내 편집 규칙", shared by every project. */
+export interface EditRule { id: string; text: string }
+
+export async function getEditRules(): Promise<EditRule[]> {
+  return (await request<{ rules?: EditRule[] }>("/projects/edit-rules")).rules ?? [];
+}
+
+export async function addEditRule(text: string): Promise<EditRule[]> {
+  return (await request<{ rules: EditRule[] }>("/projects/edit-rules", { method: "POST", headers: json, body: JSON.stringify({ text }) })).rules;
+}
+
+export async function deleteEditRule(id: string): Promise<EditRule[]> {
+  return (await request<{ rules: EditRule[] }>(`/projects/edit-rules/${encodeURIComponent(id)}`, { method: "DELETE" })).rules;
 }
 
 export function undoChatEdit(id: string): Promise<ChatEditView> {

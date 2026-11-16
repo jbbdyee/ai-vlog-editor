@@ -46,7 +46,7 @@ export function StoryDirectionCard({ projectId, onPreview, onApply }: { projectI
   const direction = useMutation({
     mutationFn: (change?: { targetMinutes: number; from: StoryDirection }) => getStoryDirection(projectId, change, change ? undefined : brief),
     // A length change keeps the earlier chapters, so it keeps the note they were made with too.
-    onSuccess: (next, change) => setValue(change ? { ...next, day_brief: change.from.day_brief } : next),
+    onSuccess: (next, change) => setValue(change ? { ...next, day_brief: change.from.day_brief, rules_used: change.from.rules_used } : next),
   });
   const usedBrief = value?.day_brief;
   const fresh = direction.isPending && !direction.variables;
@@ -76,6 +76,7 @@ export function StoryDirectionCard({ projectId, onPreview, onApply }: { projectI
           <p className="text-sm text-slate-300">{value.summary}</p>
           <p className="mt-1 text-xs text-slate-500">{byAi ? `AI 추천 (${value.engine.replace("llm:", "")})` : "AI 없이 영상 순서대로 묶은 기본 흐름"}</p>
           {byAi && usedBrief && <p className="mt-1 text-xs text-cyan-200">'오늘 있었던 일'을 반영한 추천입니다.</p>}
+          {byAi && (value.rules_used?.length ?? 0) > 0 && <p className="mt-1 text-xs text-fuchsia-200" title={value.rules_used?.join(" · ")}>내 규칙 {value.rules_used?.length}개 반영: {value.rules_used?.join(" · ")}</p>}
           {value.notes.map((note) => <p key={note} className="text-xs text-amber-200">{note}</p>)}
         </div>
         <div className="space-y-2 rounded-xl border border-cyan-300/20 bg-cyan-300/[.04] p-3" aria-label="목표 길이">

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, LoaderCircle, Send, Undo2, X } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
-import { clock, cutAt, getChatEdit, sendChatEdit, startFromStoryDirection, undoChatEdit, type ChatCut, type ChatEditView, type ChatMessage } from "@/api/chat-edit";
+import { addEditRule, clock, cutAt, deleteEditRule, getChatEdit, getEditRules, pickChatChoice, sendChatEdit, startFromStoryDirection, thumbUrl, undoChatEdit, type ChatCut, type ChatEditView, type ChatMessage } from "@/api/chat-edit";
 import { ApiError, getProject, isProjectId, sourceMediaUrl } from "@/api/projects";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -141,7 +141,19 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
     onError: () => void client.invalidateQueries({ queryKey: ["chat-edit", projectId] }),
   });
   const undo = useMutation({ mutationFn: () => undoChatEdit(projectId), onSuccess: refresh });
-  const busy = send.isPending || undo.isPending;
+  const pick = useMutation({
+    mutationFn: ({ messageId, choice }: { messageId: string; choice: number }) => pickChatChoice(projectId, messageId, choice),
+    onSuccess: refresh,
+    onError: () => void client.invalidateQueries({ queryKey: ["chat-edit", projectId] }),
+  });
+  const busy = send.isPending || undo.isPending || pick.isPending;
+  // TODO 27: sentences saved as rules, shared by every project
+  const rules = useQuery({ queryKey: ["edit-rules"], queryFn: getEditRules });
+  const setRules = (value: Awaited<ReturnType<typeof getEditRules>>) => client.setQueryData(["edit-rules"], value);
+  const addRule = useMutation({ mutationFn: addEditRule, onSuccess: setRules });
+  const removeRule = useMutation({ mutationFn: deleteEditRule, onSuccess: setRules });
+  const ruleTexts = new Set((rules.data ?? []).map((rule) => rule.text));
+  const plain = (text: string) => text.replace(/^\s*\[\d{1,3}:\d{2}\]\s*/, "").replace(/\s+/g, " ").trim();
 
   function submit() {
     const text = message.trim();
@@ -179,12 +191,25 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
     </section>
 
     <section aria-label="대화창" className="flex min-w-0 flex-col rounded-2xl border border-white/10 bg-white/[.03] p-3 lg:max-h-[calc(100vh-7rem)] lg:sticky lg:top-3">
+      <div className="mb-2 flex flex-wrap items-center gap-1.5 border-b border-white/10 pb-2" aria-label="내 규칙">
+        <span className="text-xs text-slate-400">내 규칙</span>
+        {(rules.data ?? []).map((rule) => <span key={rule.id} className="flex items-center gap-1 rounded-full border border-fuchsia-300/60 px-2 py-0.5 text-xs text-fuchsia-100">
+          {rule.text}<button type="button" aria-label={`규칙 지우기: ${rule.text}`} disabled={removeRule.isPending} onClick={() => removeRule.mutate(rule.id)}><X size={12} /></button>
+        </span>)}
+        {rules.data?.length === 0 && <span className="text-[11px] text-slate-500">아직 없어요 · 마음에 든 내 말 아래 [규칙으로 저장]을 누르면 모든 프로젝트의 다음 편집안에 반영돼요</span>}
+      </div>
+      {(addRule.error || removeRule.error) && <div className="mb-2"><Alert>{errorText(addRule.error ?? removeRule.error)}</Alert></div>}
       <div ref={list} className="min-h-40 flex-1 space-y-2 overflow-y-auto pr-1" aria-live="polite">
-        {data.messages.length === 0 && <div className="space-y-1 text-sm text-slate-400"><p>영상을 멈추고 고칠 점을 말해 줘요. 멈춘 시각이 앞에 붙어요.</p><p className="text-xs text-slate-500">예: 이 장면 짧게 · 여기서 끝내 · 3번 빼 · 3번이랑 4번 바꿔 · 안 쓴 장면 2 맨 끝에 넣어 · 다른 사람이 말하는 컷 줄여</p></div>}
-        {data.messages.map((item, index) => <Bubble key={index} item={item} />)}
+        {data.messages.length === 0 && <div className="space-y-1 text-sm text-slate-400"><p>영상을 멈추고 고칠 점을 말해 줘요. 멈춘 시각이 앞에 붙어요.</p><p className="text-xs text-slate-500">예: 이 장면 짧게 · 다른 장면으로 · 여기서 끝내 · 3번 빼 · 3번이랑 4번 바꿔 · 안 쓴 장면 2 맨 끝에 넣어 · 다른 사람이 말하는 컷 줄여</p></div>}
+        {data.messages.map((item, index) => <div key={item.id ?? index} className={item.role === "user" ? "flex flex-col items-end gap-0.5" : ""}>
+          <Bubble item={item} projectId={projectId} busy={busy} onPick={(choice) => item.id && pick.mutate({ messageId: item.id, choice })} />
+          {item.role === "user" && (ruleTexts.has(plain(item.text))
+            ? <span className="text-[11px] text-fuchsia-200">규칙으로 저장됨</span>
+            : <button type="button" disabled={addRule.isPending} onClick={() => addRule.mutate(item.text)} className="text-[11px] text-slate-500 hover:text-fuchsia-200">규칙으로 저장</button>)}
+        </div>)}
         {send.isPending && <p className="flex items-center gap-2 text-sm text-slate-400"><LoaderCircle size={14} className="animate-spin" />고치는 중…</p>}
       </div>
-      {(send.error || undo.error) && <div className="mt-2"><Alert>{errorText(send.error ?? undo.error)}</Alert></div>}
+      {(send.error || undo.error || pick.error) && <div className="mt-2"><Alert>{errorText(send.error ?? undo.error ?? pick.error)}</Alert></div>}
       <form className="mt-3 space-y-2 border-t border-white/10 pt-3" onSubmit={(event) => { event.preventDefault(); submit(); }}>
         <div className="flex min-w-0 items-center gap-2 rounded-lg border border-white/15 bg-[#0b1420] px-2 focus-within:ring-2 focus-within:ring-cyan-300">
           {stamp !== null && <span className="flex shrink-0 items-center gap-1 rounded-full border border-fuchsia-300/60 px-2 py-0.5 text-xs tabular-nums text-fuchsia-200">[{clock(stamp)}]<button type="button" aria-label="시각 떼기" onClick={() => setStamp(null)}><X size={12} /></button></span>}
@@ -222,18 +247,29 @@ function CutStrip({ cuts, total, time, playing, changed, onPick }: { cuts: ChatC
   </div>;
 }
 
-function Bubble({ item }: { item: ChatMessage }) {
+function Bubble({ item, projectId, busy, onPick }: { item: ChatMessage; projectId: string; busy: boolean; onPick: (choice: number) => void }) {
   if (item.role === "user") {
     const stamp = item.text.match(/^\s*(\[\d{1,3}:\d{2}\])\s*/);
-    return <div className="ml-auto max-w-[92%] rounded-xl bg-fuchsia-300/15 px-3 py-2 text-sm text-slate-100">
-      {stamp && <b className="mr-1 tabular-nums text-fuchsia-200">{stamp[1]}</b>}{stamp ? item.text.slice(stamp[0].length) : item.text}
+    return <div className={`ml-auto max-w-[92%] rounded-xl px-3 py-2 text-sm ${item.undone ? "bg-white/[.04] text-slate-500" : "bg-fuchsia-300/15 text-slate-100"}`}>
+      {stamp && <b className={`mr-1 tabular-nums ${item.undone ? "" : "text-fuchsia-200"}`}>{stamp[1]}</b>}<span className={item.undone ? "line-through" : ""}>{stamp ? item.text.slice(stamp[0].length) : item.text}</span>
+      {item.undone && <span className="ml-2 text-[11px] text-slate-500">되돌림</span>}
     </div>;
   }
   const engine = engineLabel(item.engine);
-  return <div className={`max-w-[95%] rounded-xl px-3 py-2 text-sm ${item.error ? "bg-amber-300/10 text-amber-100" : "bg-white/[.06] text-slate-200"}`}>
-    <p>{item.text}</p>
-    {item.done.length > 0 && <ul className="mt-1 space-y-0.5">{item.done.map((line) => <li key={line} className="text-emerald-200">✓ {line}</li>)}</ul>}
+  const choices = item.choices ?? [];
+  const open = choices.length > 0 && (item.picked === null || item.picked === undefined);
+  return <div className={`max-w-[95%] rounded-xl px-3 py-2 text-sm ${item.error ? "bg-amber-300/10 text-amber-100" : item.undone ? "bg-white/[.03] text-slate-500" : "bg-white/[.06] text-slate-200"}`}>
+    <p className={item.no_change && !choices.length ? "text-amber-100" : ""}>{item.text}</p>
+    {choices.length > 0 && <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-3" aria-label={`${item.for_cut}번 컷 대신 넣을 장면`}>
+      {choices.map((choice, index) => <button key={`${choice.candidate_id}-${choice.start_seconds}`} type="button" disabled={!open || busy} onClick={() => onPick(index)}
+        className={`group overflow-hidden rounded-lg border text-left text-[11px] ${item.picked === index ? "border-fuchsia-300 ring-2 ring-fuchsia-300" : "border-white/10"} ${open ? "hover:border-cyan-300" : "opacity-50"}`}>
+        <img src={thumbUrl(projectId, choice.source_video_id, (choice.start_seconds + choice.end_seconds) / 2)} alt={choice.label} loading="lazy" className="block aspect-video w-full bg-black object-cover" />
+        <span className="block px-1.5 py-1 leading-tight text-slate-300">{choice.label}<span className="text-slate-500"> · {(choice.end_seconds - choice.start_seconds).toFixed(1)}초</span></span>
+      </button>)}
+    </div>}
+    {open && <button type="button" disabled={busy} onClick={() => onPick(-1)} className="mt-1.5 rounded border border-white/15 px-2 py-0.5 text-xs text-slate-300 hover:border-white/40">그대로 두기</button>}
+    {item.done.length > 0 && <div className="mt-1"><p className="text-[11px] text-slate-500">실제로 한 일</p><ul className="space-y-0.5">{item.done.map((line) => <li key={line} className={item.undone ? "text-slate-500 line-through" : "text-emerald-200"}>✓ {line}</li>)}</ul></div>}
     {item.skipped.length > 0 && <ul className="mt-1 space-y-0.5">{item.skipped.map((line) => <li key={line} className="text-amber-200">· {line}</li>)}</ul>}
-    {engine && <p className="mt-1 text-[11px] text-slate-500">{engine}</p>}
+    {engine && <p className="mt-1 text-[11px] text-slate-500">{engine}{item.undone ? " · 되돌림" : ""}</p>}
   </div>;
 }

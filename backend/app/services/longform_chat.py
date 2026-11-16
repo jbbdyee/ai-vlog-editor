@@ -21,7 +21,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Sequence
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
@@ -233,6 +233,24 @@ def _clause_edit(text: str, here: int | None, count: int) -> Edit | None:
     return None
 
 
+_OTHER_SCENE = re.compile(r"(다른|딴)\s*(장면|컷|거|걸|것|부분|데)")
+
+
+def replace_request(message: str, here: int | None) -> int | None | Literal[False]:
+    """TODO 27: "다른 장면으로" / "9번 다른 거" / "바꿔 줘" -> the cut to replace (None = which cut is unclear).
+    False when the sentence is not asking for another scene."""
+    text = _STAMP.sub("", message).strip()
+    numbers = [int(value) for value in _NUMBER.findall(text)]
+    asked = bool(_OTHER_SCENE.search(text)) or (
+        len(numbers) < 2 and bool(re.search(r"(바꿔|바꾸|교체)", text))
+        and not re.search(r"자리|순서|이랑|하고|랑|앞|뒤|길|짧|늘|줄|안\s*쓴", text))
+    if not asked or re.search(r"안\s*쓴", text):
+        return False
+    if numbers:
+        return numbers[0]
+    return here
+
+
 def rule_edits(message: str, here: int | None, count: int) -> list[Edit] | None:
     """Every clause must be understood; otherwise None (the brain reads the whole sentence)."""
     text = _STAMP.sub("", message).strip()
@@ -333,7 +351,7 @@ class Understood:
 
 
 def understand(message: str, inputs: ChatInputs, at_seconds: float | None, brain: Brain | None,
-               recent: Sequence[str] = ()) -> Understood:
+               recent: Sequence[str] = (), rules: Sequence[str] = ()) -> Understood:
     found = cut_at(inputs.cuts, at_seconds)
     here = found[0] + 1 if found else None
     edits = rule_edits(message, here, len(inputs.cuts))
@@ -341,7 +359,10 @@ def understand(message: str, inputs: ChatInputs, at_seconds: float | None, brain
         return Understood(tuple(_fill_here(edit, found, here) for edit in edits), "rule")
     if brain is None:
         raise ChatEditError("BRAIN_UNAVAILABLE", "이 말은 규칙으로 못 알아들었어요. 편집 두뇌(AI)가 켜져 있지 않습니다.")
-    system = SYSTEM_PROMPT + "\n\n" + (f"[오늘 있었던 일 (사용자가 적음)]\n{inputs.brief}\n\n" if inputs.brief else "") + plan_table(inputs)
+    rule_block = ("[내 편집 규칙 (사용자가 저장함. 시킨 고치기를 할 때 지킨다. 규칙만 보고 다른 컷을 스스로 고치지는 않는다)]\n"
+                  + "\n".join(f"- {rule}" for rule in rules) + "\n\n") if rules else ""
+    system = (SYSTEM_PROMPT + "\n\n" + rule_block
+              + (f"[오늘 있었던 일 (사용자가 적음)]\n{inputs.brief}\n\n" if inputs.brief else "") + plan_table(inputs))
     user = []
     if recent:
         user.append("[최근 대화]\n" + "\n".join(recent[-6:]))
@@ -534,6 +555,81 @@ def apply_edits(inputs: ChatInputs, edits: Sequence[Edit]) -> Applied:
     return Applied(tuple(cuts), tuple(done), tuple(skipped), frozenset(changed))
 
 
+# --- 2b. "다른 장면으로": choices to swap one cut for (TODO 27) -----------------------------------------------------------
+
+MAX_CHOICES = 6
+MAX_UNUSED_CHOICES = 4
+
+
+@dataclass(frozen=True)
+class Choice:
+    candidate_id: UUID  # an unused scene, or the replaced cut's own scene ("same": another part of its video)
+    source_video_id: UUID
+    start: float
+    end: float
+    kind: Literal["unused", "same"]
+    label: str
+
+    def as_dict(self) -> dict:
+        return {"candidate_id": str(self.candidate_id), "source_video_id": str(self.source_video_id),
+                "start_seconds": self.start, "end_seconds": self.end, "kind": self.kind, "label": self.label}
+
+
+def _free_parts(low: float, high: float, used: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    parts, at = [], low
+    for start, end in sorted(used):
+        if start > at:
+            parts.append((at, min(start, high)))
+        at = max(at, end)
+    if at < high:
+        parts.append((at, high))
+    return [(a, b) for a, b in parts if b - a > 0]
+
+
+def replacement_choices(inputs: ChatInputs, index: int) -> list[Choice]:
+    """Closest in filming first: unused scenes (nearest video, nearest moment), then parts of the same video that
+    no cut uses, cut to the same length as the cut being replaced."""
+    cut = inputs.cuts[index]
+    scene = inputs.scenes[cut.candidate_id]
+    middle = (cut.start + cut.end) / 2
+
+    def stem(info: SceneInfo) -> str:
+        numbers = re.findall(r"\d{3,}", Path(info.filename).stem)  # "DJI_20261112110921_0802_D" -> "0802"
+        return numbers[-1] if numbers else (Path(info.filename).stem or f"영상 {info.video_number}")
+
+    def closeness(info: SceneInfo, seconds: float) -> tuple[int, float]:
+        return abs(info.video_number - scene.video_number), abs(seconds - middle)
+
+    numbered = list(enumerate(inputs.unused(), start=1))
+    numbered.sort(key=lambda pair: closeness(pair[1], (pair[1].found_start + pair[1].found_end) / 2))
+    low, high = _bounds(inputs, cut)
+    used = [(other.start, other.end) for other in inputs.cuts
+            if inputs.scenes[other.candidate_id].source_video_id == scene.source_video_id]
+    length = cut.length
+    windows: list[tuple[float, float, float]] = []
+    for part_start, part_end in _free_parts(low, high, used):
+        size = part_end - part_start
+        if size < max(MIN_CUT_SECONDS, min(length, max(2.0, length / 2))):
+            continue
+        width = min(length, size)
+        # the middle of the free part, and (for a long one) the stretch one cut-length away from this cut
+        starts_ = [part_start + (size - width) / 2]
+        if size >= 4 * width:
+            starts_.append(part_end - 2 * width if part_end <= cut.start else part_start + width)
+        for begin in starts_:
+            begin = round(min(max(begin, part_start), part_end - width), 3)
+            windows.append((abs(begin + width / 2 - middle), begin, round(begin + width, 3)))
+    windows.sort()
+    same_room = min(len(windows), max(2, MAX_CHOICES - min(len(numbered), MAX_UNUSED_CHOICES)))
+    out = [Choice(info.candidate_id, info.source_video_id, info.found_start, info.found_end, "unused",
+                  f"안 쓴 장면 {number} · {stem(info)}")
+           for number, info in numbered[: min(MAX_UNUSED_CHOICES, MAX_CHOICES - same_room)]]
+    for _, begin, end in windows[:same_room]:
+        out.append(Choice(cut.candidate_id, scene.source_video_id, begin, end, "same",
+                          f"같은 영상 {begin:.0f}–{end:.0f}초"))
+    return out[:MAX_CHOICES]
+
+
 # --- 3. the chat file (messages, undo history, brain usage) ----------------------------------------------------------
 
 def _path(output_root: Path, project_id: UUID) -> Path:
@@ -585,8 +681,30 @@ class SendResult:
     engine: str
 
 
+def _new_id() -> str:
+    return uuid4().hex[:12]
+
+
+def recent_lines(messages: Sequence[dict], limit: int = 6) -> list[str]:
+    """What the brain sees of the chat: undone requests and undo notices are left out (TODO 27), so a request the
+    user took back is not done again."""
+    kept = [item for item in messages if not item.get("undone") and not item.get("undo")]
+    return [f"{'나' if item.get('role') == 'user' else '편집 보조'}: {item.get('text', '')}" for item in kept[-limit:]]
+
+
+def _reply_text(applied: Applied, understood: Understood) -> str:
+    """The reply never claims more than what was done (TODO 27): with no change it says so first."""
+    if applied.done:
+        return understood.reply or "바로 고쳤어."
+    if understood.edits:
+        return "바뀐 것 없음. 말한 대로 고칠 수 있는 컷이 없었어."
+    if understood.reply:
+        return f"바뀐 것 없음. {understood.reply}"
+    return "바뀐 것 없음. 고칠 곳을 못 찾았어. 번호나 멈춘 곳으로 다시 알려 줘."
+
+
 def send_message(session: Session, output_root: Path, project_id: UUID, message: str, at_seconds: float | None,
-                 brain: Brain | None) -> SendResult:
+                 brain: Brain | None, rules: Sequence[str] = ()) -> SendResult:
     message = (message or "").strip()
     if not message:
         raise ChatEditError("EMPTY_MESSAGE", "고칠 내용을 적어 주세요.")
@@ -594,12 +712,20 @@ def send_message(session: Session, output_root: Path, project_id: UUID, message:
     if not inputs.cuts:
         raise ChatEditError("NO_EDIT_PLAN", "아직 편집안이 없어요. 먼저 첫 편집안을 만들어 주세요.")
     chat = load_chat(output_root, project_id)
-    recent = [f"{'나' if item.get('role') == 'user' else '편집 보조'}: {item.get('text', '')}" for item in chat["messages"][-6:]]
-    chat["messages"].append({"role": "user", "text": message, "at_seconds": at_seconds, "at": _now()})
+    recent = recent_lines(chat["messages"])
+    user_id = _new_id()
+    chat["messages"].append({"id": user_id, "role": "user", "text": message, "at_seconds": at_seconds, "at": _now()})
+
+    found = cut_at(inputs.cuts, at_seconds)
+    wanted = replace_request(message, found[0] + 1 if found else None)
+    if wanted is not False:
+        return _offer_choices(output_root, project_id, chat, inputs, wanted, user_id)
+
     try:
-        understood = understand(message, inputs, at_seconds, brain, recent)
+        understood = understand(message, inputs, at_seconds, brain, recent, rules)
     except ChatEditError as error:
-        chat["messages"].append({"role": "assistant", "text": error.message, "error": error.code, "at": _now()})
+        chat["messages"].append({"id": _new_id(), "reply_to": user_id, "role": "assistant", "text": error.message,
+                                 "error": error.code, "at": _now()})
         save_chat(output_root, project_id, chat)
         raise
     if understood.brain_key:
@@ -610,14 +736,83 @@ def send_message(session: Session, output_root: Path, project_id: UUID, message:
         if brain is not None:
             usage["usd"] = round(usage["usd"] + cost_usd(brain.model, understood.input_tokens, understood.output_tokens), 6)
     applied = apply_edits(inputs, understood.edits)
+    reply_id = _new_id()
     if applied.done:
-        chat["history"].append(_snapshot(inputs.cuts, message[:80]))
+        snapshot = _snapshot(inputs.cuts, message[:80])
+        snapshot["marks"] = [user_id, reply_id]
+        chat["history"].append(snapshot)
         _save_plan(session, project_id, applied.cuts)
-    reply = understood.reply or ("바로 고쳤어." if applied.done else "고칠 곳을 못 찾았어. 번호나 멈춘 곳으로 다시 알려 줘.")
-    chat["messages"].append({"role": "assistant", "text": reply, "done": list(applied.done), "skipped": list(applied.skipped),
+    chat["messages"].append({"id": reply_id, "reply_to": user_id, "role": "assistant", "text": _reply_text(applied, understood),
+                             "done": list(applied.done), "skipped": list(applied.skipped), "no_change": not applied.done,
                              "engine": understood.engine, "changed": [str(value) for value in applied.changed], "at": _now()})
     save_chat(output_root, project_id, chat)
     return SendResult(applied.done, applied.skipped, applied.changed, understood.engine)
+
+
+def _offer_choices(output_root: Path, project_id: UUID, chat: dict, inputs: ChatInputs, number: int | None,
+                   user_id: str) -> SendResult:
+    """TODO 27: "다른 장면으로" changes nothing yet; it answers with pictures to pick from."""
+    reply: dict = {"id": _new_id(), "reply_to": user_id, "role": "assistant", "engine": "rule", "at": _now()}
+    if number is None or not 1 <= number <= len(inputs.cuts):
+        reply.update(text="어느 컷을 바꿀지 모르겠어. 영상을 멈추거나 컷을 누른 뒤 '다른 장면으로'라고 말해 줘."
+                     if number is None else f"{number}번 컷이 없어. 컷 띠의 번호로 다시 알려 줘.", no_change=True)
+        choices = []
+    else:
+        choices = replacement_choices(inputs, number - 1)
+        cut = inputs.cuts[number - 1]
+        reply.update(text=f"{number}번 컷({cut.length:.1f}초) 대신 넣을 장면이야. 눌러서 골라 줘." if choices
+                     else f"{number}번 컷 대신 넣을 장면을 못 찾았어. 안 쓴 장면도, 같은 영상의 남은 부분도 없어.",
+                     choices=[choice.as_dict() for choice in choices], for_cut=number,
+                     for_candidate=str(cut.candidate_id), picked=None, no_change=not choices)
+    chat["messages"].append(reply)
+    save_chat(output_root, project_id, chat)
+    return SendResult((), (), frozenset(), "rule")
+
+
+def pick_choice(session: Session, output_root: Path, project_id: UUID, message_id: str, choice: int) -> SendResult:
+    """TODO 27: put the picked picture in place of the cut (choice -1 = keep the cut as it is)."""
+    chat = load_chat(output_root, project_id)
+    offer = next((item for item in chat["messages"] if item.get("id") == message_id and item.get("choices")), None)
+    if offer is None:
+        raise ChatEditError("CHOICE_NOT_FOUND", "고를 장면 목록을 찾지 못했어요. 다시 '다른 장면으로'라고 말해 주세요.")
+    if offer.get("picked") is not None:
+        raise ChatEditError("CHOICE_ALREADY_PICKED", "이미 고른 목록이에요. 바꾸려면 되돌리기를 눌러 주세요.")
+    if choice == -1:
+        offer["picked"] = -1
+        chat["messages"].append({"id": _new_id(), "reply_to": message_id, "role": "assistant",
+                                 "text": f"{offer.get('for_cut')}번 컷은 그대로 뒀어.", "no_change": True, "engine": "rule",
+                                 "at": _now()})
+        save_chat(output_root, project_id, chat)
+        return SendResult((), (), frozenset(), "rule")
+    if not 0 <= choice < len(offer["choices"]):
+        raise ChatEditError("CHOICE_NOT_FOUND", "목록에 없는 장면이에요.")
+    picked = offer["choices"][choice]
+    inputs = load_inputs(session, output_root, project_id)
+    target = UUID(offer["for_candidate"])
+    index = next((i for i, cut in enumerate(inputs.cuts) if cut.candidate_id == target), None)
+    new_id = UUID(picked["candidate_id"])
+    in_plan = {cut.candidate_id for cut in inputs.cuts}
+    if index is None or new_id not in inputs.scenes or (picked["kind"] == "unused" and new_id in in_plan):
+        raise ChatEditError("CHOICE_STALE", "편집안이 그새 바뀌었어요. 다시 '다른 장면으로'라고 말해 주세요.")
+    old = inputs.cuts[index]
+    new = Cut(new_id, float(picked["start_seconds"]), float(picked["end_seconds"]))
+    low, high = _bounds(inputs, new)
+    if new.start < low - 1e-3 or new.end > high + 1e-3 or new.length < MIN_CUT_SECONDS - 1e-6:
+        raise ChatEditError("CHOICE_STALE", "이 장면은 영상 범위를 벗어나서 넣을 수 없어요.")
+    cuts = list(inputs.cuts)
+    cuts[index] = new
+    reply_id = _new_id()
+    snapshot = _snapshot(inputs.cuts, f"{index + 1}번 컷을 {picked['label']}(으)로")
+    snapshot["marks"] = [reply_id]
+    snapshot["reopen"] = message_id
+    chat["history"].append(snapshot)
+    _save_plan(session, project_id, cuts)
+    offer["picked"] = choice
+    done = (f"{index + 1}번 컷 {old.length:.1f}초 → {picked['label']} ({new.length:.1f}초)로 바꿈",)
+    chat["messages"].append({"id": reply_id, "reply_to": message_id, "role": "assistant", "text": "골라 준 장면으로 바꿨어.",
+                             "done": list(done), "engine": "rule", "changed": [str(new_id)], "at": _now()})
+    save_chat(output_root, project_id, chat)
+    return SendResult(done, (), frozenset({new_id}), "rule")
 
 
 def undo(session: Session, output_root: Path, project_id: UUID) -> str:
@@ -634,11 +829,17 @@ def undo(session: Session, output_root: Path, project_id: UUID) -> str:
     if not cuts:
         raise ChatEditError("UNDO_SCENES_GONE", "되돌릴 편집안의 장면이 더 이상 없어요.")
     _save_plan(session, project_id, cuts)
+    marks = set(previous.get("marks") or ())
+    for item in chat["messages"]:
+        if item.get("id") in marks:
+            item["undone"] = True  # TODO 27: not sent to the brain again, shown as taken back
+        if previous.get("reopen") and item.get("id") == previous["reopen"]:
+            item["picked"] = None  # the pictures can be picked again
     label = previous.get("label", "")
     before = {cut.candidate_id: (index, cut.start, cut.end) for index, cut in enumerate(inputs.cuts)}
     changed = [str(cut.candidate_id) for index, cut in enumerate(cuts)
                if before.get(cut.candidate_id) != (index, cut.start, cut.end)]
-    chat["messages"].append({"role": "assistant", "text": f"되돌렸어: {label}" if label else "되돌렸어.", "undo": True,
-                             "changed": changed, "at": _now()})
+    chat["messages"].append({"id": _new_id(), "role": "assistant", "text": f"되돌렸어: {label}" if label else "되돌렸어.",
+                             "undo": True, "changed": changed, "at": _now()})
     save_chat(output_root, project_id, chat)
     return label

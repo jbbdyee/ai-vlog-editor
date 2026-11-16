@@ -37,6 +37,9 @@ export interface StoryDirection {
   footage_seconds: number;
   /** TODO 23: the "오늘 있었던 일" note this recommendation used ("" when none, or when only the length changed). */
   day_brief?: string;
+  /** TODO 27: the "내 편집 규칙" the AI read for this recommendation. */
+  rules_used?: string[];
+  max_cut_seconds?: number | null;
 }
 
 /** TODO 23: the saved "오늘 있었던 일" note. An old server without it gives "" instead of an error. */

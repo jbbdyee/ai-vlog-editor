@@ -67,6 +67,48 @@ describe("TODO 26 chat editing screen", () => {
     expect(await screen.findByRole("button", { name: "컷 2, 4.0초" })).toBeInTheDocument();
   });
 
+  it("TODO 27: picks a 다른 장면 picture and saves a sentence as a rule chip", async () => {
+    const picked: unknown[] = [];
+    let rules: { id: string; text: string }[] = [];
+    const offer = [
+      { id: "u1", role: "user", text: "[00:06] 다른 장면으로", at_seconds: 6, done: [], skipped: [], engine: null, error: null, changed: [], undo: false },
+      { id: "a1", role: "assistant", text: "2번 컷(4.0초) 대신 넣을 장면이야. 눌러서 골라 줘.", at_seconds: null, done: [], skipped: [], engine: "rule", error: null, changed: [], undo: false,
+        for_cut: 2, picked: null, choices: [
+          { candidate_id: ids[0], source_video_id: source, start_seconds: 50, end_seconds: 53, kind: "unused", label: "안 쓴 장면 1 · 0801" },
+          { candidate_id: ids[1], source_video_id: source, start_seconds: 30, end_seconds: 34, kind: "same", label: "같은 영상 30–34초" }] },
+    ];
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith(`/projects/${project}`)) return Promise.resolve(response({ project_id: project, name: "학원 하루", status: "COMPLETED" }));
+      if (url.endsWith("/projects/edit-rules") && init?.method === "POST") {
+        rules = [{ id: "r1", text: JSON.parse(String(init.body)).text.replace(/^\[\d+:\d+\]\s*/, "") }];
+        return Promise.resolve(response({ rules }));
+      }
+      if (url.endsWith("/projects/edit-rules")) return Promise.resolve(response({ rules }));
+      if (url.endsWith("/chat-edit/pick")) {
+        picked.push(JSON.parse(String(init?.body)));
+        return Promise.resolve(response(view(4, [...offer.slice(0, 1), { ...offer[1], picked: 1 },
+          { id: "a2", role: "assistant", text: "골라 준 장면으로 바꿨어.", at_seconds: null, done: ["2번 컷 4.0초 → 같은 영상 30–34초 (4.0초)로 바꿈"], skipped: [], engine: "rule", error: null, changed: [ids[1]], undo: false }], 1)));
+      }
+      return Promise.resolve(response(view(4, offer)));
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[`/projects/${project}/chat-edit`]}><Routes>
+      <Route path="projects/:projectId/chat-edit" element={<ChatEditPage />} />
+    </Routes></MemoryRouter></QueryClientProvider>);
+
+    const picture = await screen.findByRole("img", { name: "같은 영상 30–34초" });
+    expect(picture.getAttribute("src")).toBe(`/api/projects/${project}/sources/${source}/thumb?at=32.000`);
+    expect(screen.getByRole("button", { name: "그대로 두기" })).toBeInTheDocument();
+    await userEvent.click(picture);
+    expect(await screen.findByText("✓ 2번 컷 4.0초 → 같은 영상 30–34초 (4.0초)로 바꿈")).toBeInTheDocument();
+    expect(picked).toEqual([{ message_id: "a1", choice: 1 }]);
+    expect(screen.getByText("실제로 한 일")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "규칙으로 저장" }));
+    expect(await screen.findByRole("button", { name: "규칙 지우기: 다른 장면으로" })).toBeInTheDocument();
+    expect(screen.getByText("규칙으로 저장됨")).toBeInTheDocument();
+  });
+
   it("offers to start from the recommended story direction when there is no plan", async () => {
     vi.stubGlobal("fetch", vi.fn((url: string) => {
       if (url.endsWith(`/projects/${project}`)) return Promise.resolve(response({ project_id: project, name: "학원 하루", status: "COMPLETED" }));
