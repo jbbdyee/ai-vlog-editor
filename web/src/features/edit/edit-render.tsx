@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, Download, RefreshCw, Sparkles } from "lucide-react";
+import { ArrowDown, ArrowUp, Download, MessagesSquare, RefreshCw, Sparkles } from "lucide-react";
 import { ApiError, type ProcessingStatus } from "@/api/projects";
 import { downloadPath, fetchRenderFile, getEditPlan, planRanges, type ClipRange, getRenderHistory, getRendering, renderFileProblem, saveEditPlan, startRendering, subtitleIntegrityNote, suggestEdit, type DownloadKind, type EditSuggestion } from "@/api/edit-render";
 import { getSceneCandidates, type SceneCandidate } from "@/api/scenes";
@@ -197,6 +197,7 @@ export function EditRender({ projectId, processing, onPreview, previewCandidateI
 
   return <section id="edit-render" className="mt-3 grid min-w-0 scroll-mt-24 gap-3 sm:mt-6 sm:scroll-mt-3 sm:gap-6 xl:grid-cols-2" aria-label="편집 및 렌더링">
     <Card id="scene-selection" className="scroll-mt-24"><CardHeader><CardTitle>편집 계획</CardTitle><CardDescription>추천 장면을 미리 본 뒤 직접 고르거나, 원하는 편집을 말로 요청해 제안을 받으세요. 아래 목록에서 재생 순서를 정하고 저장합니다.</CardDescription></CardHeader><CardContent className="space-y-4">
+      <a href={`/projects/${projectId}/chat-edit`} className="flex items-center justify-between gap-3 rounded-xl border border-fuchsia-300/30 bg-fuchsia-300/[.06] px-4 py-3 text-sm text-fuchsia-100 hover:bg-fuchsia-300/10"><span className="flex items-center gap-2 font-semibold"><MessagesSquare size={16} />대화형 편집 열기</span><span className="text-xs text-slate-400">영상을 보면서 "이 장면 짧게"처럼 말로 고쳐요</span></a>
       {plan.isPending && <p className="text-sm text-slate-400">저장된 계획 조회 중…</p>}
       {plan.isError && <Alert>{errorText(plan.error)}</Alert>}
       {candidates.isError && <Alert>{errorText(candidates.error)}</Alert>}

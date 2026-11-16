@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Layout } from "@/app/layout";
 import { HomePage } from "@/features/projects/home-page";
 import { ProjectPage } from "@/features/projects/project-page";
+import { ChatEditPage } from "@/features/chat-edit/chat-edit-page";
 import "./index.css";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
@@ -17,6 +18,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route element={<Layout />}>
             <Route index element={<HomePage />} />
             <Route path="projects/:projectId" element={<ProjectPage />} />
+            <Route path="projects/:projectId/chat-edit" element={<ChatEditPage />} />
             <Route path="*" element={<HomePage />} />
           </Route>
         </Routes>

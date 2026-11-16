@@ -33,7 +33,7 @@ from backend.app.services.project_reel import (ReelEditRefused, ReelOptions, Ree
                                               edit_reel_draft, unused_shots, job_state, reel_output_dir, render_job_state,
                                               saved_draft, start_reel_draft, start_reel_render, undo_reel_draft)
 from backend.app.services.reel_render import draft_fingerprint, saved_video
-from backend.app.services import face_mosaic, longform_captions, reel_text
+from backend.app.services import edit_brain, face_mosaic, longform_captions, longform_chat, reel_text
 from backend.app.services.reel_modes import (AUTO_MODE, DEFAULT_PACE, DEFAULT_SHORT_SECONDS, MODE_BY_KEY, MODES, PACES,
                                              SHORT_LENGTHS)
 from backend.app.services.story_length import (LENGTH_OPTIONS, Moment, accept_minutes, fit_to_length, footage_seconds,
@@ -939,6 +939,166 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
 async def get_project_day_brief(request: Request, project_id: UUID) -> DayBriefBody:
     """TODO 23: the saved "오늘 있었던 일" note (empty when none)."""
     return DayBriefBody(text=load_day_brief(request.app.state.project_render_output_root, project_id))
+
+
+# ---- TODO 26: chat editing of the longform plan, next to the video --------------------------------------------------
+
+class ChatCutResponse(BaseModel):
+    number: int
+    candidate_id: UUID
+    source_video_id: UUID
+    source_filename: str
+    start_seconds: float
+    end_seconds: float
+    timeline_start: float
+    length: float
+    speech: str
+    caption: str | None = None
+
+
+class ChatUnusedResponse(BaseModel):
+    number: int
+    candidate_id: UUID
+    source_video_id: UUID
+    source_filename: str
+    start_seconds: float
+    end_seconds: float
+    speech: str
+
+
+class ChatMessageResponse(BaseModel):
+    role: str
+    text: str
+    at_seconds: float | None = None
+    done: list[str] = []
+    skipped: list[str] = []
+    engine: str | None = None
+    error: str | None = None
+    changed: list[str] = []
+    undo: bool = False
+
+
+class ChatBrainResponse(BaseModel):
+    key: str
+    label: str
+
+
+class ChatUsageResponse(BaseModel):
+    key: str
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    usd: float
+
+
+class ChatLastResponse(BaseModel):
+    done: list[str]
+    skipped: list[str]
+    changed: list[UUID]
+    engine: str
+
+
+class ChatEditResponse(BaseModel):
+    project_id: UUID
+    cuts: list[ChatCutResponse]
+    total_seconds: float
+    unused: list[ChatUnusedResponse]
+    messages: list[ChatMessageResponse]
+    undo_count: int
+    brains: list[ChatBrainResponse]
+    default_brain: str | None
+    usage: list[ChatUsageResponse]
+    dropped: int = 0
+    last: ChatLastResponse | None = None
+
+
+class ChatEditRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=500)
+    at_seconds: float | None = Field(default=None, ge=0)
+    brain: str | None = Field(default=None, max_length=20)
+
+
+def _chat_view(session: Session, output_root: Path, project_id: UUID,
+               last: longform_chat.SendResult | None = None) -> ChatEditResponse:
+    inputs = longform_chat.load_inputs(session, output_root, project_id)
+    chat = longform_chat.load_chat(output_root, project_id)
+    brains = edit_brain.available_brains()
+    cuts = []
+    for number, (begin, cut) in enumerate(zip(longform_chat.starts(inputs.cuts), inputs.cuts), start=1):
+        scene = inputs.scenes[cut.candidate_id]
+        cuts.append(ChatCutResponse(
+            number=number, candidate_id=cut.candidate_id, source_video_id=scene.source_video_id,
+            source_filename=scene.filename, start_seconds=cut.start, end_seconds=cut.end, timeline_start=begin,
+            length=cut.length, caption=scene.caption,
+            speech=longform_chat._speech(inputs.lines.get(scene.source_video_id, ()), cut.start, cut.end, 160)))
+    unused = [ChatUnusedResponse(
+        number=number, candidate_id=scene.candidate_id, source_video_id=scene.source_video_id,
+        source_filename=scene.filename, start_seconds=scene.found_start, end_seconds=scene.found_end,
+        speech=longform_chat._speech(inputs.lines.get(scene.source_video_id, ()), scene.found_start, scene.found_end, 120))
+        for number, scene in enumerate(inputs.unused(), start=1)]
+    messages = []
+    for item in chat["messages"]:
+        try:
+            messages.append(ChatMessageResponse.model_validate(item))
+        except Exception:  # an odd line in the file never breaks the screen
+            continue
+    usage = [ChatUsageResponse(key=key, calls=int(value.get("calls", 0)), input_tokens=int(value.get("input_tokens", 0)),
+                               output_tokens=int(value.get("output_tokens", 0)), usd=float(value.get("usd", 0.0)))
+             for key, value in chat["usage"].items() if isinstance(value, dict)]
+    return ChatEditResponse(
+        project_id=project_id, cuts=cuts, total_seconds=round(sum(cut.length for cut in inputs.cuts), 3),
+        unused=unused, messages=messages, undo_count=len(chat["history"]),
+        brains=[ChatBrainResponse(key=key, label=brain.label) for key, brain in brains.items()],
+        default_brain=edit_brain.default_brain_key(brains), usage=usage, dropped=inputs.dropped,
+        last=ChatLastResponse(done=list(last.done), skipped=list(last.skipped), changed=sorted(last.changed, key=str),
+                              engine=last.engine) if last else None)
+
+
+def _chat_http_error(error: longform_chat.ChatEditError) -> HTTPException:
+    code = 409 if error.code in ("NO_EDIT_PLAN", "NOTHING_TO_UNDO", "UNDO_SCENES_GONE") else \
+        503 if error.code == "BRAIN_UNAVAILABLE" else 502 if error.code.startswith(("LLM_", "CLAUDE_")) else 422
+    return HTTPException(status_code=code, detail={"code": error.code, "message": error.message})
+
+
+async def _chat_work(request: Request, project_id: UUID, work) -> ChatEditResponse:
+    factory = _session_factory(request)
+    output_root = request.app.state.project_render_output_root
+
+    def run():
+        with factory() as session:
+            last = work(session, output_root)
+            return _chat_view(session, output_root, project_id, last)
+    try:
+        return await run_in_threadpool(run)
+    except SceneProjectNotFoundError as error:
+        raise _project_not_found() from error
+    except longform_chat.ChatEditError as error:
+        raise _chat_http_error(error) from error
+
+
+@router.get("/{project_id}/chat-edit", response_model=ChatEditResponse)
+async def get_project_chat_edit(request: Request, project_id: UUID) -> ChatEditResponse:
+    """TODO 26: the saved plan as cuts on one timeline, unused scenes, the chat so far and the brains."""
+    return await _chat_work(request, project_id, lambda session, root: None)
+
+
+@router.post("/{project_id}/chat-edit", response_model=ChatEditResponse)
+async def send_project_chat_edit(request: Request, project_id: UUID, payload: ChatEditRequest) -> ChatEditResponse:
+    """TODO 26: one sentence ("[03:12] 이 장면 짧게") -> the plan is changed and saved (undo keeps the last 10)."""
+    brains = edit_brain.available_brains()
+    key = payload.brain if payload.brain in brains else edit_brain.default_brain_key(brains)
+    brain = brains.get(key) if key else None
+    return await _chat_work(request, project_id, lambda session, root: longform_chat.send_message(
+        session, root, project_id, payload.message, payload.at_seconds, brain))
+
+
+@router.post("/{project_id}/chat-edit/undo", response_model=ChatEditResponse)
+async def undo_project_chat_edit(request: Request, project_id: UUID) -> ChatEditResponse:
+    """TODO 26: put back the plan from before the last chat edit."""
+    def work(session, root):
+        longform_chat.undo(session, root, project_id)
+        return None
+    return await _chat_work(request, project_id, work)
 
 
 class ReelOptionItem(BaseModel):
