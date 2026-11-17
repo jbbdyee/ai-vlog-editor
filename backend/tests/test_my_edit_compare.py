@@ -42,6 +42,15 @@ class FrameTests(unittest.TestCase):
         self.assertFalse(sigs[0].any())
         self.assertAlmostEqual(float(np.linalg.norm(sigs[1])), 1.0, places=4)
 
+    def test_portrait_video_can_be_read_as_its_middle_band_only(self):
+        """TODO 31: a portrait reel shows the landscape picture in its middle; only that band is compared."""
+        plain = mec._frames_command(Path("a.mp4"), False, 4.0, "ffmpeg", False)
+        band = mec._frames_command(Path("a.mp4"), False, 4.0, "ffmpeg", False, mec.CENTER_BAND)
+        plain_filters = plain[plain.index("-vf") + 1].split(",")
+        band_filters = band[band.index("-vf") + 1].split(",")
+        self.assertFalse(any(part.startswith("crop=") for part in plain_filters))
+        self.assertEqual(band_filters[:3], ["fps=4", "crop=iw:iw*9/16", f"scale={mec.SIG_W}:{mec.SIG_H}:flags=area"])
+
 
 class MatchTests(unittest.TestCase):
     def setUp(self):

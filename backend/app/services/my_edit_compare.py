@@ -41,6 +41,9 @@ FLAT_STD = 4.0  # an (almost) single-colour picture: black / white transition, n
 MIN_NOT_FOUND = 1.0  # shorter unfound bits are transitions
 SOURCE_WORKERS = 3
 TIMEOUT_SECONDS = 3600
+# A landscape picture laid in the middle of a portrait frame (titles / captions on the black bands above and below):
+# keep only the 16:9 band, full width, centred (ffmpeg's crop centres by default).
+CENTER_BAND = "iw:iw*9/16"
 
 _PTS = re.compile(r"pts_time:\s*(-?[0-9.]+)")
 
@@ -73,24 +76,27 @@ def normalise(raw: np.ndarray) -> np.ndarray:
     return out.astype(np.float32)
 
 
-def _frames_command(path: Path, keyframes_only: bool, fps: float | None, ffmpeg: str | None, hardware: bool) -> list[str]:
+def _frames_command(path: Path, keyframes_only: bool, fps: float | None, ffmpeg: str | None, hardware: bool,
+                    crop: str | None = None) -> list[str]:
     command = [ffmpeg or shutil.which("ffmpeg") or "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "info"]
     if hardware:  # the graphics card decodes 4K HEVC about 1.7x faster (25-minute source: 2m54s -> 1m42s)
         command += ["-hwaccel", "auto"]
     if keyframes_only:
         command += ["-skip_frame", "nokey"]
-    filters = ([f"fps={fps:g}"] if fps else []) + [f"scale={SIG_W}:{SIG_H}:flags=area", "format=gray", "showinfo"]
+    filters = (([f"fps={fps:g}"] if fps else []) + ([f"crop={crop}"] if crop else [])
+               + [f"scale={SIG_W}:{SIG_H}:flags=area", "format=gray", "showinfo"])
     command += ["-i", str(path), "-map", "0:v:0", "-an", "-sn", "-dn", "-vf", ",".join(filters)]
     if keyframes_only:
         command += ["-fps_mode", "passthrough"]
     return command + ["-f", "rawvideo", "-"]
 
 
-def read_frames(path: Path, *, keyframes_only: bool, fps: float | None = None, ffmpeg: str | None = None) -> Frames:
+def read_frames(path: Path, *, keyframes_only: bool, fps: float | None = None, ffmpeg: str | None = None,
+                crop: str | None = None) -> Frames:
     done = None
     for hardware in (True, False):
         try:
-            done = subprocess.run(_frames_command(path, keyframes_only, fps, ffmpeg, hardware),
+            done = subprocess.run(_frames_command(path, keyframes_only, fps, ffmpeg, hardware, crop),
                                   capture_output=True, timeout=TIMEOUT_SECONDS, check=False)
         except (OSError, subprocess.SubprocessError) as error:
             raise MyEditError("FRAMES_FAILED") from error
@@ -106,17 +112,19 @@ def read_frames(path: Path, *, keyframes_only: bool, fps: float | None = None, f
     return Frames(np.asarray(times[:count], dtype=np.float64), normalise(raw))
 
 
-def source_frames(path: Path, cache: Path, ffmpeg: str | None = None, *, fps: float | None = None) -> Frames:
-    """Pictures of one video (key frames, or ``fps`` a second), kept in ``cache`` (re-made when the file changes)."""
+def source_frames(path: Path, cache: Path, ffmpeg: str | None = None, *, fps: float | None = None,
+                  crop: str | None = None) -> Frames:
+    """Pictures of one video (key frames, or ``fps`` a second), kept in ``cache`` (re-made when the file changes).
+    ``crop`` (an ffmpeg crop such as CENTER_BAND) keeps only part of each picture."""
     stat = path.stat()
-    stamp = f"{PRINT_VERSION}:{fps}:{stat.st_size}:{int(stat.st_mtime)}"
+    stamp = f"{PRINT_VERSION}:{fps}:{stat.st_size}:{int(stat.st_mtime)}" + (f":crop={crop}" if crop else "")
     try:
         with np.load(cache) as saved:
             if str(saved["stamp"]) == stamp:
                 return Frames(saved["times"], saved["sigs"])
     except (OSError, ValueError, KeyError):
         pass
-    frames = read_frames(path, keyframes_only=fps is None, fps=fps, ffmpeg=ffmpeg)
+    frames = read_frames(path, keyframes_only=fps is None, fps=fps, ffmpeg=ffmpeg, crop=crop)
     cache.parent.mkdir(parents=True, exist_ok=True)
     temporary = cache.with_suffix(".tmp.npz")
     np.savez(temporary, stamp=np.asarray(stamp), times=frames.times, sigs=frames.sigs)
