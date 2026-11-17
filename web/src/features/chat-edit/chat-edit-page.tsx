@@ -6,6 +6,7 @@ import { addEditRule, answerRuleCandidate, clock, cutAt, deleteEditRule, getChat
 import { ApiError, getProject, isProjectId, sourceMediaUrl } from "@/api/projects";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { MyEditCard } from "@/features/chat-edit/my-edit-card";
 
 const WON_PER_USD = 1450;
 const errorText = (error: unknown) => error instanceof ApiError ? `${error.message}${error.code ? ` (${error.code})` : ""}` : "요청을 완료하지 못했습니다.";
@@ -195,6 +196,7 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
         <summary className="cursor-pointer text-slate-200">안 쓴 장면 {data.unused.length}개 <span className="text-xs text-slate-500">· "안 쓴 장면 2 넣어 줘"처럼 말하면 들어가요</span></summary>
         <ol className="mt-2 space-y-1 text-xs text-slate-400">{data.unused.map((scene) => <li key={scene.candidate_id}><b className="text-slate-200">장면 {scene.number}</b> · {scene.source_filename} · {(scene.end_seconds - scene.start_seconds).toFixed(1)}초 · {scene.speech}</li>)}</ol>
       </details>}
+      <MyEditCard projectId={projectId} />
     </section>
 
     <section aria-label="대화창" className="flex min-w-0 flex-col rounded-2xl border border-white/10 bg-white/[.03] p-3 lg:max-h-[calc(100vh-7rem)] lg:sticky lg:top-3">
@@ -207,7 +209,7 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
       </div>
       {candidates.length > 0 && <div className="mb-2 space-y-1.5" aria-label="규칙 후보">
         {candidates.map((item) => <div key={item.key} className="rounded-lg border border-dashed border-cyan-300/60 bg-cyan-300/[.06] px-3 py-2 text-sm">
-          <p className="text-[11px] text-cyan-200">규칙 후보 · 내 선택 기록에서 찾음</p>
+          <p className="text-[11px] text-cyan-200">규칙 후보 · {item.key.startsWith("my_edit") || item.why.includes("내 편집본") ? "내 편집본과 비교해서 찾음" : "내 선택 기록에서 찾음"}</p>
           <p className="mt-0.5 font-semibold text-slate-100">{item.text}</p>
           <p className="mt-0.5 text-xs text-slate-400">근거: {item.why}</p>
           <div className="mt-1.5 flex gap-2">

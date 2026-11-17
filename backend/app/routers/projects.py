@@ -4,8 +4,9 @@ from datetime import datetime
 from pathlib import Path
 from ipaddress import ip_address
 import re
+import shutil
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, status
 from pydantic import BaseModel, Field
@@ -33,7 +34,7 @@ from backend.app.services.project_reel import (ReelEditRefused, ReelOptions, Ree
                                               edit_reel_draft, unused_shots, job_state, reel_output_dir, render_job_state,
                                               saved_draft, start_reel_draft, start_reel_render, undo_reel_draft)
 from backend.app.services.reel_render import draft_fingerprint, saved_video
-from backend.app.services import edit_brain, edit_rules, face_mosaic, longform_captions, longform_chat, reel_text, scene_thumbs, taste_log
+from backend.app.services import edit_brain, edit_rules, face_mosaic, longform_captions, longform_chat, my_edit_compare, reel_text, scene_thumbs, taste_log
 from backend.app.services.reel_modes import (AUTO_MODE, DEFAULT_PACE, DEFAULT_SHORT_SECONDS, MODE_BY_KEY, MODES, PACES,
                                              SHORT_LENGTHS)
 from backend.app.services.story_length import (LENGTH_OPTIONS, Moment, accept_minutes, fit_to_length, footage_seconds,
@@ -2417,3 +2418,116 @@ async def answer_rule_candidate(request: Request, project_id: UUID, payload: Rul
         taste_log.answer(root, payload.key, payload.accept)
         return None
     return await _chat_work(request, project_id, work)
+
+
+# --- TODO 29: my own edited video compared with the Cutory plan ------------------------------------------------------
+
+MY_EDIT_SUFFIXES = {".mp4", ".mov", ".m4v", ".mkv", ".webm"}
+
+
+class MyEditStatusResponse(BaseModel):
+    project_id: UUID
+    status: str
+    step: str
+    done: int
+    total: int
+    error_code: str | None = None
+    has_video: bool
+    result: dict | None = None
+
+
+def _my_edit_status(request: Request, project_id: UUID) -> MyEditStatusResponse:
+    root = request.app.state.project_render_output_root
+    job = my_edit_compare.job_state(project_id)
+    video = my_edit_compare.saved_video(my_edit_compare.output_dir(root, project_id))
+    return MyEditStatusResponse(project_id=project_id, status=job.status, step=job.step, done=job.done,
+                                total=job.total, error_code=job.error_code, has_video=video is not None,
+                                result=my_edit_compare.load_result(root, project_id))
+
+
+def _start_my_edit(request: Request, project_id: UUID, filename: str) -> None:
+    storage = request.app.state.source_storage
+    root = request.app.state.project_render_output_root
+    with _session_factory(request)() as session:
+        try:
+            inputs = my_edit_compare.build_inputs(session, storage, root, project_id, filename)
+        except SceneProjectNotFoundError as error:
+            raise _project_not_found() from error
+    reason = my_edit_compare.start(root, project_id, inputs)
+    if reason is not None:
+        raise HTTPException(status_code=409, detail={"code": reason, "message": "이미 비교하는 중이에요."})
+
+
+def _save_my_edit(request: Request, project_id: UUID, upload: UploadFile) -> str:
+    """Stream the upload next to the result, check it is a video, then replace the old one."""
+    name = Path(upload.filename or "my-edit.mp4").name
+    suffix = Path(name).suffix.lower()
+    if suffix not in MY_EDIT_SUFFIXES:
+        raise HTTPException(status_code=415, detail={"code": "MY_EDIT_NOT_VIDEO", "message": "영상 파일(mp4·mov 등)만 올릴 수 있어요."})
+    folder = my_edit_compare.output_dir(request.app.state.project_render_output_root, project_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    temporary = folder / f"upload{suffix}.tmp"
+    with temporary.open("wb") as out:
+        shutil.copyfileobj(upload.file, out, length=8 * 1024 * 1024)
+    try:
+        my_edit_compare.probe_duration(temporary)
+    except my_edit_compare.MyEditError as error:
+        temporary.unlink(missing_ok=True)
+        raise HTTPException(status_code=415, detail={"code": error.code, "message": "영상으로 읽을 수 없는 파일이에요."}) from error
+    for old in folder.glob("edit.*"):
+        old.unlink(missing_ok=True)
+    (folder / "result.json").unlink(missing_ok=True)
+    temporary.replace(folder / f"edit{suffix}")
+    (folder / "name.txt").write_text(name, encoding="utf-8")
+    return name
+
+
+@router.get("/{project_id}/my-edit", response_model=MyEditStatusResponse)
+async def get_project_my_edit(request: Request, project_id: UUID) -> MyEditStatusResponse:
+    """TODO 29: comparing progress and the last comparison of my own edit with the Cutory plan."""
+    await _snapshot_or_404(request, project_id)
+    return await run_in_threadpool(_my_edit_status, request, project_id)
+
+
+@router.post("/{project_id}/my-edit", response_model=MyEditStatusResponse, status_code=202)
+async def upload_project_my_edit(request: Request, project_id: UUID, file: UploadFile = File(...)) -> MyEditStatusResponse:
+    """TODO 29: upload my own edited video; finding its cuts in the sources starts right away."""
+    await _snapshot_or_404(request, project_id)
+    if my_edit_compare.job_state(project_id).status == "RUNNING":
+        raise HTTPException(status_code=409, detail={"code": "MY_EDIT_RUNNING", "message": "이미 비교하는 중이에요."})
+    try:
+        name = await run_in_threadpool(_save_my_edit, request, project_id, file)
+    finally:
+        await file.close()
+    await run_in_threadpool(_start_my_edit, request, project_id, name)
+    return await run_in_threadpool(_my_edit_status, request, project_id)
+
+
+@router.post("/{project_id}/my-edit/compare", response_model=MyEditStatusResponse, status_code=202)
+async def compare_project_my_edit(request: Request, project_id: UUID) -> MyEditStatusResponse:
+    """TODO 29: compare the uploaded edit again (after the Cutory plan changed). Source pictures are reused."""
+    await _snapshot_or_404(request, project_id)
+    folder = my_edit_compare.output_dir(request.app.state.project_render_output_root, project_id)
+    if my_edit_compare.saved_video(folder) is None:
+        raise HTTPException(status_code=409, detail={"code": "MY_EDIT_MISSING", "message": "먼저 내 편집 영상을 올려 주세요."})
+    try:
+        name = (folder / "name.txt").read_text(encoding="utf-8").strip()
+    except OSError:
+        name = "my-edit"
+    await run_in_threadpool(_start_my_edit, request, project_id, name)
+    return await run_in_threadpool(_my_edit_status, request, project_id)
+
+
+@router.get("/{project_id}/my-edit/thumb", response_class=FileResponse)
+async def get_project_my_edit_thumb(request: Request, project_id: UUID, at: float = Query(ge=0, le=86400)) -> FileResponse:
+    """TODO 29: a small picture of one moment of my edit (for the '원본에 없음' parts)."""
+    root = request.app.state.project_render_output_root
+    video = my_edit_compare.saved_video(my_edit_compare.output_dir(root, project_id))
+    if video is None:
+        raise HTTPException(status_code=404, detail={"code": "MY_EDIT_MISSING"})
+    key = uuid5(project_id, f"my-edit:{video.stat().st_size}:{int(video.stat().st_mtime)}")
+    try:
+        thumb = await run_in_threadpool(scene_thumbs.scene_thumb, root, project_id, key, video, round(at, 3))
+    except scene_thumbs.ThumbError as error:
+        raise HTTPException(status_code=500, detail={"code": "THUMB_FAILED"}) from error
+    return FileResponse(thumb, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})

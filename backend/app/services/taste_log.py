@@ -25,10 +25,13 @@ RATIO = 3  # ... and at least this many times the other direction
 LONG_MIN_CUT = 2.0
 
 # how -> direction ("keep" | "drop" | "pass")
-_KEEP = {"picked", "kept", "inserted", "longer"}
-_DROP = {"removed", "replaced", "shortened"}
+_KEEP = {"picked", "kept", "inserted", "longer", "my_edit_used"}
+_DROP = {"removed", "replaced", "shortened", "my_edit_unused"}
 _HOW_LABEL = {"picked": "사진에서 고름", "kept": "그대로 두기", "inserted": "넣음", "longer": "늘림",
-              "removed": "뺌", "replaced": "다른 장면으로 바꿈", "shortened": "줄임", "passed": "사진에서 안 고름"}
+              "removed": "뺌", "replaced": "다른 장면으로 바꿈", "shortened": "줄임", "passed": "사진에서 안 고름",
+              "my_edit_used": "내 편집본에서 씀", "my_edit_unused": "Cutory엔 있고 내 편집본엔 없음"}
+MY_EDIT_SHORTER = 0.7  # my cuts' middle length at most this share of Cutory's -> a cut-length candidate
+MY_EDIT_MIN_CUTS = 5
 
 TAG_TEXT = {
     "other_voice": ("다른 사람 목소리가 나오는 장면(친구 수다)은 살린다", "다른 사람 목소리가 나오는 장면(친구 수다)은 줄이거나 뺀다",
@@ -104,6 +107,22 @@ def record(project_output_root: Path, project_id, mark: str | None, choices: Seq
     _save(project_output_root, data)
 
 
+def my_edit_mark(project_id) -> str:
+    return f"my_edit:{project_id}"
+
+
+def record_my_edit(project_output_root: Path, project_id, choices: Sequence[Choice], mine: dict, cutory: dict) -> None:
+    """TODO 29: the lines found by comparing my own edit with the Cutory plan. Comparing again replaces them."""
+    mark = my_edit_mark(project_id)
+    data = load_log(project_output_root)
+    data["events"] = [event for event in data["events"] if event.get("mark") != mark]
+    edits = data.get("my_edit") if isinstance(data.get("my_edit"), dict) else {}
+    edits[str(project_id)] = {"at": datetime.now(timezone.utc).isoformat(), "mine": mine, "cutory": cutory}
+    data["my_edit"] = edits
+    _save(project_output_root, data)
+    record(project_output_root, project_id, mark, choices)
+
+
 def mark_undone(project_output_root: Path, marks: Iterable[str]) -> None:
     marks = {mark for mark in marks if mark}
     if not marks:
@@ -160,6 +179,7 @@ def candidates(project_output_root: Path, rule_texts: Sequence[str] = (), max_cu
             key = f"{tag}:drop"
             if key not in answered and drop_text not in rules:
                 out.append(Candidate(key, drop_text, _why(drop_counts, False, keep, noun)))
+    out.extend(_my_edit_cut_candidate(data, answered, rules, max_cut_rule, {item.text for item in out}))
     shortened = [event for event in events if event.get("how") == "shortened"]
     longer = sum(1 for event in events if event.get("how") == "longer")
     if len(shortened) >= MIN_COUNT and len(shortened) >= RATIO * longer and "max_cut" not in answered:
@@ -168,6 +188,29 @@ def candidates(project_output_root: Path, rule_texts: Sequence[str] = (), max_cu
         if text not in rules and (max_cut_rule is None or limit < max_cut_rule):
             out.append(Candidate("max_cut", text, f"컷을 {len(shortened)}번 줄였고(줄인 뒤 길이 가운데 값 {limit:g}초), 늘린 건 {longer}번"))
     return out
+
+
+def _my_edit_cut_candidate(data: dict, answered: dict, rules: set[str], max_cut_rule: float | None,
+                           offered: set[str]) -> list[Candidate]:
+    """TODO 29: my own edit cuts much shorter than the Cutory plan -> '한 컷은 N초 넘지 않게' (the latest comparison)."""
+    edits = data.get("my_edit") if isinstance(data.get("my_edit"), dict) else {}
+    latest = max((item for item in edits.values() if isinstance(item, dict)), key=lambda item: str(item.get("at", "")),
+                 default=None)
+    if latest is None or "my_edit_max_cut" in answered:
+        return []
+    try:
+        mine, cutory = float(latest["mine"]["median_cut"]), float(latest["cutory"]["median_cut"])
+        count = int(latest["mine"]["cut_count"])
+    except (KeyError, TypeError, ValueError):
+        return []
+    if count < MY_EDIT_MIN_CUTS or cutory <= 0 or mine > MY_EDIT_SHORTER * cutory:
+        return []
+    limit = max(LONG_MIN_CUT, round(mine))
+    text = f"한 컷은 {limit:g}초 넘지 않게"
+    if text in rules or text in offered or (max_cut_rule is not None and limit >= max_cut_rule):
+        return []
+    return [Candidate("my_edit_max_cut", text,
+                      f"내 편집본 한 컷 가운데 값 {mine:.1f}초(컷 {count}개), Cutory 편집안은 {cutory:.1f}초")]
 
 
 def answer(project_output_root: Path, key: str, accepted: bool) -> None:
