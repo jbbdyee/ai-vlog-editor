@@ -28,7 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.app.models import SourceVideo
-from backend.app.services import speaker_voice
+from backend.app.services import speaker_voice, taste_log
 from backend.app.services.day_brief import load_day_brief
 from backend.app.services.edit_brain import Brain, cost_usd, parse_json
 from backend.app.services.llm_edit_interpreter import LLMEditError
@@ -685,6 +685,31 @@ def _new_id() -> str:
     return uuid4().hex[:12]
 
 
+# --- TODO 28: what the user chose, for rule candidates ---------------------------------------------------------------
+
+def _tags(inputs: ChatInputs, candidate_id: UUID, start: float, end: float) -> tuple[str, ...]:
+    scene = inputs.scenes.get(candidate_id)
+    lines = inputs.lines.get(scene.source_video_id, ()) if scene else ()
+    return tuple(taste_log.scene_tags(lines, start, end))
+
+
+def _taste(inputs: ChatInputs, how: str, cut: Cut, from_seconds: float | None = None) -> taste_log.Choice:
+    return taste_log.Choice(how, str(cut.candidate_id), _tags(inputs, cut.candidate_id, cut.start, cut.end), cut.length,
+                            from_seconds)
+
+
+def taste_from_change(inputs: ChatInputs, before: Sequence[Cut], after: Sequence[Cut]) -> list[taste_log.Choice]:
+    """Removed / inserted / shortened / lengthened cuts between two plans (moves and swaps say nothing of taste)."""
+    old = {cut.candidate_id: cut for cut in before}
+    new = {cut.candidate_id: cut for cut in after}
+    out = [_taste(inputs, "removed", cut) for key, cut in old.items() if key not in new]
+    out += [_taste(inputs, "inserted", cut) for key, cut in new.items() if key not in old]
+    for key, cut in new.items():
+        if key in old and abs(cut.length - old[key].length) >= 0.3:
+            out.append(_taste(inputs, "shortened" if cut.length < old[key].length else "longer", cut, old[key].length))
+    return out
+
+
 def recent_lines(messages: Sequence[dict], limit: int = 6) -> list[str]:
     """What the brain sees of the chat: undone requests and undo notices are left out (TODO 27), so a request the
     user took back is not done again."""
@@ -742,6 +767,7 @@ def send_message(session: Session, output_root: Path, project_id: UUID, message:
         snapshot["marks"] = [user_id, reply_id]
         chat["history"].append(snapshot)
         _save_plan(session, project_id, applied.cuts)
+        taste_log.record(output_root, project_id, reply_id, taste_from_change(inputs, inputs.cuts, applied.cuts))
     chat["messages"].append({"id": reply_id, "reply_to": user_id, "role": "assistant", "text": _reply_text(applied, understood),
                              "done": list(applied.done), "skipped": list(applied.skipped), "no_change": not applied.done,
                              "engine": understood.engine, "changed": [str(value) for value in applied.changed], "at": _now()})
@@ -779,10 +805,15 @@ def pick_choice(session: Session, output_root: Path, project_id: UUID, message_i
         raise ChatEditError("CHOICE_ALREADY_PICKED", "이미 고른 목록이에요. 바꾸려면 되돌리기를 눌러 주세요.")
     if choice == -1:
         offer["picked"] = -1
-        chat["messages"].append({"id": _new_id(), "reply_to": message_id, "role": "assistant",
+        reply_id = _new_id()
+        chat["messages"].append({"id": reply_id, "reply_to": message_id, "role": "assistant",
                                  "text": f"{offer.get('for_cut')}번 컷은 그대로 뒀어.", "no_change": True, "engine": "rule",
                                  "at": _now()})
         save_chat(output_root, project_id, chat)
+        inputs = load_inputs(session, output_root, project_id)
+        kept = next((cut for cut in inputs.cuts if str(cut.candidate_id) == offer.get("for_candidate")), None)
+        taste_log.record(output_root, project_id, reply_id,
+                         ([_taste(inputs, "kept", kept)] if kept else []) + _passed(inputs, offer["choices"], None))
         return SendResult((), (), frozenset(), "rule")
     if not 0 <= choice < len(offer["choices"]):
         raise ChatEditError("CHOICE_NOT_FOUND", "목록에 없는 장면이에요.")
@@ -812,7 +843,23 @@ def pick_choice(session: Session, output_root: Path, project_id: UUID, message_i
     chat["messages"].append({"id": reply_id, "reply_to": message_id, "role": "assistant", "text": "골라 준 장면으로 바꿨어.",
                              "done": list(done), "engine": "rule", "changed": [str(new_id)], "at": _now()})
     save_chat(output_root, project_id, chat)
+    taste_log.record(output_root, project_id, reply_id,
+                     [_taste(inputs, "picked", new), _taste(inputs, "replaced", old)] + _passed(inputs, offer["choices"], choice))
     return SendResult(done, (), frozenset({new_id}), "rule")
+
+
+def _passed(inputs: ChatInputs, choices: Sequence[dict], picked: int | None) -> list[taste_log.Choice]:
+    """The pictures that were shown but not picked."""
+    out = []
+    for index, item in enumerate(choices):
+        if index == picked:
+            continue
+        try:
+            cut = Cut(UUID(item["candidate_id"]), float(item["start_seconds"]), float(item["end_seconds"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        out.append(_taste(inputs, "passed", cut))
+    return out
 
 
 def undo(session: Session, output_root: Path, project_id: UUID) -> str:
@@ -830,6 +877,7 @@ def undo(session: Session, output_root: Path, project_id: UUID) -> str:
         raise ChatEditError("UNDO_SCENES_GONE", "되돌릴 편집안의 장면이 더 이상 없어요.")
     _save_plan(session, project_id, cuts)
     marks = set(previous.get("marks") or ())
+    taste_log.mark_undone(output_root, marks)  # TODO 28: a taken-back change is not part of my taste
     for item in chat["messages"]:
         if item.get("id") in marks:
             item["undone"] = True  # TODO 27: not sent to the brain again, shown as taken back

@@ -33,7 +33,7 @@ from backend.app.services.project_reel import (ReelEditRefused, ReelOptions, Ree
                                               edit_reel_draft, unused_shots, job_state, reel_output_dir, render_job_state,
                                               saved_draft, start_reel_draft, start_reel_render, undo_reel_draft)
 from backend.app.services.reel_render import draft_fingerprint, saved_video
-from backend.app.services import edit_brain, edit_rules, face_mosaic, longform_captions, longform_chat, reel_text, scene_thumbs
+from backend.app.services import edit_brain, edit_rules, face_mosaic, longform_captions, longform_chat, reel_text, scene_thumbs, taste_log
 from backend.app.services.reel_modes import (AUTO_MODE, DEFAULT_PACE, DEFAULT_SHORT_SECONDS, MODE_BY_KEY, MODES, PACES,
                                              SHORT_LENGTHS)
 from backend.app.services.story_length import (LENGTH_OPTIONS, Moment, accept_minutes, fit_to_length, footage_seconds,
@@ -1030,6 +1030,12 @@ class ChatLastResponse(BaseModel):
     engine: str
 
 
+class RuleCandidateResponse(BaseModel):
+    key: str
+    text: str
+    why: str
+
+
 class ChatEditResponse(BaseModel):
     project_id: UUID
     cuts: list[ChatCutResponse]
@@ -1042,6 +1048,7 @@ class ChatEditResponse(BaseModel):
     usage: list[ChatUsageResponse]
     dropped: int = 0
     last: ChatLastResponse | None = None
+    rule_candidates: list[RuleCandidateResponse] = []  # TODO 28: found in "내 선택 기록", shared by every project
 
 
 class ChatEditRequest(BaseModel):
@@ -1082,8 +1089,15 @@ def _chat_view(session: Session, output_root: Path, project_id: UUID,
         unused=unused, messages=messages, undo_count=len(chat["history"]),
         brains=[ChatBrainResponse(key=key, label=brain.label) for key, brain in brains.items()],
         default_brain=edit_brain.default_brain_key(brains), usage=usage, dropped=inputs.dropped,
+        rule_candidates=[RuleCandidateResponse(key=item.key, text=item.text, why=item.why)
+                         for item in _rule_candidates(output_root)],
         last=ChatLastResponse(done=list(last.done), skipped=list(last.skipped), changed=sorted(last.changed, key=str),
                               engine=last.engine) if last else None)
+
+
+def _rule_candidates(output_root: Path) -> list[taste_log.Candidate]:
+    texts = edit_rules.rule_texts(output_root)
+    return taste_log.candidates(output_root, texts, edit_rules.max_cut_seconds(texts))
 
 
 def _chat_http_error(error: longform_chat.ChatEditError) -> HTTPException:
@@ -2381,3 +2395,25 @@ def _source_response(source: SourceSummary) -> SourceProcessingSummaryResponse:
             for stage in source.stages
         ],
     )
+
+
+class RuleCandidateAnswer(BaseModel):
+    key: str = Field(min_length=1, max_length=40)
+    accept: bool
+
+
+@router.post("/{project_id}/chat-edit/rule-candidates", response_model=ChatEditResponse)
+async def answer_rule_candidate(request: Request, project_id: UUID, payload: RuleCandidateAnswer) -> ChatEditResponse:
+    """TODO 28: [규칙으로] saves the candidate as a "내 규칙"; [아니야] hides it. Either way it is not offered again."""
+    def work(session, root):
+        found = next((item for item in _rule_candidates(root) if item.key == payload.key), None)
+        if found is None:
+            raise longform_chat.ChatEditError("CANDIDATE_NOT_FOUND", "이 규칙 후보는 이미 없어요. 화면을 새로 고쳐 주세요.")
+        if payload.accept:
+            try:
+                edit_rules.add_rule(root, found.text)
+            except edit_rules.EditRuleError as error:
+                raise longform_chat.ChatEditError(error.code, error.message) from error
+        taste_log.answer(root, payload.key, payload.accept)
+        return None
+    return await _chat_work(request, project_id, work)

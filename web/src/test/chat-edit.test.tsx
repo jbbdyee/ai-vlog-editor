@@ -109,6 +109,33 @@ describe("TODO 26 chat editing screen", () => {
     expect(screen.getByText("규칙으로 저장됨")).toBeInTheDocument();
   });
 
+  it("TODO 28: shows a rule candidate from my choices and accepts it as a rule chip", async () => {
+    const answered: unknown[] = [];
+    let rules: { id: string; text: string }[] = [];
+    const candidate = { key: "other_voice:keep", text: "다른 사람 목소리가 나오는 장면(친구 수다)은 살린다", why: "다른 사람 목소리가 나오는 장면을 3번 살렸고(사진에서 고름 3), 뺀 건 0번" };
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith(`/projects/${project}`)) return Promise.resolve(response({ project_id: project, name: "학원 하루", status: "COMPLETED" }));
+      if (url.endsWith("/projects/edit-rules")) return Promise.resolve(response({ rules }));
+      if (url.endsWith("/chat-edit/rule-candidates")) {
+        answered.push(JSON.parse(String(init?.body)));
+        rules = [{ id: "r1", text: candidate.text }];
+        return Promise.resolve(response({ ...view(4), rule_candidates: [] }));
+      }
+      return Promise.resolve(response({ ...view(4), rule_candidates: [candidate] }));
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[`/projects/${project}/chat-edit`]}><Routes>
+      <Route path="projects/:projectId/chat-edit" element={<ChatEditPage />} />
+    </Routes></MemoryRouter></QueryClientProvider>);
+
+    expect(await screen.findByText(candidate.text)).toBeInTheDocument();
+    expect(screen.getByText(`근거: ${candidate.why}`)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "규칙으로" }));
+    expect(await screen.findByRole("button", { name: `규칙 지우기: ${candidate.text}` })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "아니야" })).not.toBeInTheDocument();
+    expect(answered).toEqual([{ key: "other_voice:keep", accept: true }]);
+  });
+
   it("offers to start from the recommended story direction when there is no plan", async () => {
     vi.stubGlobal("fetch", vi.fn((url: string) => {
       if (url.endsWith(`/projects/${project}`)) return Promise.resolve(response({ project_id: project, name: "학원 하루", status: "COMPLETED" }));

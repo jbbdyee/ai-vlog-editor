@@ -63,7 +63,7 @@ class ChoiceTests(unittest.TestCase):
 
 class SendAndPickTests(unittest.TestCase):
     def setUp(self):
-        self.root = Path(tempfile.mkdtemp())
+        self.root = Path(tempfile.mkdtemp()) / "projects"  # TODO 28: the choice log goes to root.parent/me
         self.project = uuid4()
         self.store = Store(_inputs())
         patches = [mock.patch.object(chat, "load_inputs", self.store.load),

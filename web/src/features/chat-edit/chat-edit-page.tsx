@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, LoaderCircle, Send, Undo2, X } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
-import { addEditRule, clock, cutAt, deleteEditRule, getChatEdit, getEditRules, pickChatChoice, sendChatEdit, startFromStoryDirection, thumbUrl, undoChatEdit, type ChatCut, type ChatEditView, type ChatMessage } from "@/api/chat-edit";
+import { addEditRule, answerRuleCandidate, clock, cutAt, deleteEditRule, getChatEdit, getEditRules, pickChatChoice, sendChatEdit, startFromStoryDirection, thumbUrl, undoChatEdit, type ChatCut, type ChatEditView, type ChatMessage } from "@/api/chat-edit";
 import { ApiError, getProject, isProjectId, sourceMediaUrl } from "@/api/projects";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -152,6 +152,13 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
   const setRules = (value: Awaited<ReturnType<typeof getEditRules>>) => client.setQueryData(["edit-rules"], value);
   const addRule = useMutation({ mutationFn: addEditRule, onSuccess: setRules });
   const removeRule = useMutation({ mutationFn: deleteEditRule, onSuccess: setRules });
+  // TODO 28: candidates found in what I chose; accepting one makes it a rule chip
+  const answer = useMutation({
+    mutationFn: ({ key, accept }: { key: string; accept: boolean }) => answerRuleCandidate(projectId, key, accept),
+    onSuccess: (value) => { refresh(value); void client.invalidateQueries({ queryKey: ["edit-rules"] }); },
+    onError: () => void client.invalidateQueries({ queryKey: ["chat-edit", projectId] }),
+  });
+  const candidates = data.rule_candidates ?? [];
   const ruleTexts = new Set((rules.data ?? []).map((rule) => rule.text));
   const plain = (text: string) => text.replace(/^\s*\[\d{1,3}:\d{2}\]\s*/, "").replace(/\s+/g, " ").trim();
 
@@ -198,7 +205,18 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
         </span>)}
         {rules.data?.length === 0 && <span className="text-[11px] text-slate-500">아직 없어요 · 마음에 든 내 말 아래 [규칙으로 저장]을 누르면 모든 프로젝트의 다음 편집안에 반영돼요</span>}
       </div>
-      {(addRule.error || removeRule.error) && <div className="mb-2"><Alert>{errorText(addRule.error ?? removeRule.error)}</Alert></div>}
+      {candidates.length > 0 && <div className="mb-2 space-y-1.5" aria-label="규칙 후보">
+        {candidates.map((item) => <div key={item.key} className="rounded-lg border border-dashed border-cyan-300/60 bg-cyan-300/[.06] px-3 py-2 text-sm">
+          <p className="text-[11px] text-cyan-200">규칙 후보 · 내 선택 기록에서 찾음</p>
+          <p className="mt-0.5 font-semibold text-slate-100">{item.text}</p>
+          <p className="mt-0.5 text-xs text-slate-400">근거: {item.why}</p>
+          <div className="mt-1.5 flex gap-2">
+            <Button type="button" size="sm" disabled={answer.isPending} onClick={() => answer.mutate({ key: item.key, accept: true })}>규칙으로</Button>
+            <Button type="button" size="sm" variant="secondary" disabled={answer.isPending} onClick={() => answer.mutate({ key: item.key, accept: false })}>아니야</Button>
+          </div>
+        </div>)}
+      </div>}
+      {(addRule.error || removeRule.error || answer.error) && <div className="mb-2"><Alert>{errorText(addRule.error ?? removeRule.error ?? answer.error)}</Alert></div>}
       <div ref={list} className="min-h-40 flex-1 space-y-2 overflow-y-auto pr-1" aria-live="polite">
         {data.messages.length === 0 && <div className="space-y-1 text-sm text-slate-400"><p>영상을 멈추고 고칠 점을 말해 줘요. 멈춘 시각이 앞에 붙어요.</p><p className="text-xs text-slate-500">예: 이 장면 짧게 · 다른 장면으로 · 여기서 끝내 · 3번 빼 · 3번이랑 4번 바꿔 · 안 쓴 장면 2 맨 끝에 넣어 · 다른 사람이 말하는 컷 줄여</p></div>}
         {data.messages.map((item, index) => <div key={item.id ?? index} className={item.role === "user" ? "flex flex-col items-end gap-0.5" : ""}>

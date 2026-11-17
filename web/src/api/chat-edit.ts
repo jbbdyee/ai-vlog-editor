@@ -66,6 +66,15 @@ export interface ChatEditView {
   usage: { key: string; calls: number; input_tokens: number; output_tokens: number; usd: number }[];
   dropped: number;
   last: { done: string[]; skipped: string[]; changed: string[]; engine: string } | null;
+  /** TODO 28: rule candidates found in what I chose in the chat (shared by every project). */
+  rule_candidates?: RuleCandidate[];
+}
+
+export interface RuleCandidate { key: string; text: string; why: string }
+
+/** TODO 28: [규칙으로] (accept) saves it as a rule, [아니야] hides it. */
+export function answerRuleCandidate(id: string, key: string, accept: boolean): Promise<ChatEditView> {
+  return request<ChatEditView>(`/projects/${id}/chat-edit/rule-candidates`, { method: "POST", headers: json, body: JSON.stringify({ key, accept }) });
 }
 
 const json = { "Content-Type": "application/json" };
