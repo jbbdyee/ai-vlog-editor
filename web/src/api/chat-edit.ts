@@ -158,3 +158,34 @@ export async function remakeFromStoryDirection(id: string, minutes?: number): Pr
   }
   return request<ChatEditView>(`/projects/${id}/chat-edit/remake`, { method: "POST", headers: json, body: JSON.stringify({ clips }) });
 }
+
+/** TODO 32-4: my editing taste in my own words (shared by every project). */
+export async function getTasteBrief(): Promise<string> {
+  return (await request<{ text: string }>("/projects/edit-taste")).text;
+}
+
+export async function saveTasteBrief(text: string): Promise<string> {
+  return (await request<{ text: string }>("/projects/edit-taste", { method: "PUT", headers: json, body: JSON.stringify({ text }) })).text;
+}
+
+export interface TasteScores {
+  scenes: number;
+  examples: number;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  usd: number;
+  ran: boolean;
+  counts: Record<string, number>;
+  made_at: string | null;
+}
+
+/** The estimate and the saved scores; no AI call. */
+export function getTasteScores(id: string): Promise<TasteScores> {
+  return request<TasteScores>(`/projects/${id}/taste-scores`);
+}
+
+/** A paid Claude call: scores every scene 0~3 from my taste and my edit's examples. */
+export function runTasteScores(id: string): Promise<TasteScores> {
+  return request<TasteScores>(`/projects/${id}/taste-scores`, { method: "POST", headers: json, body: JSON.stringify({ run: true }) });
+}

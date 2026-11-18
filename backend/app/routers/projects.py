@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 from ipaddress import ip_address
+import json
+import os
 import re
 import shutil
 from typing import Annotated
@@ -31,6 +33,7 @@ from backend.app.services.llm_edit_interpreter import interpret_with_llm
 from backend.app.services.story_direction import (in_day_order, load_story_inputs, rebuild_direction,
                                                   recommend_story_direction, without_scenes)
 from backend.app.services.story_select import SceneVoice, leave_out
+from backend.app.services import taste_score
 from backend.app.services.day_brief import MAX_CHARS as DAY_BRIEF_MAX_CHARS, load_day_brief, save_day_brief
 from backend.app.services.project_reel import (ReelEditRefused, ReelOptions, ReelProjectNotFound, edit_history,
                                               edit_reel_draft, unused_shots, job_state, reel_output_dir, render_job_state,
@@ -940,9 +943,13 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
                          else f"원본 약 {footage / 60:.0f}분의 1/4 정도로 계산한 기본 길이입니다.")
     target = payload.target_minutes or recommended
     # TODO 32-3: too many scenes for the length -> leave out the less important ones instead of cutting all short
+    # TODO 32-4: with taste scores (my description + my edit's examples) they decide what goes first
+    tastes = taste_score.load_scores(request.app.state.project_render_output_root, project_id)
     left_out = leave_out([SceneVoice(s.candidate.candidate_id, s.candidate.source_video_id,
                                      float(s.candidate.end_seconds - s.candidate.start_seconds),
-                                     *voices.get(s.candidate.candidate_id, (0, 0)))
+                                     *voices.get(s.candidate.candidate_id, (0, 0)),
+                                     taste=tastes[s.candidate.candidate_id][0] if s.candidate.candidate_id in tastes
+                                     else (1 if tastes else None))
                           for chapter in direction.chapters for s in chapter.scenes], target * 60, bool(my_voice))
     direction = without_scenes(direction, left_out)
     scenes = [s for chapter in direction.chapters for s in chapter.scenes]
@@ -1206,6 +1213,137 @@ async def add_edit_rule(request: Request, payload: EditRuleRequest) -> EditRules
 @router.delete("/edit-rules/{rule_id}", response_model=EditRulesResponse)
 async def delete_edit_rule(request: Request, rule_id: str) -> EditRulesResponse:
     return _rules_view(edit_rules.delete_rule(request.app.state.project_render_output_root, rule_id))
+
+
+# ---- TODO 32-4: my editing taste in my own words + scene scores from it ---------------------------------------------
+
+TASTE_MODEL_DEFAULT = "claude-sonnet-5-5"  # taste needs judgement; Haiku is ~20x cheaper if wanted (CUTORY_TASTE_MODEL)
+
+
+class TasteBriefBody(BaseModel):
+    text: str = Field(default="", max_length=taste_score.BRIEF_MAX_CHARS)
+
+
+@router.get("/edit-taste", response_model=TasteBriefBody)
+async def get_edit_taste(request: Request) -> TasteBriefBody:
+    return TasteBriefBody(text=taste_score.load_brief(request.app.state.project_render_output_root))
+
+
+@router.put("/edit-taste", response_model=TasteBriefBody)
+async def put_edit_taste(request: Request, payload: TasteBriefBody) -> TasteBriefBody:
+    return TasteBriefBody(text=taste_score.save_brief(request.app.state.project_render_output_root, payload.text))
+
+
+class TasteScoreRequest(BaseModel):
+    run: bool = False  # False: only the estimate (no AI call)
+
+
+class TasteScoreResponse(BaseModel):
+    scenes: int
+    examples: int
+    model: str
+    input_tokens: int
+    output_tokens: int
+    usd: float
+    ran: bool = False
+    counts: dict[str, int] = {}  # "0".."3" -> scenes (after a run or from the saved file)
+    made_at: str | None = None
+
+
+def _taste_model() -> str:
+    return os.environ.get("CUTORY_TASTE_MODEL") or TASTE_MODEL_DEFAULT
+
+
+def _taste_inputs_sync(factory, output_root: Path, project_id: UUID):
+    """Rows to score, and examples from every *other* project I compared with my own edit (TODO 29)."""
+    with factory() as session:
+        rows = taste_score.project_rows(session, output_root, project_id)
+        examples: list[tuple[taste_score.SceneRow, bool]] = []
+        root = Path(output_root)
+        for folder in sorted(root.iterdir()) if root.is_dir() else ():
+            try:
+                other = UUID(folder.name)
+            except ValueError:
+                continue
+            result = my_edit_compare.load_result(output_root, other) if other != project_id else None
+            if not result:
+                continue
+            try:
+                other_rows = taste_score.project_rows(session, output_root, other)
+            except SceneProjectNotFoundError:
+                continue
+            kept = taste_score.kept_by_my_edit(other_rows, result.get("cuts") or [])
+            examples.extend((row, kept[row.candidate_id]) for row in other_rows)
+    return rows, examples
+
+
+def _claude_taste_ask(model: str):
+    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not key:
+        raise HTTPException(status_code=503, detail={"code": "CLAUDE_KEY_MISSING", "message": "Claude 키가 없어 점수를 매길 수 없어요."})
+
+    def ask(system: str, user: str, schema: dict) -> tuple[str, int, int]:
+        import anthropic
+        client = anthropic.Anthropic(api_key=key, timeout=300.0, max_retries=1)
+        response = client.messages.create(
+            model=model, max_tokens=16000, system=system, messages=[{"role": "user", "content": user}],
+            output_config={"format": {"type": "json_schema", "schema": schema}})
+        text = next((block.text for block in response.content if block.type == "text"), "")
+        return text, int(response.usage.input_tokens), int(response.usage.output_tokens)
+    return ask
+
+
+@router.get("/{project_id}/taste-scores", response_model=TasteScoreResponse)
+async def get_project_taste_scores(request: Request, project_id: UUID) -> TasteScoreResponse:
+    return await _taste_scores(request, project_id, TasteScoreRequest())
+
+
+@router.post("/{project_id}/taste-scores", response_model=TasteScoreResponse)
+async def post_project_taste_scores(request: Request, project_id: UUID,
+                                    payload: TasteScoreRequest | None = None) -> TasteScoreResponse:
+    """Estimate (default) or run (run=true, a paid Claude call) the taste scores of every scene."""
+    return await _taste_scores(request, project_id, payload or TasteScoreRequest())
+
+
+async def _taste_scores(request: Request, project_id: UUID, payload: TasteScoreRequest) -> TasteScoreResponse:
+    output_root = request.app.state.project_render_output_root
+    try:
+        rows, examples = await run_in_threadpool(_taste_inputs_sync, _session_factory(request), output_root, project_id)
+    except SceneProjectNotFoundError as error:
+        raise _project_not_found() from error
+    if not rows:
+        raise HTTPException(status_code=409, detail={"code": "NO_SCENE_CANDIDATES", "message": "장면 분석을 먼저 해 주세요."})
+    model = _taste_model()
+    brief = taste_score.load_brief(output_root)
+    system, user = taste_score.build_request(brief, examples, rows)
+    input_tokens, output_tokens = taste_score.estimate_tokens(system, user, len(rows))
+    ran = False
+    if payload.run:
+        try:
+            scores, input_tokens, output_tokens = await run_in_threadpool(
+                taste_score.score, brief, examples, rows, _claude_taste_ask(model))
+        except HTTPException:
+            raise
+        except (ValueError, KeyError) as error:
+            raise HTTPException(status_code=502, detail={"code": "TASTE_BAD_REPLY", "message": "점수 답을 읽지 못했어요."}) from error
+        except Exception as error:  # network / API errors: say so, nothing is saved
+            raise HTTPException(status_code=502, detail={"code": "TASTE_CALL_FAILED", "message": f"Claude 호출이 실패했어요 ({type(error).__name__})."}) from error
+        taste_score.save_scores(output_root, project_id, scores, model=model, input_tokens=input_tokens,
+                                output_tokens=output_tokens, usd=edit_brain.cost_usd(model, input_tokens, output_tokens),
+                                examples=len(examples))
+        ran = True
+    saved = taste_score.load_scores(output_root, project_id)
+    counts = {str(value): sum(1 for score, _ in saved.values() if score == value) for value in range(4)} if saved else {}
+    made_at = None
+    if saved:
+        try:
+            made_at = json.loads(taste_score.scores_path(output_root, project_id).read_text(encoding="utf-8")).get("made_at")
+        except (OSError, ValueError):
+            pass
+    return TasteScoreResponse(scenes=len(rows), examples=len(examples), model=model, input_tokens=input_tokens,
+                              output_tokens=output_tokens,
+                              usd=round(edit_brain.cost_usd(model, input_tokens, output_tokens), 4),
+                              ran=ran, counts=counts, made_at=made_at)
 
 
 class ChatPickRequest(BaseModel):

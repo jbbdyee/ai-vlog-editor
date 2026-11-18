@@ -7,6 +7,7 @@ import { ApiError, getProject, isProjectId, sourceMediaUrl } from "@/api/project
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { MyEditCard } from "@/features/chat-edit/my-edit-card";
+import { TasteBriefCard } from "@/features/chat-edit/taste-brief-card";
 
 const WON_PER_USD = 1450;
 const errorText = (error: unknown) => error instanceof ApiError ? `${error.message}${error.code ? ` (${error.code})` : ""}` : "요청을 완료하지 못했습니다.";
@@ -200,6 +201,7 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
         <ol className="mt-2 space-y-1 text-xs text-slate-400">{data.unused.map((scene) => <li key={scene.candidate_id}><b className="text-slate-200">장면 {scene.number}</b> · {scene.source_filename} · {(scene.end_seconds - scene.start_seconds).toFixed(1)}초 · {scene.speech}</li>)}</ol>
       </details>}
       <MyEditCard projectId={projectId} />
+      <TasteBriefCard projectId={projectId} />
     </section>
 
     <section aria-label="대화창" className="flex min-w-0 flex-col rounded-2xl border border-white/10 bg-white/[.03] p-3 lg:max-h-[calc(100vh-7rem)] lg:sticky lg:top-3">

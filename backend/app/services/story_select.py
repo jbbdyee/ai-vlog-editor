@@ -26,9 +26,12 @@ class SceneVoice:
     seconds: float
     mine: int = 0  # lines in my voice inside the scene
     others: int = 0  # lines in other voices
+    taste: int | None = None  # TODO 32-4: 0~3 from my description + my edit's examples; replaces the voice order
 
     @property
     def kind(self) -> int:
+        if self.taste is not None:
+            return self.taste
         return MINE if self.mine else OTHERS if self.others else NO_SPEECH
 
 
@@ -39,7 +42,7 @@ def leave_out(scenes: Sequence[SceneVoice], target_seconds: float, keep_mine: bo
     if total <= budget or len(scenes) <= 2:
         return []
     protected = {scenes[0].candidate_id, scenes[-1].candidate_id}
-    if keep_mine:
+    if keep_mine and not any(scene.taste is not None for scene in scenes):  # taste scores already weigh my voice
         protected |= {scene.candidate_id for scene in scenes if scene.mine}
     kept_by_source: dict[UUID, float] = {}
     for scene in scenes:
