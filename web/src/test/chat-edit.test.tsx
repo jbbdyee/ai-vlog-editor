@@ -136,6 +136,31 @@ describe("TODO 26 chat editing screen", () => {
     expect(answered).toEqual([{ key: "other_voice:keep", accept: true }]);
   });
 
+  it("TODO 32: remakes the plan from a fresh recommendation, and undo is offered", async () => {
+    const sent: unknown[] = [];
+    const scene = (index: number, start: number) => ({ candidate_id: ids[index], source_video_id: source, source_filename: "0789.MP4",
+      start_seconds: start, end_seconds: start + 3, clip_start_seconds: start, clip_end_seconds: start + 3 });
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith(`/projects/${project}`)) return Promise.resolve(response({ project_id: project, name: "학원 하루", status: "COMPLETED" }));
+      if (url.endsWith("/story-direction")) return Promise.resolve(response({ project_id: project, title: "학원 하루", summary: "", engine: "rule", notes: [],
+        chapters: [{ title: "오전", description: "", reason: "", total_seconds: 6, scenes: [scene(0, 0), scene(2, 20)] }],
+        target_minutes: 1, recommended_minutes: 1, length_reason: "", length_options: [1], total_seconds: 6, max_seconds: 60, footage_seconds: 60 }));
+      if (url.endsWith("/chat-edit/remake")) {
+        sent.push(JSON.parse(String(init?.body)));
+        return Promise.resolve(response(view(4, [{ id: "r1", role: "assistant", text: "추천으로 다시 만들었어: 컷 2개, 00:06.", at_seconds: null, done: [], skipped: [], engine: "rule", error: null, changed: [], undo: false }], 1)));
+      }
+      return Promise.resolve(response(view(4)));
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[`/projects/${project}/chat-edit`]}><Routes>
+      <Route path="projects/:projectId/chat-edit" element={<ChatEditPage />} />
+    </Routes></MemoryRouter></QueryClientProvider>);
+    await userEvent.click(await screen.findByRole("button", { name: "추천으로 다시 만들기" }));
+    expect(await screen.findByText(/추천으로 다시 만들었어/)).toBeInTheDocument();
+    expect(sent[0]).toEqual({ clips: [{ candidate_id: ids[0], start_seconds: 0, end_seconds: 3 }, { candidate_id: ids[2], start_seconds: 20, end_seconds: 23 }] });
+    expect(screen.getByRole("button", { name: "되돌리기 (1)" })).toBeEnabled();
+  });
+
   it("offers to start from the recommended story direction when there is no plan", async () => {
     vi.stubGlobal("fetch", vi.fn((url: string) => {
       if (url.endsWith(`/projects/${project}`)) return Promise.resolve(response({ project_id: project, name: "학원 하루", status: "COMPLETED" }));

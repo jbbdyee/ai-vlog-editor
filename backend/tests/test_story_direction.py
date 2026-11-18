@@ -9,7 +9,7 @@ from uuid import uuid4
 from backend.app.models import EpisodeSplitPolicy, Project
 from backend.app.services.llm_edit_interpreter import LLMEditError
 from backend.app.services.project_scene_candidates import ActiveCandidateSummary, CandidateEvidenceSummary
-from backend.app.services.story_direction import recommend_story_direction
+from backend.app.services.story_direction import in_day_order, recommend_story_direction
 from backend.tests import test_qa03_render_integrity as qa03
 
 VIDEO_A, VIDEO_B = uuid4(), uuid4()
@@ -163,3 +163,49 @@ class DayBriefApiTests(TestCase):
             cleared = self.client.post(self.url("/story-direction"), json={"day_brief": ""})
         self.assertEqual(cleared.json()["day_brief"], "")
         self.assertEqual(self.client.get(self.url("/day-brief")).json(), {"text": ""})
+
+
+# ---- TODO 32: the day in order, ending on the last scene filmed ----------------------------------------------------
+MORNING, CLASS, DINNER, NIGHT_HOME = uuid4(), uuid4(), uuid4(), uuid4()
+DAY_NAMES = {NIGHT_HOME: "DJI_20261112231300_0035_D.MP4", DINNER: "DJI_20261112180000_0020_D.MP4",
+             CLASS: "DJI_20261112090000_0010_D.MP4", MORNING: "DJI_20261112071800_0001_D.MP4"}
+WALK = scene(MORNING, 0, 6, "학원 가는 길")
+TALK = scene(CLASS, 30, 40, "발표할게요")
+LATE_CLASS = scene(CLASS, 300, 310, "질문 있어요")
+CHICKEN = scene(DINNER, 5, 15, "치킨 먹자")
+BED = scene(NIGHT_HOME, 0, 4, "오늘 끝")
+DAY = [BED, CHICKEN, LATE_CLASS, TALK, WALK]
+
+
+class DayOrderTests(TestCase):
+    def direction(self, chapters):
+        # scene numbers follow file order: 1 WALK, 2 TALK, 3 LATE_CLASS, 4 CHICKEN, 5 BED
+        return recommend_story_direction(DAY, DAY_NAMES, engine({"title": "학원 하루", "summary": "하루",
+                                                                  "chapters": chapters}))
+
+    def test_mixed_times_are_put_back_in_day_order_and_end_on_last_scene(self):
+        result = in_day_order(self.direction([chapter("아침", [1]), chapter("저녁", [4]), chapter("수업", [3, 2])]),
+                              DAY, DAY_NAMES)
+        flat = [s.candidate.candidate_id for c in result.chapters for s in c.scenes]
+        self.assertEqual(flat, [s.candidate_id for s in (WALK, TALK, LATE_CLASS, CHICKEN, BED)])
+        self.assertEqual([c.title for c in result.chapters], ["아침", "수업", "저녁"])
+        self.assertTrue(any("거꾸로 가던 곳 2곳" in note for note in result.notes))
+        self.assertTrue(any("마지막에 찍은 장면" in note for note in result.notes))
+
+    def test_split_chapter_keeps_title_with_continued_mark(self):
+        result = in_day_order(self.direction([chapter("학원", [2, 4]), chapter("수업", [3]), chapter("밤", [5])]),
+                              DAY, DAY_NAMES)
+        self.assertEqual([c.title for c in result.chapters], ["학원", "수업", "학원 (이어서)", "밤"])
+        self.assertEqual(ids(result.chapters[2]), [CHICKEN.candidate_id])
+
+    def test_already_in_order_is_unchanged(self):
+        before = self.direction([chapter("하루", [1, 2, 5])])
+        self.assertIs(in_day_order(before, DAY, DAY_NAMES), before)
+
+    def test_without_times_in_names_file_order_is_used(self):
+        names = {MORNING: "b.mp4", CLASS: "a.mp4", DINNER: "c.mp4", NIGHT_HOME: "d.mp4"}
+        result = in_day_order(recommend_story_direction(DAY, names, engine({"title": "t", "summary": "s",
+                              "chapters": [chapter("x", [4, 1])]})), DAY, names)
+        # file order: a(CLASS) b(MORNING) c(DINNER) d(NIGHT): scene 1 = TALK, 4 = CHICKEN, last = BED
+        flat = [s.candidate.candidate_id for c in result.chapters for s in c.scenes]
+        self.assertEqual(flat, [TALK.candidate_id, CHICKEN.candidate_id, BED.candidate_id])

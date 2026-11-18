@@ -9,7 +9,9 @@ File names are never sent to the LLM; videos are referred to as "영상 1, 2, ..
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 from typing import Sequence
 from uuid import UUID
 
@@ -23,6 +25,7 @@ from backend.app.services.llm_edit_interpreter import (EVIDENCE_LABELS, Completi
 from backend.app.services.project_scene_candidates import ActiveCandidateSummary, list_active_project_candidates
 
 MAX_CHAPTERS = 6
+MAX_DAY_CHAPTERS = 12  # TODO 32: after putting scenes in filming order (the length-only re-send takes 12)
 
 
 class LLMChapter(BaseModel):
@@ -242,3 +245,70 @@ def recommend_story_direction(candidates: Sequence[ActiveCandidateSummary], file
     except _PlanRejected as error:
         reason = str(error)
     return _rule_direction(scenes, "AI 추천을 만들지 못해 영상 순서대로 묶었습니다.", reason)
+
+
+# ---- TODO 32: keep the day's order and end on the last thing filmed ------------------------------------------------
+# From comparing my own edit with Cutory's (TODO 31): mine follows the day (0 steps back), Cutory's went back twice
+# and never reached the night. The AI still picks the scenes; Python only puts them in filming order afterwards.
+
+FILMED = re.compile(r"_(\d{14})_")  # DJI_20261112071822_0001_D.MP4 -> recording start
+
+
+def _filmed(filename: str) -> datetime | None:
+    found = FILMED.search(filename or "")
+    try:
+        return datetime.strptime(found.group(1), "%Y%m%d%H%M%S") if found else None
+    except ValueError:
+        return None
+
+
+def day_order(candidates: Sequence[ActiveCandidateSummary], filenames: dict[UUID, str]) -> list[StoryScene]:
+    """Every scene in filming order: the time in the file name when every video has one, else file-name order."""
+    scenes = _ordered_scenes(candidates, filenames)
+    times = {s.candidate.source_video_id: _filmed(s.source_filename) for s in scenes}
+    if scenes and all(times.values()):
+        scenes.sort(key=lambda s: (times[s.candidate.source_video_id] + timedelta(seconds=float(s.candidate.start_seconds)),
+                                   s.source_index))
+    return scenes
+
+
+def in_day_order(direction: StoryDirection, candidates: Sequence[ActiveCandidateSummary],
+                 filenames: dict[UUID, str]) -> StoryDirection:
+    """Scenes in filming order (chapters split where the AI mixed times) and the day's last scene at the end."""
+    order = day_order(candidates, filenames)
+    if not order or not direction.chapters:
+        return direction
+    rank = {s.candidate.candidate_id: index for index, s in enumerate(order)}
+    picked = [(number, s) for number, chapter in enumerate(direction.chapters) for s in chapter.scenes
+              if s.candidate.candidate_id in rank]
+    backwards = sum(1 for before, after in zip(picked, picked[1:])
+                    if rank[after[1].candidate.candidate_id] < rank[before[1].candidate.candidate_id])
+    last = order[-1]
+    ending = last.candidate.candidate_id not in {s.candidate.candidate_id for _, s in picked}
+    if not backwards and not ending:
+        return direction
+    if ending:
+        picked.append((None, last))  # joins whichever chapter ends the day
+    picked.sort(key=lambda item: rank[item[1].candidate.candidate_id])
+    runs: list[list] = []  # [chapter number, scenes]
+    for number, s in picked:
+        if runs and (number is None or runs[-1][0] == number):
+            runs[-1][1].append(s)
+        else:
+            runs.append([number if number is not None else len(direction.chapters) - 1, [s]])
+    while len(runs) > MAX_DAY_CHAPTERS:  # many short splits: fold the smallest piece into the one before it
+        smallest = min(range(1, len(runs)), key=lambda i: len(runs[i][1]))
+        runs[smallest - 1][1].extend(runs.pop(smallest)[1])
+    seen: set[int] = set()
+    chapters = []
+    for number, scenes in runs:
+        source = direction.chapters[number]
+        title = source.title if number not in seen else f"{source.title[:34]} (이어서)"
+        seen.add(number)
+        chapters.append(StoryChapter(title, source.description, source.reason, tuple(scenes)))
+    notes = list(direction.notes)
+    if backwards:
+        notes.append(f"하루 시간 순서대로 장면을 다시 줄 세웠습니다(거꾸로 가던 곳 {backwards}곳).")
+    if ending:
+        notes.append("그날 마지막에 찍은 장면으로 끝나도록 맨 끝에 넣었습니다.")
+    return replace(direction, chapters=tuple(chapters), notes=tuple(notes))

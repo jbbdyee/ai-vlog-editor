@@ -142,3 +142,16 @@ export function cutAt(cuts: ChatCut[], seconds: number): number {
   }
   return Math.max(0, cuts.length - 1);
 }
+
+/** TODO 32: ask for a new recommendation (in day order) and put it in place of the plan; undo brings the old one back. */
+export async function remakeFromStoryDirection(id: string): Promise<ChatEditView> {
+  const direction = await getStoryDirection(id);
+  const seen = new Set<string>();
+  const clips = [];
+  for (const chapter of direction.chapters) for (const scene of chapter.scenes) {
+    if (seen.has(scene.candidate_id)) continue;
+    seen.add(scene.candidate_id);
+    clips.push({ candidate_id: scene.candidate_id, start_seconds: scene.clip_start_seconds, end_seconds: scene.clip_end_seconds });
+  }
+  return request<ChatEditView>(`/projects/${id}/chat-edit/remake`, { method: "POST", headers: json, body: JSON.stringify({ clips }) });
+}

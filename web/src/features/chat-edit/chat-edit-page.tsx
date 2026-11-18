@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, LoaderCircle, Send, Undo2, X } from "lucide-react";
+import { ArrowLeft, LoaderCircle, RefreshCw, Send, Undo2, X } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
-import { addEditRule, answerRuleCandidate, clock, cutAt, deleteEditRule, getChatEdit, getEditRules, pickChatChoice, sendChatEdit, startFromStoryDirection, thumbUrl, undoChatEdit, type ChatCut, type ChatEditView, type ChatMessage } from "@/api/chat-edit";
+import { addEditRule, answerRuleCandidate, clock, cutAt, deleteEditRule, getChatEdit, getEditRules, pickChatChoice, remakeFromStoryDirection, sendChatEdit, startFromStoryDirection, thumbUrl, undoChatEdit, type ChatCut, type ChatEditView, type ChatMessage } from "@/api/chat-edit";
 import { ApiError, getProject, isProjectId, sourceMediaUrl } from "@/api/projects";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -142,12 +142,14 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
     onError: () => void client.invalidateQueries({ queryKey: ["chat-edit", projectId] }),
   });
   const undo = useMutation({ mutationFn: () => undoChatEdit(projectId), onSuccess: refresh });
+  // TODO 32: a fresh recommendation (the day in order) in place of the plan; undo brings this plan back
+  const remake = useMutation({ mutationFn: () => remakeFromStoryDirection(projectId), onSuccess: refresh });
   const pick = useMutation({
     mutationFn: ({ messageId, choice }: { messageId: string; choice: number }) => pickChatChoice(projectId, messageId, choice),
     onSuccess: refresh,
     onError: () => void client.invalidateQueries({ queryKey: ["chat-edit", projectId] }),
   });
-  const busy = send.isPending || undo.isPending || pick.isPending;
+  const busy = send.isPending || undo.isPending || pick.isPending || remake.isPending;
   // TODO 27: sentences saved as rules, shared by every project
   const rules = useQuery({ queryKey: ["edit-rules"], queryFn: getEditRules });
   const setRules = (value: Awaited<ReturnType<typeof getEditRules>>) => client.setQueryData(["edit-rules"], value);
@@ -229,7 +231,7 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
         </div>)}
         {send.isPending && <p className="flex items-center gap-2 text-sm text-slate-400"><LoaderCircle size={14} className="animate-spin" />고치는 중…</p>}
       </div>
-      {(send.error || undo.error || pick.error) && <div className="mt-2"><Alert>{errorText(send.error ?? undo.error ?? pick.error)}</Alert></div>}
+      {(send.error || undo.error || pick.error || remake.error) && <div className="mt-2"><Alert>{errorText(send.error ?? undo.error ?? pick.error ?? remake.error)}</Alert></div>}
       <form className="mt-3 space-y-2 border-t border-white/10 pt-3" onSubmit={(event) => { event.preventDefault(); submit(); }}>
         <div className="flex min-w-0 items-center gap-2 rounded-lg border border-white/15 bg-[#0b1420] px-2 focus-within:ring-2 focus-within:ring-cyan-300">
           {stamp !== null && <span className="flex shrink-0 items-center gap-1 rounded-full border border-fuchsia-300/60 px-2 py-0.5 text-xs tabular-nums text-fuchsia-200">[{clock(stamp)}]<button type="button" aria-label="시각 떼기" onClick={() => setStamp(null)}><X size={12} /></button></span>}
@@ -240,6 +242,7 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
         <div className="flex flex-wrap items-center gap-2">
           <Button type="submit" size="sm" disabled={busy || !message.trim()}><span className="flex items-center gap-1">{send.isPending ? <LoaderCircle size={14} className="animate-spin" /> : <Send size={14} />}고치기</span></Button>
           <Button type="button" size="sm" variant="secondary" disabled={busy || data.undo_count === 0} onClick={() => undo.mutate()}><span className="flex items-center gap-1"><Undo2 size={14} />되돌리기{data.undo_count > 0 ? ` (${data.undo_count})` : ""}</span></Button>
+          <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => remake.mutate()} title="지금 편집안은 되돌리기로 다시 가져올 수 있어요"><span className="flex items-center gap-1">{remake.isPending ? <LoaderCircle size={14} className="animate-spin" /> : <RefreshCw size={14} />}{remake.isPending ? "추천 만드는 중…" : "추천으로 다시 만들기"}</span></Button>
           {data.brains.length > 0 && <label className="ml-auto flex items-center gap-1 text-xs text-slate-400">어려운 말 담당
             <select aria-label="편집 두뇌" value={brain ?? ""} onChange={(event) => setBrain(event.target.value)} className="rounded border border-white/15 bg-[#0b1420] px-1 py-0.5 text-xs text-slate-200">
               {data.brains.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}

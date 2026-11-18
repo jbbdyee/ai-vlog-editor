@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -134,6 +135,34 @@ class ChatFileTests(unittest.TestCase):
             again = chat.load_chat(Path(root), project)
             self.assertEqual(len(again["history"]), chat.MAX_HISTORY)
             self.assertEqual(again["history"][-1]["label"], "14")
+
+
+class RemakeTests(unittest.TestCase):
+    """TODO 32: a fresh recommendation replaces the plan, and undo brings the old plan back."""
+
+    def test_remake_saves_new_plan_and_undo_restores_old(self):
+        inputs = _inputs()
+        saved = []
+        old = list(inputs.cuts)
+        new_ids = list(inputs.scenes)[::-1]  # a different order, unused scene included
+        clips = [(candidate, 1.0, 3.0) for candidate in new_ids] + [(uuid4(), 0.0, 2.0)]  # unknown scene is skipped
+        with tempfile.TemporaryDirectory() as root, \
+                unittest.mock.patch.object(chat, "load_inputs", return_value=inputs), \
+                unittest.mock.patch.object(chat, "_save_plan", side_effect=lambda s, p, cuts: saved.append(list(cuts))):
+            project = uuid4()
+            self.assertEqual(chat.remake(None, Path(root), project, clips), len(new_ids))
+            self.assertEqual([cut.candidate_id for cut in saved[-1]], new_ids)
+            data = chat.load_chat(Path(root), project)
+            self.assertEqual(data["history"][-1]["label"], "추천으로 다시 만들기")
+            self.assertIn("추천으로 다시 만들었어: 컷 5개", data["messages"][-1]["text"])
+            chat.undo(None, Path(root), project)
+            self.assertEqual(saved[-1], old)
+
+    def test_remake_without_known_scenes_is_refused(self):
+        with tempfile.TemporaryDirectory() as root, \
+                unittest.mock.patch.object(chat, "load_inputs", return_value=_inputs()):
+            with self.assertRaises(chat.ChatEditError):
+                chat.remake(None, Path(root), uuid4(), [(uuid4(), 0.0, 2.0)])
 
 
 if __name__ == "__main__":

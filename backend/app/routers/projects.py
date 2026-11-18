@@ -28,7 +28,8 @@ from backend.app.models.render import ProjectRenderRun
 from backend.app.services.project_processing import process_project
 from backend.app.services.edit_request import MAX_REQUEST_LENGTH
 from backend.app.services.llm_edit_interpreter import interpret_with_llm
-from backend.app.services.story_direction import load_story_inputs, rebuild_direction, recommend_story_direction
+from backend.app.services.story_direction import (in_day_order, load_story_inputs, rebuild_direction,
+                                                  recommend_story_direction)
 from backend.app.services.day_brief import MAX_CHARS as DAY_BRIEF_MAX_CHARS, load_day_brief, save_day_brief
 from backend.app.services.project_reel import (ReelEditRefused, ReelOptions, ReelProjectNotFound, edit_history,
                                               edit_reel_draft, unused_shots, job_state, reel_output_dir, render_job_state,
@@ -909,6 +910,7 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
         direction = await run_in_threadpool(recommend_story_direction, candidates, filenames, None,
                                             footage / 60 or None, brief, rules)
         rules_used = rules if direction.engine.startswith("llm:") else []
+    direction = in_day_order(direction, candidates, filenames)  # TODO 32: the day in order, ending on its last scene
     if accept_minutes(direction.recommended_minutes, footage):
         recommended = direction.recommended_minutes
         length_reason = direction.length_reason or "AI가 영상 내용을 보고 추천한 길이입니다."
@@ -1210,6 +1212,27 @@ async def undo_project_chat_edit(request: Request, project_id: UUID) -> ChatEdit
     """TODO 26: put back the plan from before the last chat edit."""
     def work(session, root):
         longform_chat.undo(session, root, project_id)
+        return None
+    return await _chat_work(request, project_id, work)
+
+
+class ChatRemakeClip(BaseModel):
+    candidate_id: UUID
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(gt=0)
+
+
+class ChatRemakeRequest(BaseModel):
+    clips: list[ChatRemakeClip] = Field(min_length=1, max_length=400)
+
+
+@router.post("/{project_id}/chat-edit/remake", response_model=ChatEditResponse)
+async def remake_project_chat_edit(request: Request, project_id: UUID, payload: ChatRemakeRequest) -> ChatEditResponse:
+    """TODO 32: replace the plan with a new recommended one (undo puts the old plan back)."""
+    clips = [(c.candidate_id, c.start_seconds, c.end_seconds) for c in payload.clips]
+
+    def work(session, root):
+        longform_chat.remake(session, root, project_id, clips)
         return None
     return await _chat_work(request, project_id, work)
 

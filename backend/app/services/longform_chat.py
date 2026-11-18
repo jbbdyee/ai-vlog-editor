@@ -891,3 +891,27 @@ def undo(session: Session, output_root: Path, project_id: UUID) -> str:
                              "undo": True, "changed": changed, "at": _now()})
     save_chat(output_root, project_id, chat)
     return label
+
+
+def remake(session: Session, output_root: Path, project_id: UUID,
+           clips: Sequence[tuple[UUID, float, float]]) -> int:
+    """TODO 32: put a fresh recommendation in place of the plan; the plan before it stays one undo away."""
+    inputs = load_inputs(session, output_root, project_id)
+    cuts = [Cut(candidate_id, float(start), float(end)) for candidate_id, start, end in clips
+            if candidate_id in inputs.scenes and end > start]
+    if not cuts:
+        raise ChatEditError("REMAKE_EMPTY", "새 추천에 넣을 장면이 없어요.")
+    chat = load_chat(output_root, project_id)
+    reply_id = _new_id()
+    if inputs.cuts:
+        snapshot = _snapshot(inputs.cuts, "추천으로 다시 만들기")
+        snapshot["marks"] = [reply_id]
+        chat["history"].append(snapshot)
+    _save_plan(session, project_id, cuts)
+    total = sum(cut.length for cut in cuts)
+    chat["messages"].append({"id": reply_id, "role": "assistant", "engine": "rule", "at": _now(),
+                             "text": f"추천으로 다시 만들었어: 컷 {len(cuts)}개, {clock(total)}. "
+                                     "하루 시간 순서대로 줄 세웠어. 전 편집안이 낫다면 되돌리기를 눌러 줘.",
+                             "changed": [str(cut.candidate_id) for cut in cuts]})
+    save_chat(output_root, project_id, chat)
+    return len(cuts)
