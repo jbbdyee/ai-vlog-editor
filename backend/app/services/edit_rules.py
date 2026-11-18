@@ -82,3 +82,11 @@ def max_cut_seconds(texts: list[str]) -> float | None:
     limits = [float(match.group(1)) for text in texts for match in _MAX_CUT.finditer(text)]
     limits = [value for value in limits if value >= 1]
     return min(limits) if limits else None
+
+
+_MY_VOICE = re.compile(r"(내가\s*말하는|내\s*목소리|내\s*말)[^.]*?살")
+
+
+def keeps_my_voice(texts: list[str]) -> bool:
+    """TODO 32-2: '내가 말하는 장면은 살린다' -> scenes with my voice are always in the recommendation, uncut."""
+    return any(_MY_VOICE.search(text) for text in texts)

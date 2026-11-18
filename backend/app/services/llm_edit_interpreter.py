@@ -29,6 +29,22 @@ TIMEOUT_SECONDS = 90.0
 # TODO 27: Ollama keeps only 4096 tokens by default. The scene table of a 30+ scene day already takes ~3500,
 # so the answer was cut off mid-JSON (done_reason "length"). 8192 leaves room for the answer.
 OLLAMA_NUM_CTX = 8192
+# TODO 32-2: with all 35 videos analysed, 학원 하루 has 182 scenes and the request is ~17,800 tokens. Ollama silently
+# drops the *start* of a longer prompt, so the morning scenes never reached the AI. Size the window to the request.
+OLLAMA_MAX_CTX = 32768
+CHARS_PER_TOKEN = 1.4  # measured 1.54 on the 학원 하루 table (Korean + numbers); a little low on purpose
+ANSWER_TOKENS = 3000
+
+
+def ollama_num_ctx(*texts: str) -> int:
+    """Smallest window (a 4096 step, 8192~32768) that holds the request plus room for the answer."""
+    needed = int(sum(len(text) for text in texts) / CHARS_PER_TOKEN) + ANSWER_TOKENS
+    return max(OLLAMA_NUM_CTX, min(OLLAMA_MAX_CTX, -(-needed // 4096) * 4096))
+
+
+def ollama_timeout(num_ctx: int) -> float:
+    """A long request takes longer to read: 90 s for the usual window, up to 6 minutes for the largest."""
+    return TIMEOUT_SECONDS * max(1.0, num_ctx / OLLAMA_NUM_CTX)
 EVIDENCE_LABELS = {"TRANSCRIPT_REACTION_CUE": "리액션 발화", "TRANSCRIPT_STRUCTURE": "말하는 구간",
                    "AUDIO_ACTIVITY": "소리 활동", "VISUAL_ACTIVITY": "화면 움직임"}
 
@@ -87,8 +103,9 @@ def configured_engine() -> tuple[str, str, Completion] | None:
 def _ollama_completion(base: str, model: str) -> Completion:
     def call(system: str, user: str, schema: dict) -> str:
         try:
-            response = httpx.post(f"{base}/api/chat", timeout=TIMEOUT_SECONDS, json={
-                "model": model, "stream": False, "format": schema, "options": {"temperature": 0, "num_ctx": OLLAMA_NUM_CTX},
+            num_ctx = ollama_num_ctx(system, user, json.dumps(schema))
+            response = httpx.post(f"{base}/api/chat", timeout=ollama_timeout(num_ctx), json={
+                "model": model, "stream": False, "format": schema, "options": {"temperature": 0, "num_ctx": num_ctx},
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
         except httpx.TimeoutException as error:
             raise LLMEditError("LLM_TIMEOUT") from error

@@ -209,3 +209,16 @@ class DayOrderTests(TestCase):
         # file order: a(CLASS) b(MORNING) c(DINNER) d(NIGHT): scene 1 = TALK, 4 = CHICKEN, last = BED
         flat = [s.candidate.candidate_id for c in result.chapters for s in c.scenes]
         self.assertEqual(flat, [TALK.candidate_id, CHICKEN.candidate_id, BED.candidate_id])
+
+    def test_my_voice_scenes_are_shown_to_the_ai_and_kept(self):
+        # TODO 32-2: the AI sees "내 목소리 N줄"; a scene in my voice it left out goes in at its time
+        calls = []
+        before = recommend_story_direction(DAY, DAY_NAMES, engine({"title": "t", "summary": "s",
+                                           "chapters": [chapter("아침", [1]), chapter("저녁", [4])]}, calls),
+                                           my_voice={TALK.candidate_id: 3})
+        self.assertIn("내 목소리 3줄", calls[0][0])
+        self.assertEqual(calls[0][0].count("내 목소리"), 1)
+        result = in_day_order(before, DAY, DAY_NAMES, (TALK.candidate_id,))
+        flat = [s.candidate.candidate_id for c in result.chapters for s in c.scenes]
+        self.assertEqual(flat, [s.candidate_id for s in (WALK, TALK, CHICKEN, BED)])
+        self.assertTrue(any("내가 말하는 장면 1개" in note for note in result.notes))

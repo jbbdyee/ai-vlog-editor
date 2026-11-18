@@ -1,5 +1,6 @@
 from uuid import UUID
 from unittest import TestCase
+from unittest.mock import patch
 
 from backend.app.services.autonomous_discovery import (
     AutonomousDiscoveryError,
@@ -55,9 +56,16 @@ class ManifestCompactionTests(TestCase):
         self.assertTrue(encoded.startswith("zlib:"))
         self.assertEqual(len(_decode_analysis(encoded).evidences), 1)
 
+    def test_talk_heavy_result_over_old_column_size_round_trips(self):
+        # TODO 32-2: 200 spans used to fail at 1024 characters; the column is text now
+        encoded = _encode_analysis(_manifest(200))
+        self.assertGreater(len(encoded), 1024)
+        self.assertEqual(len(_decode_analysis(encoded).evidences), 200)
+
     def test_oversized_manifest_still_fails_instead_of_truncating(self):
-        with self.assertRaisesRegex(AutonomousDiscoveryError, "too large"):
-            _encode_analysis(_manifest(200))
+        with patch("backend.app.services.autonomous_discovery.MAX_RESULT_REFERENCE_CHARS", 1024):
+            with self.assertRaisesRegex(AutonomousDiscoveryError, "too large"):
+                _encode_analysis(_manifest(200))
 
     def test_invalid_compact_encoding_is_not_accepted(self):
         self.assertIsNone(_decode_analysis("zlib2:not-base64"))

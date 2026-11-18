@@ -866,6 +866,20 @@ class StoryDirectionRequest(BaseModel):
     day_brief: str | None = Field(default=None, max_length=DAY_BRIEF_MAX_CHARS)
 
 
+def _my_voice_counts_sync(factory, output_root, project_id, candidates) -> dict[UUID, int]:
+    """TODO 32-2: how many lines in my voice (TODO 24 voice step) fall inside each scene."""
+    with factory() as session:
+        lines = longform_chat.load_inputs(session, output_root, project_id).lines
+    counts: dict[UUID, int] = {}
+    for candidate in candidates:
+        start, end = float(candidate.start_seconds), float(candidate.end_seconds)
+        mine = sum(1 for line in lines.get(candidate.source_video_id, ())
+                   if line.speaker == "me" and line.end > start and line.start < end)
+        if mine:
+            counts[candidate.candidate_id] = mine
+    return counts
+
+
 def _load_story_inputs_sync(factory, project_id):
     with factory() as session:
         candidates, filenames = load_story_inputs(session, project_id)
@@ -893,6 +907,7 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
     footage = footage_seconds(timing)
     brief = ""
     rules_used: list[str] = []
+    my_voice: dict[UUID, int] = {}
     if payload.reuse is not None:
         reuse = payload.reuse
         try:
@@ -907,10 +922,13 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
         brief = (save_day_brief(output_root, project_id, payload.day_brief) if payload.day_brief is not None
                  else load_day_brief(output_root, project_id))
         rules = edit_rules.rule_texts(output_root)
+        if edit_rules.keeps_my_voice(rules):  # TODO 32-2: "내가 말하는 장면은 살린다"
+            my_voice = await run_in_threadpool(_my_voice_counts_sync, factory, output_root, project_id, candidates)
         direction = await run_in_threadpool(recommend_story_direction, candidates, filenames, None,
-                                            footage / 60 or None, brief, rules)
+                                            footage / 60 or None, brief, rules, my_voice)
         rules_used = rules if direction.engine.startswith("llm:") else []
-    direction = in_day_order(direction, candidates, filenames)  # TODO 32: the day in order, ending on its last scene
+    # TODO 32: the day in order, ending on its last scene (and, 32-2, every scene in my voice)
+    direction = in_day_order(direction, candidates, filenames, tuple(my_voice))
     if accept_minutes(direction.recommended_minutes, footage):
         recommended = direction.recommended_minutes
         length_reason = direction.length_reason or "AI가 영상 내용을 보고 추천한 길이입니다."
@@ -928,6 +946,8 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
     capped = 0
     if max_cut:
         for key, (clip_start, clip_end) in list(clip_of.items()):
+            if key in my_voice:
+                continue  # TODO 32-2: a scene where I talk keeps its length
             if clip_end - clip_start > max_cut + 1e-3:
                 middle = (clip_start + clip_end) / 2
                 clip_of[key] = (round(middle - max_cut / 2, 3), round(middle + max_cut / 2, 3))
@@ -945,7 +965,8 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
     return StoryDirectionResponse(
         project_id=project_id, title=direction.title, summary=direction.summary, engine=direction.engine,
         notes=list(direction.notes) + list(length_notes(fit))
-        + ([f"내 규칙대로 {max_cut:g}초가 넘는 장면 {capped}개를 {max_cut:g}초로 줄였습니다."] if capped else []),
+        + ([f"내 규칙대로 {max_cut:g}초가 넘는 장면 {capped}개를 {max_cut:g}초로 줄였습니다."] if capped else [])
+        + ([f"내가 말하는 장면 {len(my_voice)}개는 길이를 줄이지 않았습니다."] if my_voice and max_cut else []),
         fallback_reason=direction.fallback_reason,
         chapters=chapters, target_minutes=target, recommended_minutes=recommended, length_reason=length_reason,
         length_options=sorted({*LENGTH_OPTIONS, recommended}),

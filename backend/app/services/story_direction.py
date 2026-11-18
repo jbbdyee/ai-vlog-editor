@@ -117,8 +117,9 @@ def _ordered_scenes(candidates: Sequence[ActiveCandidateSummary], filenames: dic
     return [StoryScene(c, index[c.source_video_id], filenames.get(c.source_video_id) or "이름 없는 영상") for c in ordered]
 
 
-def _scene_table(scenes: Sequence[StoryScene]) -> str:
+def _scene_table(scenes: Sequence[StoryScene], my_voice: dict[UUID, int] | None = None) -> str:
     rows, current = [], None
+    my_voice = my_voice or {}
     for number, item in enumerate(scenes, start=1):
         if item.source_index != current:
             current = item.source_index
@@ -127,8 +128,9 @@ def _scene_table(scenes: Sequence[StoryScene]) -> str:
         start, end = float(c.start_seconds), float(c.end_seconds)
         evidence = ", ".join(sorted({EVIDENCE_LABELS[e.evidence_type] for e in c.evidence if e.evidence_type in EVIDENCE_LABELS}))
         visual = (f" | 화면: {c.visual_caption} [{', '.join(c.visual_tags)}]") if c.visual_caption else ""
+        mine = f" | 내 목소리 {my_voice[c.candidate_id]}줄" if my_voice.get(c.candidate_id) else ""  # TODO 32-2
         rows.append(f"{number}. 영상 {item.source_index} {start:.1f}~{end:.1f}초 (길이 {end - start:.1f}초) | "
-                    f"대사: {c.transcript_text or '(없음)'}{visual} | 근거: {evidence or '-'}")
+                    f"대사: {c.transcript_text or '(없음)'}{visual}{mine} | 근거: {evidence or '-'}")
     return "\n".join(rows)
 
 
@@ -215,7 +217,8 @@ def rebuild_direction(candidates: Sequence[ActiveCandidateSummary], filenames: d
 def recommend_story_direction(candidates: Sequence[ActiveCandidateSummary], filenames: dict[UUID, str],
                               engine: tuple[str, str, Completion] | None = None,
                               footage_minutes: float | None = None, day_brief: str = "",
-                              rules: Sequence[str] = ()) -> StoryDirection:
+                              rules: Sequence[str] = (), my_voice: dict[UUID, int] | None = None) -> StoryDirection:
+    """`my_voice`: lines in my voice per scene (TODO 32-2, only with the '내가 말하는 장면은 살린다' rule)."""
     scenes = _ordered_scenes(candidates, filenames)
     engine = engine if engine is not None else configured_engine()
     if engine is None:
@@ -233,7 +236,7 @@ def recommend_story_direction(candidates: Sequence[ActiveCandidateSummary], file
         system = f"{SYSTEM_PROMPT.replace(DEFAULT_SHAPE, '')} {BRIEF_RULE}" if brief else SYSTEM_PROMPT
         raw = complete(system,
                        f"{brief_block}{footage}장면 목록(번호 1~{len(scenes)}, 영상 {len({s.source_index for s in scenes})}개):\n"
-                                      f"{_scene_table(scenes)}{rule_block}", _constrained_schema(len(scenes)))
+                                      f"{_scene_table(scenes, my_voice)}{rule_block}", _constrained_schema(len(scenes)))
         plan = LLMStoryPlan.model_validate_json(raw)
         chapters, notes = _apply(plan, scenes)
         return StoryDirection(plan.title.strip(), plan.summary.strip(), chapters, f"llm:{provider}/{model}", notes,
@@ -273,8 +276,11 @@ def day_order(candidates: Sequence[ActiveCandidateSummary], filenames: dict[UUID
 
 
 def in_day_order(direction: StoryDirection, candidates: Sequence[ActiveCandidateSummary],
-                 filenames: dict[UUID, str]) -> StoryDirection:
-    """Scenes in filming order (chapters split where the AI mixed times) and the day's last scene at the end."""
+                 filenames: dict[UUID, str], keep: Sequence[UUID] = ()) -> StoryDirection:
+    """Scenes in filming order (chapters split where the AI mixed times) and the day's last scene at the end.
+
+    `keep` (TODO 32-2): scenes that must be in it (my voice); the ones the AI left out go in at their time.
+    """
     order = day_order(candidates, filenames)
     if not order or not direction.chapters:
         return direction
@@ -283,10 +289,15 @@ def in_day_order(direction: StoryDirection, candidates: Sequence[ActiveCandidate
               if s.candidate.candidate_id in rank]
     backwards = sum(1 for before, after in zip(picked, picked[1:])
                     if rank[after[1].candidate.candidate_id] < rank[before[1].candidate.candidate_id])
+    used = {s.candidate.candidate_id for _, s in picked}
     last = order[-1]
-    ending = last.candidate.candidate_id not in {s.candidate.candidate_id for _, s in picked}
-    if not backwards and not ending:
+    ending = last.candidate.candidate_id not in used
+    wanted = set(keep)
+    added = [s for s in order if s.candidate.candidate_id in wanted and s.candidate.candidate_id not in used
+             and s is not last]
+    if not backwards and not ending and not added:
         return direction
+    picked.extend((None, s) for s in added)  # each joins the chapter playing at its time
     if ending:
         picked.append((None, last))  # joins whichever chapter ends the day
     picked.sort(key=lambda item: rank[item[1].candidate.candidate_id])
@@ -309,6 +320,8 @@ def in_day_order(direction: StoryDirection, candidates: Sequence[ActiveCandidate
     notes = list(direction.notes)
     if backwards:
         notes.append(f"하루 시간 순서대로 장면을 다시 줄 세웠습니다(거꾸로 가던 곳 {backwards}곳).")
+    if added:
+        notes.append(f"내 규칙대로 내가 말하는 장면 {len(added)}개를 시간 순서 자리에 넣었습니다.")
     if ending:
         notes.append("그날 마지막에 찍은 장면으로 끝나도록 맨 끝에 넣었습니다.")
     return replace(direction, chapters=tuple(chapters), notes=tuple(notes))

@@ -18,7 +18,7 @@ from typing import Callable
 
 import httpx
 
-from backend.app.services.llm_edit_interpreter import OLLAMA_NUM_CTX, LLMEditError
+from backend.app.services.llm_edit_interpreter import LLMEditError, ollama_num_ctx, ollama_timeout
 
 DEFAULT_CLAUDE_MODEL = "claude-haiku-5-5"
 DEFAULT_CHAT_OLLAMA_MODEL = "qwen2.5:7b"
@@ -53,8 +53,9 @@ def cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
 def _ollama(model: str, base: str) -> Brain:
     def ask(system: str, user: str, schema: dict) -> BrainReply:
         try:
-            response = httpx.post(f"{base}/api/chat", timeout=TIMEOUT_SECONDS, json={
-                "model": model, "stream": False, "format": schema, "options": {"temperature": 0, "num_ctx": OLLAMA_NUM_CTX},
+            num_ctx = ollama_num_ctx(system, user, json.dumps(schema))  # TODO 32-2: long requests lost their start
+            response = httpx.post(f"{base}/api/chat", timeout=max(TIMEOUT_SECONDS, ollama_timeout(num_ctx)), json={
+                "model": model, "stream": False, "format": schema, "options": {"temperature": 0, "num_ctx": num_ctx},
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
         except httpx.TimeoutException as error:
             raise LLMEditError("LLM_TIMEOUT") from error

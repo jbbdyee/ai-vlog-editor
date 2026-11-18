@@ -202,17 +202,18 @@ def render_project_edit_plan(
                 if subtitle_durations is None:
                     subtitle_error_code = "SUBTITLE_TIMELINE_FAILED"
 
-            command = _concat_command(rendered, has_audio, final_path, ffmpeg_executable,
-                                      audio_durations=timeline_durations)
-            try:
-                result = run_ffmpeg(
-                    command, capture_output=True, text=True, encoding="utf-8",
-                    errors="replace", check=False,
-                )
-            except OSError as error:
-                raise ProjectRenderError("CONCAT_START_FAILED", "Could not start video concatenation.") from error
-            if result.returncode != 0:
-                raise ProjectRenderError("CONCAT_FAILED", "Video concatenation failed.")
+            commands = _concat_commands(rendered, has_audio, final_path, ffmpeg_executable,
+                                        Path(temporary), audio_durations=timeline_durations)
+            for command in commands:
+                try:
+                    result = run_ffmpeg(
+                        command, capture_output=True, text=True, encoding="utf-8",
+                        errors="replace", check=False,
+                    )
+                except OSError as error:
+                    raise ProjectRenderError("CONCAT_START_FAILED", "Could not start video concatenation.") from error
+                if result.returncode != 0:
+                    raise ProjectRenderError("CONCAT_FAILED", "Video concatenation failed.")
             if not final_path.is_file() or final_path.stat().st_size == 0:
                 raise ProjectRenderError("OUTPUT_MISSING", "Final MP4 was not created.")
             try:
@@ -387,6 +388,38 @@ def _concat_command(
         "-movflags", "+faststart", str(destination),
     ])
     return command
+
+
+# TODO 32-2: Windows refuses a command line over 32,767 characters. Each clip adds ~530 (its path + filters), so a
+# 181-cut plan (학원 하루, all scenes) failed with CONCAT_START_FAILED. Long plans are joined in groups first.
+MAX_COMMAND_CHARS = 30_000
+CONCAT_GROUP_SIZE = 40
+
+
+def _command_chars(command: list[str]) -> int:
+    return sum(len(part) + 3 for part in command)
+
+
+def _concat_commands(
+    clips: list[RenderedClip], has_audio: list[bool], destination: Path, executable: str, workspace: Path,
+    audio_durations: list[float] | None = None,
+) -> list[list[str]]:
+    """One ffmpeg command as before; for a long plan, groups encoded alike and then copied together unchanged."""
+    single = _concat_command(clips, has_audio, destination, executable, audio_durations=audio_durations)
+    if _command_chars(single) <= MAX_COMMAND_CHARS:
+        return [single]
+    commands, parts = [], []
+    for first in range(0, len(clips), CONCAT_GROUP_SIZE):
+        last = first + CONCAT_GROUP_SIZE
+        part = workspace / f"group-{len(parts):03d}.mp4"
+        commands.append(_concat_command(clips[first:last], has_audio[first:last], part, executable,
+                                        audio_durations=audio_durations[first:last] if audio_durations else None))
+        parts.append(part)
+    listing = workspace / "groups.txt"
+    listing.write_text("".join(f"file '{part.name}'\n" for part in parts), encoding="utf-8")
+    commands.append([executable, "-v", "error", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", str(listing),
+                     "-c", "copy", "-movflags", "+faststart", str(destination)])
+    return commands
 
 
 def _subtitle_timeline_command(source: Path, destination: Path, executable: str) -> list[str]:

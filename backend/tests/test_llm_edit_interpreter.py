@@ -156,3 +156,15 @@ class LLMEditTests(TestCase):
             "order": "chronological"}))
         self.assertEqual(ids(result), [sunset.candidate_id])
         self.assertLessEqual(result.suggestion.total_seconds, 20)
+
+
+class OllamaWindowTests(TestCase):
+    """TODO 32-2: a 182-scene request (~27,500 characters) lost its start in the fixed 8192-token window."""
+
+    def test_window_grows_with_the_request_and_stays_bounded(self):
+        from backend.app.services.llm_edit_interpreter import ollama_num_ctx, ollama_timeout
+        self.assertEqual(ollama_num_ctx("짧은 요청"), 8192)
+        self.assertEqual(ollama_num_ctx("가" * 27_558), 24_576)  # ~19,700 + answer room -> next 4096 step
+        self.assertEqual(ollama_num_ctx("가" * 200_000), 32_768)
+        self.assertEqual(ollama_timeout(8192), 90.0)
+        self.assertEqual(ollama_timeout(32_768), 360.0)

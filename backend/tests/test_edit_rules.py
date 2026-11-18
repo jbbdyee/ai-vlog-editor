@@ -37,3 +37,11 @@ class StoryPromptTests(unittest.TestCase):
                                                   ["한 컷은 8초 넘지 않게"])
         self.assertIn("내 편집 규칙", seen["user"])
         self.assertIn("- 한 컷은 8초 넘지 않게", seen["user"])
+
+
+class MyVoiceRuleTests(unittest.TestCase):
+    def test_my_voice_rule_is_recognised(self):
+        # TODO 32-2: the rule candidate from TODO 29 turns it on; the friend-chat rule does not
+        self.assertTrue(edit_rules.keeps_my_voice(["내가 말하는 장면은 살린다"]))
+        self.assertTrue(edit_rules.keeps_my_voice(["내 목소리 나오는 장면 살려줘"]))
+        self.assertFalse(edit_rules.keeps_my_voice(["다른 사람 목소리가 나오는 장면(친구 수다)은 살린다", "한 컷은 8초 넘지 않게"]))

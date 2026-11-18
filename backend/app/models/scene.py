@@ -91,7 +91,7 @@ class SceneAnalysisWorkItem(TimestampMixin, Base):
     producer: Mapped[str] = mapped_column(String(128), nullable=False)
     producer_version: Mapped[str] = mapped_column(String(128), nullable=False)
     config_fingerprint: Mapped[str | None] = mapped_column(String(512))
-    result_reference: Mapped[str | None] = mapped_column(String(1024))
+    result_reference: Mapped[str | None] = mapped_column(Text)  # TODO 32-2: was 1024, too small for talk-heavy videos
     result_fingerprint: Mapped[str | None] = mapped_column(String(512))
 
     project: Mapped[Project] = relationship(back_populates="scene_analysis_work_items")

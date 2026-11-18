@@ -762,6 +762,11 @@ def _decode_analysis(value):
         return None
 
 
+# TODO 32-2: the column was 1024 characters and talk-heavy videos (101 audio spans) failed; it is text now.
+# Short results keep the old encodings; this bound only stops a runaway result.
+MAX_RESULT_REFERENCE_CHARS = 1_000_000
+
+
 def _encode_analysis(manifest):
     raw = canonical_json(manifest).encode("utf-8")
     encoded = "zlib:" + base64.b64encode(zlib.compress(raw, level=9)).decode("ascii")
@@ -770,13 +775,13 @@ def _encode_analysis(manifest):
         if compact is not None:
             raw = canonical_json(compact).encode("utf-8")
             encoded = "zlib2:" + base64.b64encode(zlib.compress(raw, level=9)).decode("ascii")
-        if len(encoded) > 1024:
+        if len(encoded) > MAX_RESULT_REFERENCE_CHARS:
             raise AutonomousDiscoveryError("Bounded modality result manifest is too large.")
     return encoded
 
 
 def _compact_analysis_manifest(manifest):
-    """Deduplicate evidence fields without changing the 1024-character DB contract."""
+    """Deduplicate evidence fields (kept for results over 1024 characters, the old column size)."""
     evidences = manifest["evidences"]
     if not evidences:
         return None
