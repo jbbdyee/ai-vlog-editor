@@ -29,7 +29,8 @@ from backend.app.services.project_processing import process_project
 from backend.app.services.edit_request import MAX_REQUEST_LENGTH
 from backend.app.services.llm_edit_interpreter import interpret_with_llm
 from backend.app.services.story_direction import (in_day_order, load_story_inputs, rebuild_direction,
-                                                  recommend_story_direction)
+                                                  recommend_story_direction, without_scenes)
+from backend.app.services.story_select import SceneVoice, leave_out
 from backend.app.services.day_brief import MAX_CHARS as DAY_BRIEF_MAX_CHARS, load_day_brief, save_day_brief
 from backend.app.services.project_reel import (ReelEditRefused, ReelOptions, ReelProjectNotFound, edit_history,
                                               edit_reel_draft, unused_shots, job_state, reel_output_dir, render_job_state,
@@ -866,17 +867,16 @@ class StoryDirectionRequest(BaseModel):
     day_brief: str | None = Field(default=None, max_length=DAY_BRIEF_MAX_CHARS)
 
 
-def _my_voice_counts_sync(factory, output_root, project_id, candidates) -> dict[UUID, int]:
-    """TODO 32-2: how many lines in my voice (TODO 24 voice step) fall inside each scene."""
+def _voice_counts_sync(factory, output_root, project_id, candidates) -> dict[UUID, tuple[int, int]]:
+    """TODO 32-2/3: lines in my voice and in other voices (TODO 24 voice step) inside each scene."""
     with factory() as session:
         lines = longform_chat.load_inputs(session, output_root, project_id).lines
-    counts: dict[UUID, int] = {}
+    counts: dict[UUID, tuple[int, int]] = {}
     for candidate in candidates:
         start, end = float(candidate.start_seconds), float(candidate.end_seconds)
-        mine = sum(1 for line in lines.get(candidate.source_video_id, ())
-                   if line.speaker == "me" and line.end > start and line.start < end)
-        if mine:
-            counts[candidate.candidate_id] = mine
+        inside = [line for line in lines.get(candidate.source_video_id, ()) if line.end > start and line.start < end]
+        counts[candidate.candidate_id] = (sum(1 for line in inside if line.speaker == "me"),
+                                          sum(1 for line in inside if line.speaker != "me"))
     return counts
 
 
@@ -908,6 +908,11 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
     brief = ""
     rules_used: list[str] = []
     my_voice: dict[UUID, int] = {}
+    voices = await run_in_threadpool(_voice_counts_sync, factory, request.app.state.project_render_output_root,
+                                     project_id, candidates)
+    rules = edit_rules.rule_texts(request.app.state.project_render_output_root)
+    if edit_rules.keeps_my_voice(rules):  # TODO 32-2: "내가 말하는 장면은 살린다" (also when only the length changes)
+        my_voice = {key: mine for key, (mine, _) in voices.items() if mine}
     if payload.reuse is not None:
         reuse = payload.reuse
         try:
@@ -921,9 +926,6 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
         output_root = request.app.state.project_render_output_root
         brief = (save_day_brief(output_root, project_id, payload.day_brief) if payload.day_brief is not None
                  else load_day_brief(output_root, project_id))
-        rules = edit_rules.rule_texts(output_root)
-        if edit_rules.keeps_my_voice(rules):  # TODO 32-2: "내가 말하는 장면은 살린다"
-            my_voice = await run_in_threadpool(_my_voice_counts_sync, factory, output_root, project_id, candidates)
         direction = await run_in_threadpool(recommend_story_direction, candidates, filenames, None,
                                             footage / 60 or None, brief, rules, my_voice)
         rules_used = rules if direction.engine.startswith("llm:") else []
@@ -937,6 +939,12 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
         length_reason = (direction.length_reason if payload.reuse is not None and direction.length_reason
                          else f"원본 약 {footage / 60:.0f}분의 1/4 정도로 계산한 기본 길이입니다.")
     target = payload.target_minutes or recommended
+    # TODO 32-3: too many scenes for the length -> leave out the less important ones instead of cutting all short
+    left_out = leave_out([SceneVoice(s.candidate.candidate_id, s.candidate.source_video_id,
+                                     float(s.candidate.end_seconds - s.candidate.start_seconds),
+                                     *voices.get(s.candidate.candidate_id, (0, 0)))
+                          for chapter in direction.chapters for s in chapter.scenes], target * 60, bool(my_voice))
+    direction = without_scenes(direction, left_out)
     scenes = [s for chapter in direction.chapters for s in chapter.scenes]
     fit = fit_to_length([Moment(s.candidate.source_video_id, float(s.candidate.start_seconds), float(s.candidate.end_seconds))
                          for s in scenes], timing, target * 60)

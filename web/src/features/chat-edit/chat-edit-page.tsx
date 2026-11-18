@@ -143,7 +143,8 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
   });
   const undo = useMutation({ mutationFn: () => undoChatEdit(projectId), onSuccess: refresh });
   // TODO 32: a fresh recommendation (the day in order) in place of the plan; undo brings this plan back
-  const remake = useMutation({ mutationFn: () => remakeFromStoryDirection(projectId), onSuccess: refresh });
+  const [remakeMinutes, setRemakeMinutes] = useState(0);  // TODO 32-3: 0 = the length the AI recommends
+  const remake = useMutation({ mutationFn: () => remakeFromStoryDirection(projectId, remakeMinutes || undefined), onSuccess: refresh });
   const pick = useMutation({
     mutationFn: ({ messageId, choice }: { messageId: string; choice: number }) => pickChatChoice(projectId, messageId, choice),
     onSuccess: refresh,
@@ -243,6 +244,10 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
           <Button type="submit" size="sm" disabled={busy || !message.trim()}><span className="flex items-center gap-1">{send.isPending ? <LoaderCircle size={14} className="animate-spin" /> : <Send size={14} />}고치기</span></Button>
           <Button type="button" size="sm" variant="secondary" disabled={busy || data.undo_count === 0} onClick={() => undo.mutate()}><span className="flex items-center gap-1"><Undo2 size={14} />되돌리기{data.undo_count > 0 ? ` (${data.undo_count})` : ""}</span></Button>
           <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => remake.mutate()} title="지금 편집안은 되돌리기로 다시 가져올 수 있어요"><span className="flex items-center gap-1">{remake.isPending ? <LoaderCircle size={14} className="animate-spin" /> : <RefreshCw size={14} />}{remake.isPending ? "추천 만드는 중…" : "추천으로 다시 만들기"}</span></Button>
+          <select aria-label="다시 만들 길이" value={remakeMinutes} disabled={busy} onChange={(event) => setRemakeMinutes(Number(event.target.value))} className="rounded border border-white/15 bg-[#0b1420] px-1 py-0.5 text-xs text-slate-200">
+            <option value={0}>길이: AI 추천</option>
+            {[3, 5, 8, 10, 12, 15, 20].map((minutes) => <option key={minutes} value={minutes}>{minutes}분</option>)}
+          </select>
           {data.brains.length > 0 && <label className="ml-auto flex items-center gap-1 text-xs text-slate-400">어려운 말 담당
             <select aria-label="편집 두뇌" value={brain ?? ""} onChange={(event) => setBrain(event.target.value)} className="rounded border border-white/15 bg-[#0b1420] px-1 py-0.5 text-xs text-slate-200">
               {data.brains.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}

@@ -325,3 +325,15 @@ def in_day_order(direction: StoryDirection, candidates: Sequence[ActiveCandidate
     if ending:
         notes.append("그날 마지막에 찍은 장면으로 끝나도록 맨 끝에 넣었습니다.")
     return replace(direction, chapters=tuple(chapters), notes=tuple(notes))
+
+
+def without_scenes(direction: StoryDirection, left_out: Sequence[UUID]) -> StoryDirection:
+    """TODO 32-3: the direction minus the scenes left out for the length (empty chapters go too)."""
+    if not left_out:
+        return direction
+    gone = set(left_out)
+    chapters = tuple(replace(chapter, scenes=kept) for chapter in direction.chapters
+                     if (kept := tuple(s for s in chapter.scenes if s.candidate.candidate_id not in gone)))
+    note = (f"길이에 맞추려고 덜 중요한 장면 {len(gone)}개를 뺐습니다"
+            "(말 없는 장면 → 다른 사람 목소리만 나오는 장면 순, 많이 찍은 영상부터).")
+    return replace(direction, chapters=chapters, notes=direction.notes + (note,))

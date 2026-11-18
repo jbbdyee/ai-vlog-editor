@@ -1,6 +1,6 @@
 import { request } from "@/api/projects";
 import { saveEditPlan, type ClipRange } from "@/api/edit-render";
-import { getStoryDirection } from "@/api/story-direction";
+import { getStoryDirection, type StoryDirection } from "@/api/story-direction";
 
 /** TODO 26: one cut of the saved longform plan, placed on the whole edit's timeline. */
 export interface ChatCut {
@@ -144,8 +144,11 @@ export function cutAt(cuts: ChatCut[], seconds: number): number {
 }
 
 /** TODO 32: ask for a new recommendation (in day order) and put it in place of the plan; undo brings the old one back. */
-export async function remakeFromStoryDirection(id: string): Promise<ChatEditView> {
-  const direction = await getStoryDirection(id);
+export async function remakeFromStoryDirection(id: string, minutes?: number): Promise<ChatEditView> {
+  // TODO 32-3: with a length, the server leaves out the less important scenes to fit it (no length = AI's choice)
+  const direction = minutes
+    ? await request<StoryDirection>(`/projects/${id}/story-direction`, { method: "POST", headers: json, body: JSON.stringify({ target_minutes: minutes }) })
+    : await getStoryDirection(id);
   const seen = new Set<string>();
   const clips = [];
   for (const chapter of direction.chapters) for (const scene of chapter.scenes) {
