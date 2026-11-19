@@ -178,6 +178,7 @@ export interface TasteScores {
   ran: boolean;
   counts: Record<string, number>;
   made_at: string | null;
+  pictures?: number;  // TODO 32-4b: scene pictures sent with the scenes
 }
 
 /** The estimate and the saved scores; no AI call. */

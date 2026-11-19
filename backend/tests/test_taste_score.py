@@ -59,3 +59,34 @@ class TasteScoreTests(TestCase):
         meeting = SceneVoice(uuid4(), SOURCE, 10, others=2, mine=1, taste=3)
         out = leave_out([first, stammer, meeting, last], 50, keep_mine=True)  # 40 s, budget 30 s -> one goes
         self.assertEqual(out, [stammer.candidate_id])
+
+
+class TastePictureTests(TestCase):
+    """TODO 32-4b: scenes go to Claude with two pictures each, 40 scenes per request."""
+
+    def test_pictures_go_with_each_scene_in_chunks(self):
+        rows = [row(index * 10, index * 10 + 6) for index in range(45)]
+        self.assertEqual(ts.picture_times(rows[1]), (12.0, 14.0))
+        with tempfile.TemporaryDirectory() as root:
+            picture = Path(root) / "a.jpg"
+            picture.write_bytes(b"\xff\xd8jpeg")
+            pictures = {r.candidate_id: [picture, picture] for r in rows}
+            sent = []
+
+            def ask(system, blocks, schema):
+                sent.append(blocks)
+                count = sum(1 for block in blocks if block["type"] == "text") - 1
+                return json.dumps({"scores": [{"n": n, "score": 2, "why": "옆모습"} for n in range(1, count + 1)]}), 10, 5
+
+            scores, used_in, used_out = ts.score_with_pictures("옆모습이 예쁨", [], rows, pictures, ask)
+        self.assertEqual([sum(1 for b in blocks if b["type"] == "image") for blocks in sent], [80, 10])
+        self.assertIn("옆모습이 예쁨", sent[0][0]["text"])
+        self.assertIn("점수 매길 장면(번호 1~5", sent[1][0]["text"])
+        self.assertEqual(len(scores), 45)
+        self.assertEqual((used_in, used_out), (20, 10))
+
+    def test_estimate_counts_pictures_and_repeated_header(self):
+        system, user = ts.build_request("취향", [], [row(0, 5) for _ in range(80)])
+        text_only = ts.estimate_tokens(system, user, 80)
+        with_pictures = ts.estimate_tokens(system, user, 80, pictures=160)
+        self.assertGreater(with_pictures[0], text_only[0] + 160 * ts.IMAGE_TOKENS - 1)

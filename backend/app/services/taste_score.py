@@ -30,6 +30,14 @@ SYSTEM = (
     "3=꼭 남김, 2=남기면 좋음, 1=짧게 넣거나 빼도 됨, 0=빼야 함. why는 한국어 20자 이내로 핵심 이유만. "
     "[나]는 사용자 목소리, [남]은 다른 사람 목소리다(자동 구분이라 틀릴 수 있음). 화면 설명도 자동으로 만든 것이라 부정확할 수 있다."
 )
+# TODO 32-4b: with pictures, what is seen outranks the written screen description.
+VISION_RULE = (
+    " 장면마다 그 장면의 사진 2장(앞쪽·뒤쪽)이 함께 온다. 사진이 화면 설명보다 정확하니 사진을 믿어라. "
+    "사진에서 사용자(영상 주인, 대부분의 장면에 나오는 여성)가 나오는지, 옆모습인지, 살짝 미소인지 크게 웃는지, "
+    "아래에서 올려 찍었는지, 화면이 흔들리거나 하늘을 찍었는지, 사용자 없이 다른 사람만 나오는지를 보고 취향에 맞춰 판단하라."
+)
+CHUNK_SCENES = 40  # a request carries at most 100 pictures: 40 scenes x 2
+IMAGE_TOKENS = 80  # a 320x180 picture is about (320 x 180) / 750 tokens
 
 
 @dataclass(frozen=True)
@@ -99,12 +107,53 @@ def build_request(brief: str, examples: Sequence[tuple[SceneRow, bool]], rows: S
     return SYSTEM, "\n\n".join(parts)
 
 
-def estimate_tokens(system: str, user: str, count: int) -> tuple[int, int]:
-    """(input, output) tokens, roughly: the request text, and ~25 tokens per scored scene."""
-    return int((len(system) + len(user)) / CHARS_PER_TOKEN), 25 * count + 200
+def estimate_tokens(system: str, user: str, count: int, pictures: int = 0) -> tuple[int, int]:
+    """(input, output) tokens, roughly: the request text (+ the header again for every extra chunk of pictures),
+    the pictures, and ~25 tokens per scored scene."""
+    chunks = max(1, -(-count // CHUNK_SCENES)) if pictures else 1
+    header = len(system) + len(user.split("점수 매길 장면")[0])
+    text = len(system) + len(user) + header * (chunks - 1)
+    return int(text / CHARS_PER_TOKEN) + pictures * IMAGE_TOKENS, 25 * count + 200 * chunks
+
+
+def picture_times(row: "SceneRow") -> tuple[float, float]:
+    """Two moments inside the scene (a third and two thirds in), so a shaky or turning shot shows."""
+    length = row.end - row.start
+    return round(row.start + length / 3, 3), round(row.start + length * 2 / 3, 3)
+
+
+def _image_block(path: Path) -> dict:
+    import base64
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                        "data": base64.b64encode(Path(path).read_bytes()).decode("ascii")}}
+
+
+def score_with_pictures(brief: str, examples: Sequence[tuple[SceneRow, bool]], rows: Sequence[SceneRow],
+                        pictures: dict[UUID, Sequence[Path]], ask: "AskBlocks"
+                        ) -> tuple[dict[UUID, tuple[int, str]], int, int]:
+    """Like score(), but every scene comes with its pictures; sent CHUNK_SCENES scenes at a time."""
+    system = SYSTEM + VISION_RULE
+    _, request_text = build_request(brief, examples, [])
+    header_text = request_text.split("점수 매길 장면")[0].strip()  # my description + examples, sent with every chunk
+    scores: dict[UUID, tuple[int, str]] = {}
+    used_in = used_out = 0
+    for first in range(0, len(rows), CHUNK_SCENES):
+        chunk = rows[first:first + CHUNK_SCENES]
+        blocks: list[dict] = [{"type": "text", "text": f"{header_text}\n\n점수 매길 장면(번호 1~{len(chunk)}, 모두 빠짐없이):"}]
+        for number, row in enumerate(chunk, start=1):
+            blocks.append({"type": "text", "text": row.line(number)})
+            blocks.extend(_image_block(path) for path in pictures.get(row.candidate_id, ()))
+        text, input_tokens, output_tokens = ask(system, blocks, schema(len(chunk)))
+        used_in, used_out = used_in + input_tokens, used_out + output_tokens
+        for item in json.loads(text).get("scores", []):
+            number = item.get("n")
+            if isinstance(number, int) and 1 <= number <= len(chunk) and item.get("score") in (0, 1, 2, 3):
+                scores[chunk[number - 1].candidate_id] = (int(item["score"]), str(item.get("why") or "")[:60])
+    return scores, used_in, used_out
 
 
 Ask = Callable[[str, str, dict], tuple[str, int, int]]  # (system, user, schema) -> (json text, in, out tokens)
+AskBlocks = Callable[[str, list, dict], tuple[str, int, int]]  # user = content blocks (text + pictures)
 
 
 def score(brief: str, examples: Sequence[tuple[SceneRow, bool]], rows: Sequence[SceneRow], ask: Ask

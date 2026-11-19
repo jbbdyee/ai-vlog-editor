@@ -1248,16 +1248,24 @@ class TasteScoreResponse(BaseModel):
     ran: bool = False
     counts: dict[str, int] = {}  # "0".."3" -> scenes (after a run or from the saved file)
     made_at: str | None = None
+    pictures: int = 0  # TODO 32-4b: scene pictures sent with the scenes (2 per scene)
 
 
 def _taste_model() -> str:
     return os.environ.get("CUTORY_TASTE_MODEL") or TASTE_MODEL_DEFAULT
 
 
-def _taste_inputs_sync(factory, output_root: Path, project_id: UUID):
-    """Rows to score, and examples from every *other* project I compared with my own edit (TODO 29)."""
+def _taste_inputs_sync(factory, output_root: Path, project_id: UUID, storage=None):
+    """Rows to score, examples from every *other* project I compared with my own edit (TODO 29), source files."""
     with factory() as session:
         rows = taste_score.project_rows(session, output_root, project_id)
+        sources: dict[UUID, Path] = {}
+        if storage is not None:
+            for source in session.scalars(select(SourceVideo).where(SourceVideo.project_id == project_id)):
+                try:
+                    sources[source.id] = storage.resolve(source.storage_reference)
+                except SourceStorageError:
+                    continue
         examples: list[tuple[taste_score.SceneRow, bool]] = []
         root = Path(output_root)
         for folder in sorted(root.iterdir()) if root.is_dir() else ():
@@ -1274,7 +1282,28 @@ def _taste_inputs_sync(factory, output_root: Path, project_id: UUID):
                 continue
             kept = taste_score.kept_by_my_edit(other_rows, result.get("cuts") or [])
             examples.extend((row, kept[row.candidate_id]) for row in other_rows)
-    return rows, examples
+    return rows, examples, sources
+
+
+def _taste_pictures_sync(output_root: Path, project_id: UUID, rows, sources: dict[UUID, Path]) -> dict[UUID, list[Path]]:
+    """TODO 32-4b: two small pictures per scene (made once, reused), four FFmpeg calls at a time."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    jobs = [(row.candidate_id, row.source_video_id, at) for row in rows if row.source_video_id in sources
+            for at in taste_score.picture_times(row)]
+
+    def one(job):
+        candidate_id, source_id, at = job
+        try:
+            return candidate_id, scene_thumbs.scene_thumb(output_root, project_id, source_id, sources[source_id], at)
+        except scene_thumbs.ThumbError:
+            return candidate_id, None
+    pictures: dict[UUID, list[Path]] = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for candidate_id, path in pool.map(one, jobs):
+            if path is not None:
+                pictures.setdefault(candidate_id, []).append(path)
+    return pictures
 
 
 def _claude_taste_ask(model: str):
@@ -1282,7 +1311,7 @@ def _claude_taste_ask(model: str):
     if not key:
         raise HTTPException(status_code=503, detail={"code": "CLAUDE_KEY_MISSING", "message": "Claude 키가 없어 점수를 매길 수 없어요."})
 
-    def ask(system: str, user: str, schema: dict) -> tuple[str, int, int]:
+    def ask(system: str, user, schema: dict) -> tuple[str, int, int]:  # user: text, or blocks with pictures
         import anthropic
         client = anthropic.Anthropic(api_key=key, timeout=300.0, max_retries=1)
         response = client.messages.create(
@@ -1308,7 +1337,8 @@ async def post_project_taste_scores(request: Request, project_id: UUID,
 async def _taste_scores(request: Request, project_id: UUID, payload: TasteScoreRequest) -> TasteScoreResponse:
     output_root = request.app.state.project_render_output_root
     try:
-        rows, examples = await run_in_threadpool(_taste_inputs_sync, _session_factory(request), output_root, project_id)
+        rows, examples, sources = await run_in_threadpool(_taste_inputs_sync, _session_factory(request), output_root,
+                                                          project_id, request.app.state.source_storage)
     except SceneProjectNotFoundError as error:
         raise _project_not_found() from error
     if not rows:
@@ -1316,12 +1346,16 @@ async def _taste_scores(request: Request, project_id: UUID, payload: TasteScoreR
     model = _taste_model()
     brief = taste_score.load_brief(output_root)
     system, user = taste_score.build_request(brief, examples, rows)
-    input_tokens, output_tokens = taste_score.estimate_tokens(system, user, len(rows))
+    pictures = 2 * sum(1 for row in rows if row.source_video_id in sources)
+    input_tokens, output_tokens = taste_score.estimate_tokens(system, user, len(rows), pictures)
     ran = False
     if payload.run:
         try:
+            ask = _claude_taste_ask(model)
+            made = await run_in_threadpool(_taste_pictures_sync, output_root, project_id, rows, sources)
+            pictures = sum(len(paths) for paths in made.values())
             scores, input_tokens, output_tokens = await run_in_threadpool(
-                taste_score.score, brief, examples, rows, _claude_taste_ask(model))
+                taste_score.score_with_pictures, brief, examples, rows, made, ask)
         except HTTPException:
             raise
         except (ValueError, KeyError) as error:
@@ -1343,7 +1377,7 @@ async def _taste_scores(request: Request, project_id: UUID, payload: TasteScoreR
     return TasteScoreResponse(scenes=len(rows), examples=len(examples), model=model, input_tokens=input_tokens,
                               output_tokens=output_tokens,
                               usd=round(edit_brain.cost_usd(model, input_tokens, output_tokens), 4),
-                              ran=ran, counts=counts, made_at=made_at)
+                              ran=ran, counts=counts, made_at=made_at, pictures=pictures)
 
 
 class ChatPickRequest(BaseModel):

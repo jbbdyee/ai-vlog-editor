@@ -52,7 +52,7 @@ export function TasteBriefCard({ projectId }: { projectId: string }) {
       ? <Button type="button" size="sm" disabled={!text.trim() || run.isPending} onClick={() => setConfirming(true)}>
           {hasScores ? "취향으로 장면 점수 다시 매기기" : "취향으로 장면 점수 매기기"}</Button>
       : <div className="space-y-2 rounded-lg border border-amber-300/40 bg-amber-300/10 p-2 text-xs text-amber-100">
-          <p>Claude({info.model})가 장면 {info.scenes}개를 읽어요. 유료 · 예상 약 ${info.usd.toFixed(3)} (입력 {info.input_tokens.toLocaleString()} · 출력 {info.output_tokens.toLocaleString()} 토큰).</p>
+          <p>Claude({info.model})가 장면 {info.scenes}개를 읽어요{info.pictures ? `(장면 사진 ${info.pictures}장 함께 — 옆모습·미소·흔들림을 봐요)` : ""}. 유료 · 예상 약 ${info.usd.toFixed(3)} (입력 {info.input_tokens.toLocaleString()} · 출력 {info.output_tokens.toLocaleString()} 토큰).</p>
           <div className="flex gap-2">
             <Button type="button" size="sm" disabled={run.isPending} onClick={() => run.mutate()}>
               <span className="flex items-center gap-1">{run.isPending && <LoaderCircle size={14} className="animate-spin" />}{run.isPending ? "점수 매기는 중…" : "점수 매기기"}</span></Button>
