@@ -6,7 +6,8 @@ nothing is ever left out. My own edit of the same day keeps fewer scenes and kee
 Which scenes go first (no AI, from the TODO 24 voice marks):
   1. no speech  2. only other people's voices  3. scenes with my voice (never, with '내가 말하는 장면은 살린다')
 Within the same kind, the scene goes from the video that still has the most seconds kept, so one long recording
-(the 2-hour evening class) does not fill the edit. The first and the last scene of the day always stay.
+(the 2-hour evening class) does not fill the edit. The first and the last scene of the day stay, unless my taste
+scores (TODO 32-4) gave them 0.
 """
 
 from __future__ import annotations
@@ -41,7 +42,8 @@ def leave_out(scenes: Sequence[SceneVoice], target_seconds: float, keep_mine: bo
     total = sum(scene.seconds for scene in scenes)
     if total <= budget or len(scenes) <= 2:
         return []
-    protected = {scenes[0].candidate_id, scenes[-1].candidate_id}
+    # the day's first and last scene stay, unless my taste scored it 0 (a shaky face, only a monitor)
+    protected = {scene.candidate_id for scene in (scenes[0], scenes[-1]) if scene.taste != 0}
     if keep_mine and not any(scene.taste is not None for scene in scenes):  # taste scores already weigh my voice
         protected |= {scene.candidate_id for scene in scenes if scene.mine}
     kept_by_source: dict[UUID, float] = {}

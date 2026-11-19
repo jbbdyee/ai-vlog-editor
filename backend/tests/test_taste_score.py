@@ -60,6 +60,12 @@ class TasteScoreTests(TestCase):
         out = leave_out([first, stammer, meeting, last], 50, keep_mine=True)  # 40 s, budget 30 s -> one goes
         self.assertEqual(out, [stammer.candidate_id])
 
+    def test_first_and_last_scene_go_when_my_taste_gave_them_zero(self):
+        shaky, monitor = SceneVoice(uuid4(), SOURCE, 10, taste=0), SceneVoice(uuid4(), SOURCE, 10, taste=0)
+        middle = [SceneVoice(uuid4(), SOURCE, 10, taste=2) for _ in range(3)]
+        out = leave_out([shaky, *middle, monitor], 50, keep_mine=True)  # 50 s, budget 30 s -> two go
+        self.assertEqual(sorted(map(str, out)), sorted([str(shaky.candidate_id), str(monitor.candidate_id)]))
+
 
 class TastePictureTests(TestCase):
     """TODO 32-4b: scenes go to Claude with two pictures each, 40 scenes per request."""
