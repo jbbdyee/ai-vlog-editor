@@ -157,8 +157,8 @@ describe("TODO 26 chat editing screen", () => {
     render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[`/projects/${project}/chat-edit`]}><Routes>
       <Route path="projects/:projectId/chat-edit" element={<ChatEditPage />} />
     </Routes></MemoryRouter></QueryClientProvider>);
-    await userEvent.selectOptions(await screen.findByRole("combobox", { name: "다시 만들 길이" }), "8");
-    await userEvent.click(await screen.findByRole("button", { name: "추천으로 다시 만들기" }));
+    await userEvent.click(await screen.findByRole("button", { name: "8분" }));
+    await userEvent.click(await screen.findByRole("button", { name: "이 길이로 다시 만들기" }));
     expect(await screen.findByText(/추천으로 다시 만들었어/)).toBeInTheDocument();
     expect(directionBodies[0]).toEqual({ target_minutes: 8 });  // TODO 32-3: the chosen length goes to the server
     expect(sent[0]).toEqual({ clips: [{ candidate_id: ids[0], start_seconds: 0, end_seconds: 3 }, { candidate_id: ids[2], start_seconds: 20, end_seconds: 23 }] });

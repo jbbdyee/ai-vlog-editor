@@ -31,27 +31,27 @@ export function TasteBriefCard({ projectId }: { projectId: string }) {
   const info = scores.data;
   const counts = info?.counts ?? {};
   const hasScores = Object.keys(counts).length > 0;
-  return <section aria-label="내 편집 취향" className="space-y-2 rounded-xl border border-white/10 p-3 text-sm">
+  return <section aria-label="내 편집 취향" className="space-y-2 rounded-xl border border-slate-200 p-3 text-sm">
     <div className="flex flex-wrap items-baseline justify-between gap-2">
-      <h2 className="font-semibold text-slate-100">내 편집 취향</h2>
+      <h2 className="font-semibold text-slate-800">내 편집 취향</h2>
       <span className="text-[11px] text-slate-500">모든 프로젝트가 같이 써요 · 장면 점수의 기준</span>
     </div>
     <textarea id="taste-brief" aria-label="내 편집 취향 설명" value={text} maxLength={6000} rows={6}
       onChange={(event) => setText(event.target.value)}
       placeholder="꼭 남기는 장면, 거의 빼는 장면, 예쁘다고 느끼는 내 모습, 하루 흐름, 한 컷 길이…"
-      className="w-full rounded-lg border border-white/15 bg-[#0b1420] p-2 text-sm text-slate-100 placeholder:text-slate-500" />
+      className="w-full rounded-lg border border-slate-300 bg-white p-2 text-sm text-slate-800 placeholder:text-slate-500" />
     <div className="flex flex-wrap items-center gap-2">
       <Button type="button" size="sm" variant="secondary" disabled={save.isPending || text === (brief.data ?? "")} onClick={() => save.mutate()}>
         {save.isPending ? "저장 중…" : "취향 저장"}</Button>
-      {info && <span className="text-xs text-slate-400">장면 {info.scenes}개 · 내 편집 예시 {info.examples}개{info.examples === 0 ? "(다른 프로젝트에서 '내 편집과 비교'를 하면 생겨요)" : ""}</span>}
+      {info && <span className="text-xs text-slate-500">장면 {info.scenes}개 · 내 편집 예시 {info.examples}개{info.examples === 0 ? "(다른 프로젝트에서 '내 편집과 비교'를 하면 생겨요)" : ""}</span>}
     </div>
-    {hasScores && <p className="text-xs text-slate-300" aria-label="장면 점수">
+    {hasScores && <p className="text-xs text-slate-600" aria-label="장면 점수">
       장면 점수: {[3, 2, 1, 0].map((value) => `${SCORE_LABELS[value]} ${counts[String(value)] ?? 0}`).join(" · ")}
       <span className="text-slate-500"> · 길이를 고르면 점수 낮은 장면부터 빠져요</span></p>}
     {info && (!confirming
       ? <Button type="button" size="sm" disabled={!text.trim() || run.isPending} onClick={() => setConfirming(true)}>
           {hasScores ? "취향으로 장면 점수 다시 매기기" : "취향으로 장면 점수 매기기"}</Button>
-      : <div className="space-y-2 rounded-lg border border-amber-300/40 bg-amber-300/10 p-2 text-xs text-amber-100">
+      : <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-100 p-2 text-xs text-amber-700">
           <p>Claude({info.model})가 장면 {info.scenes}개를 읽어요{info.pictures ? `(장면 사진 ${info.pictures}장 함께 — 옆모습·미소·흔들림을 봐요)` : ""}. 유료 · 예상 약 ${info.usd.toFixed(3)} (입력 {info.input_tokens.toLocaleString()} · 출력 {info.output_tokens.toLocaleString()} 토큰).</p>
           <div className="flex gap-2">
             <Button type="button" size="sm" disabled={run.isPending} onClick={() => run.mutate()}>

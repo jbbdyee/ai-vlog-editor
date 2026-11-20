@@ -11,10 +11,10 @@ type UploadItem = { key: string; file: File; state: UploadState; progress: numbe
 
 const stateLabels: Record<UploadState, string> = { waiting: "대기", uploading: "올라가는 중", done: "완료", failed: "실패" };
 const stateStyles: Record<UploadState, string> = {
-  waiting: "border-white/10 text-slate-400",
-  uploading: "border-cyan-300/40 text-cyan-200",
-  done: "border-emerald-300/40 text-emerald-200",
-  failed: "border-rose-300/40 text-rose-200",
+  waiting: "border-slate-200 text-slate-500",
+  uploading: "border-sky-300 text-sky-700",
+  done: "border-emerald-300 text-emerald-700",
+  failed: "border-rose-300 text-rose-700",
 };
 
 function errorText(error: unknown): string {
@@ -91,15 +91,15 @@ export function UploadQueue({ projectId, onUploaded }: { projectId: string; onUp
   return <>
     <div><Label htmlFor="video-file">영상 파일 (여러 개 선택 가능)</Label><Input id="video-file" type="file" multiple accept=".mov,.mp4,video/quicktime,video/mp4" onChange={(event) => { addFiles(Array.from(event.target.files ?? [])); event.target.value = ""; }} /></div>
     {items.length > 0 && <div className="space-y-2">
-      <p role="status" className="text-sm text-slate-300">전체 {items.length}개 · 완료 {done} · 실패 {failed} · 남음 {remaining}</p>
-      <ul aria-label="업로드 목록" className="max-h-96 space-y-2 overflow-y-auto pr-1">{items.map((item) => <li key={item.key} className="min-w-0 rounded-xl border border-white/10 bg-white/[.03] px-3 py-2 sm:px-4">
+      <p role="status" className="text-sm text-slate-600">전체 {items.length}개 · 완료 {done} · 실패 {failed} · 남음 {remaining}</p>
+      <ul aria-label="업로드 목록" className="max-h-96 space-y-2 overflow-y-auto pr-1">{items.map((item) => <li key={item.key} className="min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 sm:px-4">
         <div className="flex min-w-0 items-start justify-between gap-2">
-          <p className="flex min-w-0 items-start gap-2 break-all text-sm text-slate-200"><FileVideo2 size={16} className="mt-0.5 shrink-0 text-cyan-300" />{item.file.name}</p>
+          <p className="flex min-w-0 items-start gap-2 break-all text-sm text-slate-700"><FileVideo2 size={16} className="mt-0.5 shrink-0 text-sky-700" />{item.file.name}</p>
           <span className={`shrink-0 rounded-full border px-2.5 py-0.5 text-xs ${stateStyles[item.state]}`}>{stateLabels[item.state]}{item.state === "uploading" && item.progress !== null && item.progress < 100 ? ` ${item.progress}%` : ""}</span>
         </div>
         <p className="mt-1 pl-6 text-xs text-slate-500">{(item.file.size / 1024 / 1024).toFixed(1)} MiB{item.state === "uploading" ? item.progress === 100 ? " · 전송 완료, 서버 등록 응답 대기" : item.progress === null ? " · 전송 중" : "" : ""}</p>
         {item.state === "uploading" && <Progress className="mt-2" value={item.progress} />}
-        {item.message && <p className={`mt-1 break-all pl-6 text-xs ${item.state === "failed" ? "text-rose-300" : item.state === "done" ? "text-cyan-100" : "text-slate-400"}`}>{item.message}</p>}
+        {item.message && <p className={`mt-1 break-all pl-6 text-xs ${item.state === "failed" ? "text-rose-700" : item.state === "done" ? "text-sky-700" : "text-slate-500"}`}>{item.message}</p>}
       </li>)}</ul>
     </div>}
     <div className="flex flex-wrap gap-2 sm:gap-3">

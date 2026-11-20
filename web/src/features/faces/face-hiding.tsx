@@ -53,16 +53,16 @@ export function MyFaceCard() {
     {face.data && !face.data.model_available && <Alert>얼굴 모델 파일이나 OpenCV가 없어 사진을 등록할 수 없습니다.</Alert>}
     <ul className="flex flex-wrap gap-3" aria-label="등록한 내 얼굴">
       {photos.map((photo) => <li key={photo.id} className="relative">
-        <img src={apiSrc(photo.url)} alt={`내 얼굴 ${photo.filename}`} className="h-20 w-20 rounded-full border border-white/15 object-cover" />
+        <img src={apiSrc(photo.url)} alt={`내 얼굴 ${photo.filename}`} className="h-20 w-20 rounded-full border border-slate-300 object-cover" />
         <button type="button" aria-label={`${photo.filename} 지우기`} disabled={remove.isPending}
           onClick={() => remove.mutate(photo.id)}
-          className="absolute -right-1 -top-1 rounded-full border border-white/20 bg-[#0b1420] p-1 text-slate-300 hover:text-white">
+          className="absolute -right-1 -top-1 rounded-full border border-slate-300 bg-white p-1 text-slate-600 hover:text-slate-900">
           <Trash2 size={12} />
         </button>
       </li>)}
-      {photos.length === 0 && !face.isPending && <li className="text-sm text-slate-400">아직 등록한 얼굴이 없어요.</li>}
+      {photos.length === 0 && !face.isPending && <li className="text-sm text-slate-500">아직 등록한 얼굴이 없어요.</li>}
     </ul>
-    <p className="text-sm text-slate-300">등록 {photos.length}장{photos.length > 0 && photos.length < 3 ? " · 3장 이상이면 옆모습도 더 잘 알아봐요" : ""}</p>
+    <p className="text-sm text-slate-600">등록 {photos.length}장{photos.length > 0 && photos.length < 3 ? " · 3장 이상이면 옆모습도 더 잘 알아봐요" : ""}</p>
     <input ref={input} type="file" accept="image/*" multiple className="hidden" aria-label="내 얼굴 사진 고르기"
       onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; if (files.length) add.mutate(files); }} />
     <Button variant="secondary" disabled={add.isPending || face.data?.model_available === false} onClick={() => input.current?.click()}>
@@ -89,27 +89,27 @@ export function FaceHiding({ projectId, renderKey }: { projectId: string; render
   if (!data?.latest_render_id && !data?.video) return null;
   const running = data.status === "RUNNING" || start.isPending;
   const video = data.video;
-  return <div role="region" aria-label="다른 사람 얼굴 가리기" className="space-y-3 rounded-xl border border-white/10 bg-white/[.03] p-3">
+  return <div role="region" aria-label="다른 사람 얼굴 가리기" className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div className="min-w-0">
-        <p className="text-sm font-semibold text-slate-100">다른 사람 얼굴 가리기</p>
-        <p className="text-xs text-slate-400">등록한 내 얼굴({data.photo_count}장)만 남기고 영상 속 모든 얼굴을 모자이크합니다. 너무 작거나 알아보기 어려운 얼굴도 가려요. 영상 길이만큼쯤 걸려요(8분 영상 → 약 8분). 가린 뒤 자막을 입히면 가린 영상 위에 자막이 올라갑니다.</p>
+        <p className="text-sm font-semibold text-slate-800">다른 사람 얼굴 가리기</p>
+        <p className="text-xs text-slate-500">등록한 내 얼굴({data.photo_count}장)만 남기고 영상 속 모든 얼굴을 모자이크합니다. 너무 작거나 알아보기 어려운 얼굴도 가려요. 영상 길이만큼쯤 걸려요(8분 영상 → 약 8분). 가린 뒤 자막을 입히면 가린 영상 위에 자막이 올라갑니다.</p>
       </div>
       <Button onClick={() => start.mutate()} disabled={running || !data.latest_render_id || data.photo_count === 0}>
         <span className="flex items-center gap-2">{running ? <LoaderCircle size={16} className="animate-spin" /> : <ScanFace size={16} />}{running ? "얼굴 가리는 중…" : video ? "다시 가리기" : "다른 사람 얼굴 가리기"}</span>
       </Button>
     </div>
-    {data.photo_count === 0 && <p className="text-sm text-amber-200">프로젝트 화면의 '내 얼굴' 카드에서 내 얼굴 사진을 먼저 올려 주세요.</p>}
-    {data.status === "RUNNING" && <p role="status" className="text-sm text-cyan-200 tabular-nums">{data.total ? `${formatDuration(data.done / 30)} / ${formatDuration(data.total / 30)} 확인함` : "준비 중"}</p>}
+    {data.photo_count === 0 && <p className="text-sm text-amber-700">프로젝트 화면의 '내 얼굴' 카드에서 내 얼굴 사진을 먼저 올려 주세요.</p>}
+    {data.status === "RUNNING" && <p role="status" className="text-sm text-sky-700 tabular-nums">{data.total ? `${formatDuration(data.done / 30)} / ${formatDuration(data.total / 30)} 확인함` : "준비 중"}</p>}
     {status.isError && <Alert>{message(status.error)}</Alert>}
     {start.isError && <Alert>{message(start.error)}</Alert>}
     {data.status === "FAILED" && <Alert>{message(null, data.error_code)}</Alert>}
     {video && <div className="space-y-2">
       <video key={video.url} controls playsInline preload="metadata" src={apiSrc(video.url)} aria-label="얼굴 가린 롱폼 영상"
         className="block aspect-video w-full min-w-0 rounded-lg bg-black" />
-      <p className="text-sm text-slate-300 tabular-nums">길이 <b className="text-slate-50">{formatDuration(video.duration_seconds)}</b> · 얼굴 가린 장면 {formatDuration(video.frames_hidden / 30)} · 내 얼굴이 나온 장면 {formatDuration(video.frames_with_me / 30)} · {(video.file_size_bytes / 1024 / 1024).toFixed(1)}MB</p>
-      {!video.matches_render && <p className="text-xs text-amber-200">새로 렌더한 영상이 있어요. 이 영상은 예전 렌더로 만든 것입니다.</p>}
-      <a href={apiSrc(video.url)} download="vlog-faces.mp4" className="inline-flex items-center gap-1.5 text-sm text-cyan-300 underline"><Download size={14} />얼굴 가린 영상 내려받기</a>
+      <p className="text-sm text-slate-600 tabular-nums">길이 <b className="text-slate-900">{formatDuration(video.duration_seconds)}</b> · 얼굴 가린 장면 {formatDuration(video.frames_hidden / 30)} · 내 얼굴이 나온 장면 {formatDuration(video.frames_with_me / 30)} · {(video.file_size_bytes / 1024 / 1024).toFixed(1)}MB</p>
+      {!video.matches_render && <p className="text-xs text-amber-700">새로 렌더한 영상이 있어요. 이 영상은 예전 렌더로 만든 것입니다.</p>}
+      <a href={apiSrc(video.url)} download="vlog-faces.mp4" className="inline-flex items-center gap-1.5 text-sm text-sky-700 underline"><Download size={14} />얼굴 가린 영상 내려받기</a>
     </div>}
   </div>;
 }

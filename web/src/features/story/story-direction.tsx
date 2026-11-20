@@ -59,11 +59,11 @@ export function StoryDirectionCard({ projectId, onPreview, onApply }: { projectI
     </CardHeader>
     <CardContent className="space-y-4">
       <div className="space-y-1.5">
-        <label htmlFor="day-brief" className="flex items-center gap-2 text-sm font-semibold text-slate-100"><NotebookPen size={15} />오늘 있었던 일</label>
+        <label htmlFor="day-brief" className="flex items-center gap-2 text-sm font-semibold text-slate-800"><NotebookPen size={15} />오늘 있었던 일</label>
         <textarea id="day-brief" value={brief} maxLength={1000} rows={3} disabled={direction.isPending}
           onChange={(event) => { setBriefTouched(true); setBrief(event.target.value); }}
           placeholder="예: 아침엔 교실에서 친구들과 수다, 오후엔 팀 회의에서 내 아이디어 발표, 저녁은 치킨. 제일 재밌었던 건 아침 수다."
-          className="w-full rounded-xl border border-white/15 bg-[#0b1420] px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-300 focus:outline-none disabled:opacity-60" />
+          className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 placeholder:text-slate-500 focus:border-sky-500 focus:outline-none disabled:opacity-60" />
         <p className="text-xs text-slate-500">몇 줄만 적어도 AI가 이 순서와 사건을 이야기의 뼈대로 삼습니다. 추천을 누르면 이 프로젝트에 저장됩니다.</p>
       </div>
       <Button onClick={() => direction.mutate(undefined)} disabled={direction.isPending}>
@@ -72,45 +72,45 @@ export function StoryDirectionCard({ projectId, onPreview, onApply }: { projectI
       {direction.isError && <Alert>{errorText(direction.error)}</Alert>}
       {value && <div className="space-y-4" aria-label="추천 결과">
         <div>
-          <p className="text-lg font-semibold text-slate-50">{value.title}</p>
-          <p className="text-sm text-slate-300">{value.summary}</p>
+          <p className="text-lg font-semibold text-slate-900">{value.title}</p>
+          <p className="text-sm text-slate-600">{value.summary}</p>
           <p className="mt-1 text-xs text-slate-500">{byAi ? `AI 추천 (${value.engine.replace("llm:", "")})` : "AI 없이 영상 순서대로 묶은 기본 흐름"}</p>
-          {byAi && usedBrief && <p className="mt-1 text-xs text-cyan-200">'오늘 있었던 일'을 반영한 추천입니다.</p>}
-          {byAi && (value.rules_used?.length ?? 0) > 0 && <p className="mt-1 text-xs text-fuchsia-200" title={value.rules_used?.join(" · ")}>내 규칙 {value.rules_used?.length}개 반영: {value.rules_used?.join(" · ")}</p>}
-          {value.notes.map((note) => <p key={note} className="text-xs text-amber-200">{note}</p>)}
+          {byAi && usedBrief && <p className="mt-1 text-xs text-sky-700">'오늘 있었던 일'을 반영한 추천입니다.</p>}
+          {byAi && (value.rules_used?.length ?? 0) > 0 && <p className="mt-1 text-xs text-sky-700" title={value.rules_used?.join(" · ")}>내 규칙 {value.rules_used?.length}개 반영: {value.rules_used?.join(" · ")}</p>}
+          {value.notes.map((note) => <p key={note} className="text-xs text-amber-700">{note}</p>)}
         </div>
-        <div className="space-y-2 rounded-xl border border-cyan-300/20 bg-cyan-300/[.04] p-3" aria-label="목표 길이">
-          <p className="text-sm text-slate-200"><span className="font-semibold text-cyan-200">목표 길이</span> · 추천 {value.recommended_minutes}분 <span className="text-slate-400">({value.length_reason})</span></p>
+        <div className="space-y-2 rounded-xl border border-sky-200 bg-sky-50 p-3" aria-label="목표 길이">
+          <p className="text-sm text-slate-700"><span className="font-semibold text-sky-700">목표 길이</span> · 추천 {value.recommended_minutes}분 <span className="text-slate-500">({value.length_reason})</span></p>
           <div className="flex flex-wrap gap-2" role="group" aria-label="목표 길이 고르기">
             {value.length_options.map((minutes) => {
               const on = minutes === value.target_minutes;
               return <button key={minutes} type="button" aria-pressed={on} disabled={direction.isPending}
                 onClick={() => { if (!on) direction.mutate({ targetMinutes: minutes, from: value }); }}
-                className={`rounded-full border px-3 py-1 text-sm tabular-nums transition disabled:opacity-60 ${on ? "border-cyan-300 bg-cyan-300 font-semibold text-slate-950" : "border-white/15 text-slate-200 hover:border-cyan-300/60"}`}>
+                className={`rounded-full border px-3 py-1 text-sm tabular-nums transition disabled:opacity-60 ${on ? "border-sky-500 bg-sky-600 font-semibold text-white" : "border-slate-300 text-slate-700 hover:border-sky-300"}`}>
                 {minutes}분{minutes === value.recommended_minutes ? " · 추천" : ""}
               </button>;
             })}
           </div>
-          <p role="status" className="text-sm text-slate-300 tabular-nums">
+          <p role="status" className="text-sm text-slate-600 tabular-nums">
             {refitting ? <span className="inline-flex items-center gap-2"><LoaderCircle size={14} className="animate-spin" />길이에 맞추는 중…</span>
-              : <>합계 <b className="text-slate-50">{formatDuration(value.total_seconds)}</b> · 챕터 {value.chapters.length}개 · 장면 {value.chapters.reduce((sum, chapter) => sum + chapter.scenes.length, 0)}개 · 원본 {formatDuration(value.footage_seconds)}</>}
+              : <>합계 <b className="text-slate-900">{formatDuration(value.total_seconds)}</b> · 챕터 {value.chapters.length}개 · 장면 {value.chapters.reduce((sum, chapter) => sum + chapter.scenes.length, 0)}개 · 원본 {formatDuration(value.footage_seconds)}</>}
           </p>
           <p className="text-xs text-slate-500">찾은 장면(몇 초짜리 순간)을 가운데 두고 앞뒤를 넓혀 길이를 맞춥니다. 말이 끊기지 않게 문장 끝에 맞춥니다.</p>
         </div>
         <ol className="space-y-3">
-          {value.chapters.map((chapter, index) => <li key={`${index}:${chapter.title}`} className="rounded-xl border border-white/10 bg-[#0b1420] p-3">
-            <p className="text-sm font-semibold text-cyan-200">챕터 {index + 1}. {chapter.title} <span className="font-normal text-slate-500">· 장면 {chapter.scenes.length}개 · 약 {formatDuration(chapter.total_seconds)}</span></p>
-            <p className="mt-1 text-sm text-slate-200">{chapter.description}</p>
-            <p className="mt-1 text-xs text-slate-400">이유: {chapter.reason}</p>
+          {value.chapters.map((chapter, index) => <li key={`${index}:${chapter.title}`} className="rounded-xl border border-slate-200 bg-white p-3">
+            <p className="text-sm font-semibold text-sky-700">챕터 {index + 1}. {chapter.title} <span className="font-normal text-slate-500">· 장면 {chapter.scenes.length}개 · 약 {formatDuration(chapter.total_seconds)}</span></p>
+            <p className="mt-1 text-sm text-slate-700">{chapter.description}</p>
+            <p className="mt-1 text-xs text-slate-500">이유: {chapter.reason}</p>
             <ul className="mt-2 space-y-1.5">
-              {chapter.scenes.map((scene) => <li key={scene.candidate_id} className="flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs text-slate-300">
+              {chapter.scenes.map((scene) => <li key={scene.candidate_id} className="flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
                 <span className="min-w-0 break-all tabular-nums">{scene.source_filename} · {scene.clip_start_seconds.toFixed(1)}–{scene.clip_end_seconds.toFixed(1)}초 <span className="text-slate-500">({(scene.clip_end_seconds - scene.clip_start_seconds).toFixed(1)}초, 찾은 순간 {scene.start_seconds.toFixed(1)}–{scene.end_seconds.toFixed(1)}초)</span></span>
                 <Button size="sm" variant="secondary" onClick={() => onPreview?.({ candidateId: scene.candidate_id, sourceId: scene.source_video_id, start: scene.clip_start_seconds, end: scene.clip_end_seconds })}>미리보기</Button>
               </li>)}
             </ul>
           </li>)}
         </ol>
-        {onApply && <div className="space-y-1 border-t border-white/10 pt-3">
+        {onApply && <div className="space-y-1 border-t border-slate-200 pt-3">
           <Button onClick={() => onApply(toPlanDraft(value))}><span className="flex items-center gap-2"><ListOrdered size={16} />이 방향으로 편집 계획 만들기</span></Button>
           <p className="text-xs text-slate-500">아래 편집 계획에 챕터 순서대로, 고른 길이에 맞춰 넓힌 구간 그대로 장면을 채웁니다. 저장은 편집 계획에서 직접 눌러야 합니다.</p>
         </div>}

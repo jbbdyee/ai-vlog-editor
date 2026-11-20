@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Layout } from "@/app/layout";
 import { HomePage } from "@/features/projects/home-page";
 import { ProjectPage } from "@/features/projects/project-page";
+import { ProjectHome } from "@/features/projects/project-home";
 import { ChatEditPage } from "@/features/chat-edit/chat-edit-page";
 import "./index.css";
 
@@ -17,7 +18,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <Routes>
           <Route element={<Layout />}>
             <Route index element={<HomePage />} />
-            <Route path="projects/:projectId" element={<ProjectPage />} />
+            <Route path="projects/:projectId" element={<ProjectHome />} />
+            <Route path="projects/:projectId/tools" element={<ProjectPage />} />
             <Route path="projects/:projectId/chat-edit" element={<ChatEditPage />} />
             <Route path="*" element={<HomePage />} />
           </Route>

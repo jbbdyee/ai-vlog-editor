@@ -23,12 +23,12 @@ function errorText(error: unknown): string {
 
 function Choices({ label, options, value, onChange, disabled }: { label: string; options: ReelOption[]; value: string; onChange: (key: string) => void; disabled?: boolean }) {
   return <div className="space-y-1.5">
-    <p className="text-xs font-semibold text-slate-400">{label}</p>
+    <p className="text-xs font-semibold text-slate-500">{label}</p>
     <div className="flex flex-wrap gap-2" role="group" aria-label={label}>
       {options.map((option) => {
         const on = option.key === value;
         return <button key={option.key} type="button" aria-pressed={on} disabled={disabled} onClick={() => onChange(option.key)}
-          className={`rounded-full border px-3 py-1 text-sm transition disabled:opacity-60 ${on ? "border-cyan-300 bg-cyan-300 font-semibold text-slate-950" : "border-white/15 text-slate-200 hover:border-cyan-300/60"}`}>
+          className={`rounded-full border px-3 py-1 text-sm transition disabled:opacity-60 ${on ? "border-sky-500 bg-sky-600 font-semibold text-white" : "border-slate-300 text-slate-700 hover:border-sky-300"}`}>
           {option.label}
         </button>;
       })}
@@ -58,14 +58,14 @@ function TextStylePicker({ options, value, onChange, disabled }: { options: Reel
   if (templates.length === 0) return null;
   return <div className="space-y-3" aria-label="글자 꾸미기">
     <div className="space-y-1.5">
-      <p className="text-xs font-semibold text-slate-400">글자 템플릿</p>
+      <p className="text-xs font-semibold text-slate-500">글자 템플릿</p>
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" role="group" aria-label="글자 템플릿">
         {templates.map((template) => {
           const on = template.key === value.template;
           return <button key={template.key} type="button" aria-pressed={on} disabled={disabled} onClick={() => onChange({ ...value, template: template.key })}
-            className={`min-w-0 rounded-xl border px-3 py-2 text-left transition disabled:opacity-60 ${on ? "border-cyan-300 bg-cyan-300/10" : "border-white/15 hover:border-cyan-300/60"}`}>
-            <span className={`block text-sm font-semibold ${on ? "text-cyan-200" : "text-slate-100"}`}>{template.label}</span>
-            <span className="block text-xs text-slate-400">{template.hint}</span>
+            className={`min-w-0 rounded-xl border px-3 py-2 text-left transition disabled:opacity-60 ${on ? "border-sky-500 bg-sky-100" : "border-slate-300 hover:border-sky-300"}`}>
+            <span className={`block text-sm font-semibold ${on ? "text-sky-700" : "text-slate-800"}`}>{template.label}</span>
+            <span className="block text-xs text-slate-500">{template.hint}</span>
           </button>;
         })}
       </div>
@@ -114,22 +114,22 @@ function ReelVideoPanel({ projectId, draftKey, draftRunning, options, auto, onAu
     if (!auto || !video || video.matches_draft || failed) { setWanted(false); return; }
     startVideo();
   }, [wanted, auto, video, running, draftRunning, failed, status.isFetching, startVideo]);
-  return <div className="space-y-3 rounded-xl border border-white/10 bg-white/[.03] p-3" aria-label="세로 영상">
+  return <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3" aria-label="세로 영상">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div className="min-w-0">
-        <p className="text-sm font-semibold text-slate-100">세로 영상 (9:16)</p>
-        <p className="text-xs text-slate-400">초안 순서대로 이어 붙이고 첫 화면 제목·이름표·문구를 고른 글자 템플릿으로 입힙니다. 30초짜리 릴스는 20초쯤 걸려요. 템플릿만 바꿔 다시 만들어 비교해 보세요.</p>
+        <p className="text-sm font-semibold text-slate-800">세로 영상 (9:16)</p>
+        <p className="text-xs text-slate-500">초안 순서대로 이어 붙이고 첫 화면 제목·이름표·문구를 고른 글자 템플릿으로 입힙니다. 30초짜리 릴스는 20초쯤 걸려요. 템플릿만 바꿔 다시 만들어 비교해 보세요.</p>
       </div>
       <Button onClick={() => start.mutate()} disabled={running || draftRunning}>
         <span className="flex items-center gap-2">{running ? <LoaderCircle size={16} className="animate-spin" /> : <Film size={16} />}{running ? "세로 영상 만드는 중…" : video ? "세로 영상 다시 만들기" : "세로 영상 만들기"}</span>
       </Button>
     </div>
-    <label className="flex items-center gap-2 text-sm text-slate-200">
-      <input id="reel-auto-video" type="checkbox" checked={auto} onChange={(event) => onAutoChange(event.target.checked)} className="h-4 w-4 accent-cyan-300" />
+    <label className="flex items-center gap-2 text-sm text-slate-700">
+      <input id="reel-auto-video" type="checkbox" checked={auto} onChange={(event) => onAutoChange(event.target.checked)} className="h-4 w-4 accent-sky-600" />
       초안을 말로 고치면 세로 영상도 다시 만들기
     </label>
     {options && <TextStylePicker options={options} value={textStyle} onChange={setTextStyle} disabled={running || draftRunning} />}
-    {status.data?.status === "RUNNING" && <p role="status" className="text-sm text-cyan-200 tabular-nums">
+    {status.data?.status === "RUNNING" && <p role="status" className="text-sm text-sky-700 tabular-nums">
       {status.data.step}{status.data.total > 0 ? ` · ${status.data.done}/${status.data.total}개` : ""}
     </p>}
     {status.isError && <Alert>{videoErrorText(null, status.error)}</Alert>}
@@ -138,11 +138,11 @@ function ReelVideoPanel({ projectId, draftKey, draftRunning, options, auto, onAu
     {video && <div className="flex flex-wrap items-start gap-4">
       <video key={video.url} controls playsInline preload="metadata" src={reelVideoSrc(video)} aria-label="완성된 세로 영상"
         className="aspect-[9/16] w-full max-w-[260px] rounded-xl bg-black" />
-      <div className="min-w-0 space-y-2 text-sm text-slate-300">
-        <p className="tabular-nums">길이 <b className="text-slate-50">{formatDuration(video.duration_seconds)}</b> · 장면 {video.scene_count}개 · {(video.file_size_bytes / 1024 / 1024).toFixed(1)}MB</p>
-        {video.text_style && options?.text_templates && <p className="text-xs text-slate-400">글자 템플릿: {options.text_templates.find((t) => t.key === video.text_style?.template)?.label ?? video.text_style.template}</p>}
-        {!video.matches_draft && !(auto && (wanted || running)) && <p className="text-xs text-amber-200">초안이 바뀌어서 이 영상은 예전 초안으로 만든 것입니다. 지금 초안으로 보려면 다시 만들어 주세요.</p>}
-        <a href={reelVideoSrc(video)} download="reel.mp4" className="inline-flex items-center gap-1.5 text-cyan-300 underline"><Download size={14} />영상 내려받기</a>
+      <div className="min-w-0 space-y-2 text-sm text-slate-600">
+        <p className="tabular-nums">길이 <b className="text-slate-900">{formatDuration(video.duration_seconds)}</b> · 장면 {video.scene_count}개 · {(video.file_size_bytes / 1024 / 1024).toFixed(1)}MB</p>
+        {video.text_style && options?.text_templates && <p className="text-xs text-slate-500">글자 템플릿: {options.text_templates.find((t) => t.key === video.text_style?.template)?.label ?? video.text_style.template}</p>}
+        {!video.matches_draft && !(auto && (wanted || running)) && <p className="text-xs text-amber-700">초안이 바뀌어서 이 영상은 예전 초안으로 만든 것입니다. 지금 초안으로 보려면 다시 만들어 주세요.</p>}
+        <a href={reelVideoSrc(video)} download="reel.mp4" className="inline-flex items-center gap-1.5 text-sky-700 underline"><Download size={14} />영상 내려받기</a>
       </div>
     </div>}
   </div>;
@@ -185,16 +185,16 @@ function ReelChat({ projectId, selected, undoCount, recentChanges, unusedShots, 
   const busy = disabled || edit.isPending || undo.isPending;
   const send = (text: string) => { if (text.trim() && !busy) edit.mutate(text.trim()); };
   const failure = edit.error ?? undo.error;
-  return <div className="space-y-2 rounded-xl border border-fuchsia-300/20 bg-fuchsia-300/[.04] p-3" aria-label="말로 고치기">
-    <p className="text-sm font-semibold text-slate-100">말로 고치기</p>
-    <p className="text-xs text-slate-400">{selected ? <>고른 장면: <b className="text-fuchsia-200">{selected}번</b> · "여기"는 이 장면이에요</> : "아래 장면을 누르면 \"여기\"로 고를 수 있어요. 번호로 말해도 돼요(예: 3번)."}</p>
+  return <div className="space-y-2 rounded-xl border border-sky-200 bg-sky-50 p-3" aria-label="말로 고치기">
+    <p className="text-sm font-semibold text-slate-800">말로 고치기</p>
+    <p className="text-xs text-slate-500">{selected ? <>고른 장면: <b className="text-sky-700">{selected}번</b> · "여기"는 이 장면이에요</> : "아래 장면을 누르면 \"여기\"로 고를 수 있어요. 번호로 말해도 돼요(예: 3번)."}</p>
     {selected && <div className="flex flex-wrap gap-2">
       {quickEdits.map(([label, text]) => <Button key={label} size="sm" variant="secondary" disabled={busy} onClick={() => send(text)}>{label}</Button>)}
     </div>}
     <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); send(message); }}>
       <input id="reel-chat" aria-label="고칠 내용" value={message} onChange={(event) => setMessage(event.target.value)} disabled={busy} maxLength={300}
         placeholder="예: 3번 더 길게 / 여기에 자막 '최애템' 추가 / 제목을 '여름 꿀템 3가지'로"
-        className="min-w-0 flex-1 rounded-lg border border-white/15 bg-[#0b1420] px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500" />
+        className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 placeholder:text-slate-500" />
       <Button type="submit" size="sm" disabled={busy || !message.trim()}>
         <span className="flex items-center gap-1">{edit.isPending ? <LoaderCircle size={14} className="animate-spin" /> : <Send size={14} />}고치기</span>
       </Button>
@@ -203,21 +203,21 @@ function ReelChat({ projectId, selected, undoCount, recentChanges, unusedShots, 
       </Button>}
     </form>
     {result && <div role="status" className="space-y-0.5 text-sm">
-      {result.done.map((line) => <p key={line} className="text-emerald-200">✓ {line}</p>)}
-      {result.skipped.map((line) => <p key={line} className="text-amber-200">· {line}</p>)}
+      {result.done.map((line) => <p key={line} className="text-emerald-700">✓ {line}</p>)}
+      {result.skipped.map((line) => <p key={line} className="text-amber-700">· {line}</p>)}
       {result.done.length > 0 && !autoVideo && <p className="text-xs text-slate-500">세로 영상에 반영하려면 위에서 세로 영상을 다시 만들어 주세요.</p>}
     </div>}
-    {recentChanges.length > 0 && <div className="text-xs text-slate-400">
+    {recentChanges.length > 0 && <div className="text-xs text-slate-500">
       <p className="font-semibold text-slate-500">최근 고친 것</p>
       <ul className="list-inside list-disc">{recentChanges.map((line, index) => <li key={`${index}:${line}`}>{line}</li>)}</ul>
     </div>}
-    {unusedShots.length > 0 && <details className="rounded-lg border border-white/10 p-2">
-      <summary className="cursor-pointer text-sm text-slate-200">안 쓴 컷 {unusedShots.length}개 <span className="text-xs text-slate-500">· 눌러서 초안에 넣기 (촬영 순서 자리에 들어가요)</span></summary>
+    {unusedShots.length > 0 && <details className="rounded-lg border border-slate-200 p-2">
+      <summary className="cursor-pointer text-sm text-slate-700">안 쓴 컷 {unusedShots.length}개 <span className="text-xs text-slate-500">· 눌러서 초안에 넣기 (촬영 순서 자리에 들어가요)</span></summary>
       <ul className="mt-2 space-y-2">
-        {unusedShots.map((shot) => <li key={shot.index} className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-lg bg-[#0b1420] p-2">
+        {unusedShots.map((shot) => <li key={shot.index} className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-lg bg-white p-2">
           <div className="min-w-0 flex-1">
-            <p className="text-xs text-slate-500 tabular-nums"><b className="text-slate-300">컷 {shot.index}</b> · {shot.source_filename} · {shot.start_seconds.toFixed(1)}–{shot.end_seconds.toFixed(1)}초</p>
-            <p className="text-xs text-slate-400">AI가 본 화면: {shot.caption || "설명 없음"}</p>
+            <p className="text-xs text-slate-500 tabular-nums"><b className="text-slate-600">컷 {shot.index}</b> · {shot.source_filename} · {shot.start_seconds.toFixed(1)}–{shot.end_seconds.toFixed(1)}초</p>
+            <p className="text-xs text-slate-500">AI가 본 화면: {shot.caption || "설명 없음"}</p>
           </div>
           <div className="flex gap-2">
             <Button size="sm" variant="secondary" onClick={() => onPreview?.({ candidateId: `reel:${shot.index}`, sourceId: shot.source_video_id, start: shot.start_seconds, end: shot.end_seconds })}>미리보기</Button>
@@ -247,7 +247,7 @@ function TitleChoices({ projectId, draft, disabled, onChanged }: { projectId: st
   const busy = disabled || pick.isPending;
   return <div className="mt-2 space-y-1" aria-label="제목 후보">
     <div className="flex flex-wrap items-center gap-2">
-      <span className="text-xs text-slate-400">AI 제목 후보</span>
+      <span className="text-xs text-slate-500">AI 제목 후보</span>
       <Button size="sm" variant="secondary" disabled={busy} onClick={() => pick.mutate("다른 제목")}>
         <span className="flex items-center gap-1">{pick.isPending ? <LoaderCircle size={14} className="animate-spin" /> : <Shuffle size={14} />}다른 제목</span>
       </Button>
@@ -258,7 +258,7 @@ function TitleChoices({ projectId, draft, disabled, onChanged }: { projectId: st
         const text = [option.lead, option.title].filter(Boolean).join(" / ");
         return <button key={text} type="button" aria-pressed={on} disabled={busy || on}
           onClick={() => pick.mutate(`제목을 '${text}'로`)}
-          className={`min-w-0 rounded-full border px-3 py-1 text-left text-xs ${on ? "border-cyan-300/70 bg-cyan-300/10 text-cyan-100" : "border-white/15 text-slate-300 hover:border-white/30"}`}>
+          className={`min-w-0 rounded-full border px-3 py-1 text-left text-xs ${on ? "border-sky-300 bg-sky-100 text-sky-700" : "border-slate-300 text-slate-600 hover:border-slate-400"}`}>
           <span className="mr-1 text-slate-500">{formulaLabels[option.formula] ?? "후보"}</span>{text}
         </button>;
       })}
@@ -309,8 +309,8 @@ export function ReelDraftCard({ projectId, onPreview }: { projectId: string; onP
       {options.isError && <Alert>{errorText(options.error)}</Alert>}
       {options.data && <div className="space-y-3">
         <Choices label="만들 영상" options={options.data.formats} value={format} onChange={setFormat} disabled={running} />
-        {format === "long" ? <div className="rounded-xl border border-white/10 bg-white/[.03] p-3 text-sm text-slate-300">
-          롱폼(유튜브)은 아래 <a href="#story-direction" className="text-cyan-300 underline">추천 편집 방향</a>에서 길이를 고르고 편집 계획을 만듭니다. 모드·속도 고르기는 다음 단계에서 롱폼에도 붙입니다.
+        {format === "long" ? <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+          롱폼(유튜브)은 아래 <a href="#story-direction" className="text-sky-700 underline">추천 편집 방향</a>에서 길이를 고르고 편집 계획을 만듭니다. 모드·속도 고르기는 다음 단계에서 롱폼에도 붙입니다.
         </div> : <>
           <Choices label="모드" options={options.data.modes} value={mode} onChange={setMode} disabled={running} />
           <Choices label="속도" options={options.data.paces} value={pace} onChange={setPace} disabled={running} />
@@ -319,7 +319,7 @@ export function ReelDraftCard({ projectId, onPreview }: { projectId: string; onP
           <Button onClick={() => start.mutate()} disabled={running}>
             <span className="flex items-center gap-2">{running ? <LoaderCircle size={16} className="animate-spin" /> : <Clapperboard size={16} />}{running ? "릴스 초안 만드는 중…" : draft ? "릴스 초안 다시 만들기" : "릴스 초안 만들기"}</span>
           </Button>
-          {status.data?.status === "RUNNING" && <p role="status" className="text-sm text-cyan-200 tabular-nums">
+          {status.data?.status === "RUNNING" && <p role="status" className="text-sm text-sky-700 tabular-nums">
             {status.data.step}{status.data.total > 0 ? ` · ${status.data.done}/${status.data.total}개` : ""}
             <span className="block text-xs text-slate-500">처음에는 장면마다 화면을 읽느라 몇 분 걸립니다. 같은 영상으로 다시 만들면 빨라요.</span>
           </p>}
@@ -328,14 +328,14 @@ export function ReelDraftCard({ projectId, onPreview }: { projectId: string; onP
         </>}
       </div>}
       {format === "short" && draft && <div className="space-y-3" aria-label="릴스 초안">
-        <div className="rounded-xl border border-cyan-300/20 bg-cyan-300/[.04] p-3">
-          <p className="text-xs text-slate-400">첫 화면 제목</p>
-          {draft.title_lead && <p className="text-sm text-slate-300">{draft.title_lead}</p>}
-          <p className="text-xl font-semibold text-slate-50">{draft.title}</p>
+        <div className="rounded-xl border border-sky-200 bg-sky-50 p-3">
+          <p className="text-xs text-slate-500">첫 화면 제목</p>
+          {draft.title_lead && <p className="text-sm text-slate-600">{draft.title_lead}</p>}
+          <p className="text-xl font-semibold text-slate-900">{draft.title}</p>
           <TitleChoices projectId={projectId} draft={draft} disabled={running} onChanged={() => setEditTick((tick) => tick + 1)} />
-          <p className="mt-1 text-sm text-slate-300 tabular-nums">{draft.mode_label} · {draft.pace_label} · 합계 <b className="text-slate-50">{formatDuration(draft.total_seconds)}</b> (목표 {draft.target_seconds}초) · 장면 {draft.scenes.length}개 / 나눈 장면 {draft.shot_count}개</p>
+          <p className="mt-1 text-sm text-slate-600 tabular-nums">{draft.mode_label} · {draft.pace_label} · 합계 <b className="text-slate-900">{formatDuration(draft.total_seconds)}</b> (목표 {draft.target_seconds}초) · 장면 {draft.scenes.length}개 / 나눈 장면 {draft.shot_count}개</p>
           <p className="mt-1 text-xs text-slate-500">{byAi ? `AI 초안 (${draft.engine.replace("llm:", "")})` : "AI 없이 촬영 순서대로 만든 기본 초안"}</p>
-          {draft.notes.map((note) => <p key={note} className="text-xs text-amber-200">{note}</p>)}
+          {draft.notes.map((note) => <p key={note} className="text-xs text-amber-700">{note}</p>)}
         </div>
         <ReelVideoPanel projectId={projectId} draftRunning={running} options={options.data}
           draftKey={`${draft.mode}|${draft.title_lead ?? ""}|${draft.title}|${draft.total_seconds}|${draft.scenes.map((s) => `${s.shot_index}:${s.start_seconds}-${s.end_seconds}:${s.label}:${s.caption}`).join(",")}`}
@@ -344,12 +344,12 @@ export function ReelDraftCard({ projectId, onPreview }: { projectId: string; onP
           undoCount={status.data?.undo_count ?? (status.data?.can_undo ? 1 : 0)} recentChanges={status.data?.recent_changes ?? []}
           unusedShots={status.data?.unused_shots ?? []} onChanged={() => setEditTick((tick) => tick + 1)} />
         <ol className="space-y-2">
-          {draft.scenes.map((scene, index) => <li key={`${scene.shot_index}:${index}`} className={`flex min-w-0 flex-wrap items-start justify-between gap-2 rounded-xl border p-3 ${picked === index + 1 ? "border-fuchsia-300/60 bg-fuchsia-300/[.06]" : "border-white/10 bg-[#0b1420]"}`}>
+          {draft.scenes.map((scene, index) => <li key={`${scene.shot_index}:${index}`} className={`flex min-w-0 flex-wrap items-start justify-between gap-2 rounded-xl border p-3 ${picked === index + 1 ? "border-sky-300 bg-sky-50" : "border-slate-200 bg-white"}`}>
             <button type="button" aria-pressed={picked === index + 1} aria-label={`${index + 1}번 장면 고르기`} onClick={() => setSelected(picked === index + 1 ? null : index + 1)} className="min-w-0 flex-1 text-left">
-              <p className="text-xs text-slate-500 tabular-nums">{index + 1}. <span className="mr-1 text-slate-600">컷 {scene.shot_index}</span>{scene.is_hook ? <span className="mr-1 rounded-full bg-amber-300/15 px-2 py-0.5 font-semibold text-amber-200">맨 앞 장면</span> : null}{scene.source_filename} · {scene.start_seconds.toFixed(1)}–{scene.end_seconds.toFixed(1)}초 ({(scene.end_seconds - scene.start_seconds).toFixed(1)}초)</p>
-              {scene.label && <p className="mt-1 text-xs font-semibold text-cyan-200">{scene.label}</p>}
-              <p className="mt-0.5 text-base font-semibold text-slate-50">{scene.caption || <span className="text-slate-500">(문구 없음)</span>}</p>
-              {scene.shot_caption && <p className="mt-0.5 text-xs text-slate-400">AI가 본 화면: {scene.shot_caption}</p>}
+              <p className="text-xs text-slate-500 tabular-nums">{index + 1}. <span className="mr-1 text-slate-600">컷 {scene.shot_index}</span>{scene.is_hook ? <span className="mr-1 rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700">맨 앞 장면</span> : null}{scene.source_filename} · {scene.start_seconds.toFixed(1)}–{scene.end_seconds.toFixed(1)}초 ({(scene.end_seconds - scene.start_seconds).toFixed(1)}초)</p>
+              {scene.label && <p className="mt-1 text-xs font-semibold text-sky-700">{scene.label}</p>}
+              <p className="mt-0.5 text-base font-semibold text-slate-900">{scene.caption || <span className="text-slate-500">(문구 없음)</span>}</p>
+              {scene.shot_caption && <p className="mt-0.5 text-xs text-slate-500">AI가 본 화면: {scene.shot_caption}</p>}
             </button>
             <Button size="sm" variant="secondary" onClick={() => onPreview?.({ candidateId: `reel:${scene.shot_index}`, sourceId: scene.source_video_id, start: scene.start_seconds, end: scene.end_seconds })}>미리보기</Button>
           </li>)}
