@@ -97,6 +97,16 @@ export function thumbUrl(projectId: string, sourceId: string, seconds: number): 
   return `/api/projects/${projectId}/sources/${sourceId}/thumb?at=${seconds.toFixed(3)}`;
 }
 
+/** TODO 35: light 720p copies of the sources, so the edit room plays on a phone. */
+export interface PreviewState { total: number; ready: string[]; making: string | null; failed: string[] }
+export async function ensurePreviews(projectId: string, first: string[]): Promise<PreviewState> {
+  const body = await request<Partial<PreviewState>>(`/projects/${projectId}/previews`, { method: "POST", headers: json, body: JSON.stringify({ first }) });
+  return { total: Number(body.total) || 0, ready: Array.isArray(body.ready) ? body.ready : [], making: body.making ?? null, failed: Array.isArray(body.failed) ? body.failed : [] };
+}
+export function previewUrl(projectId: string, sourceId: string): string {
+  return `/api/projects/${projectId}/sources/${sourceId}/preview`;
+}
+
 /** TODO 27: "내 편집 규칙", shared by every project. */
 export interface EditRule { id: string; text: string }
 

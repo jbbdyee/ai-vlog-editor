@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -175,5 +175,25 @@ describe("TODO 26 chat editing screen", () => {
       <Route path="projects/:projectId/chat-edit" element={<ChatEditPage />} />
     </Routes></MemoryRouter></QueryClientProvider>);
     expect(await screen.findByRole("button", { name: "추천 편집 방향으로 첫 편집안 만들기" })).toBeInTheDocument();
+  });
+
+  it("TODO 35: plays the light 720p copy once it is made and says how many are ready", async () => {
+    const asked: unknown[] = [];
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith(`/projects/${project}`)) return Promise.resolve(response({ project_id: project, name: "학원 하루", status: "COMPLETED" }));
+      if (url.endsWith("/previews")) {
+        asked.push(JSON.parse(String(init?.body)));
+        return Promise.resolve(response({ total: 2, ready: [source], making: null, failed: ["44444444-4444-4444-8444-444444444444"] }));
+      }
+      return Promise.resolve(response(view(4)));
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[`/projects/${project}/chat-edit`]}><Routes>
+      <Route path="projects/:projectId/chat-edit" element={<ChatEditPage />} />
+    </Routes></MemoryRouter></QueryClientProvider>);
+
+    expect(await screen.findByText("휴대폰용 미리보기 준비됨 1/2 · 못 만든 영상 1개")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("편집안 재생").getAttribute("src")).toBe(`/api/projects/${project}/sources/${source}/preview`));
+    expect(asked).toEqual([{ first: [source] }]);
   });
 });

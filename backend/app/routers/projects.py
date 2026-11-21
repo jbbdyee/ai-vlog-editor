@@ -39,7 +39,7 @@ from backend.app.services.project_reel import (ReelEditRefused, ReelOptions, Ree
                                               edit_reel_draft, unused_shots, job_state, reel_output_dir, render_job_state,
                                               saved_draft, start_reel_draft, start_reel_render, undo_reel_draft)
 from backend.app.services.reel_render import draft_fingerprint, saved_video
-from backend.app.services import edit_brain, edit_rules, face_mosaic, longform_captions, longform_chat, my_edit_compare, reel_text, scene_thumbs, taste_log
+from backend.app.services import edit_brain, edit_rules, face_mosaic, longform_captions, longform_chat, my_edit_compare, reel_text, scene_thumbs, source_previews, taste_log
 from backend.app.services.reel_modes import (AUTO_MODE, DEFAULT_PACE, DEFAULT_SHORT_SECONDS, MODE_BY_KEY, MODES, PACES,
                                              SHORT_LENGTHS)
 from backend.app.services.story_length import (LENGTH_OPTIONS, Moment, accept_minutes, fit_to_length, footage_seconds,
@@ -358,6 +358,67 @@ async def get_project_source_media(request: Request, project_id: UUID, source_id
     return FileResponse(path, media_type=media_type, filename=f"source-preview{path.suffix.lower()}", content_disposition_type="inline", headers={
         "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"
     })
+
+
+class PreviewsRequest(BaseModel):
+    first: list[UUID] = Field(default_factory=list, max_length=400)
+
+
+class PreviewsResponse(BaseModel):
+    total: int
+    ready: list[UUID]
+    making: UUID | None
+    failed: list[UUID]
+
+
+def _preview_items_sync(factory, storage: LocalSourceStorage, output_root: Path, project_id: UUID,
+                        first: list[UUID]) -> list[tuple[UUID, Path, Path]]:
+    with factory() as session:
+        if session.get(Project, project_id) is None:
+            raise HTTPException(status_code=404, detail={"code": "PROJECT_NOT_FOUND"})
+        sources = list(session.scalars(select(SourceVideo).where(SourceVideo.project_id == project_id)
+                                       .order_by(SourceVideo.created_at)))
+    rank = {source_id: index for index, source_id in enumerate(first)}
+    sources.sort(key=lambda source: rank.get(source.id, len(rank)))
+    items = []
+    for source in sources:
+        try:
+            original = storage.resolve(source.storage_reference)
+        except SourceStorageError:
+            continue
+        if original.is_file():
+            items.append((source.id, original, source_previews.preview_path(output_root, project_id, source.id)))
+    return items
+
+
+@router.post("/{project_id}/previews", response_model=PreviewsResponse)
+async def ensure_project_previews(request: Request, project_id: UUID, payload: PreviewsRequest) -> PreviewsResponse:
+    """TODO 35: start making the light 720p copies that are missing (cuts in the plan first) and say how far it got."""
+    storage = request.app.state.source_storage
+    if not isinstance(storage, LocalSourceStorage):
+        raise HTTPException(status_code=500, detail={"code": "SOURCE_STORAGE_UNAVAILABLE"})
+    items = await run_in_threadpool(_preview_items_sync, _session_factory(request), storage,
+                                    request.app.state.project_render_output_root, project_id, payload.first)
+    queue = source_previews.QUEUE
+    queue.ensure([(original, target) for _, original, target in items])
+    states = {source_id: queue.state(target) for source_id, _, target in items}
+    return PreviewsResponse(total=len(items), ready=[key for key, value in states.items() if value == "ready"],
+                            making=next((key for key, value in states.items() if value == "making"), None),
+                            failed=[key for key, value in states.items() if value == "failed"])
+
+
+@router.get("/{project_id}/sources/{source_id}/preview", response_class=FileResponse)
+async def get_project_source_preview(request: Request, project_id: UUID, source_id: UUID) -> FileResponse:
+    """TODO 35: the light 720p copy of one source (404 until it is made)."""
+    storage = request.app.state.source_storage
+    if not isinstance(storage, LocalSourceStorage):
+        raise HTTPException(status_code=500, detail={"code": "SOURCE_STORAGE_UNAVAILABLE"})
+    await run_in_threadpool(_source_media_path, _session_factory(request), storage, project_id, source_id)
+    path = source_previews.preview_path(request.app.state.project_render_output_root, project_id, source_id)
+    if not source_previews.is_ready(path):
+        raise HTTPException(status_code=404, detail={"code": "PREVIEW_NOT_READY"})
+    return FileResponse(path, media_type="video/mp4", content_disposition_type="inline",
+                        headers={"Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff"})
 
 
 @router.get(

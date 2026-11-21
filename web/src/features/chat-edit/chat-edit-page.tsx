@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Clapperboard, LoaderCircle, RefreshCw, Send, Undo2, X } from "lucide-react";
 import { Link, useLocation, useParams } from "react-router-dom";
-import { addEditRule, answerRuleCandidate, clock, cutAt, deleteEditRule, getChatEdit, getEditRules, pickChatChoice, remakeFromStoryDirection, sendChatEdit, startFromStoryDirection, thumbUrl, undoChatEdit, type ChatCut, type ChatEditView, type ChatMessage } from "@/api/chat-edit";
+import { addEditRule, answerRuleCandidate, clock, cutAt, deleteEditRule, ensurePreviews, getChatEdit, getEditRules, pickChatChoice, previewUrl, remakeFromStoryDirection, sendChatEdit, startFromStoryDirection, thumbUrl, undoChatEdit, type ChatCut, type ChatEditView, type ChatMessage } from "@/api/chat-edit";
 import { ApiError, getProject, isProjectId, sourceMediaUrl } from "@/api/projects";
 import { startRendering } from "@/api/edit-render";
 import { Alert } from "@/components/ui/alert";
@@ -74,13 +74,23 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
     return new Set(last?.changed ?? []);
   }, [data.messages]);
 
+  // TODO 35: play the light 720p copy when it is made (phones can't play the 4K originals)
+  const order = [...new Set(cuts.map((cut) => cut.source_video_id))];
+  const previews = useQuery({
+    queryKey: ["previews", projectId, order.join(",")],
+    queryFn: () => ensurePreviews(projectId, order),
+    refetchInterval: (query) => { const state = query.state.data; return state && state.ready.length + state.failed.length < state.total ? 5000 : false; },
+  });
+  const ready = useMemo(() => new Set(previews.data?.ready ?? []), [previews.data]);
+  const sourceSrc = (sourceId: string) => ready.has(sourceId) ? previewUrl(projectId, sourceId) : sourceMediaUrl(projectId, sourceId);
+
   function goTo(index: number, offset: number, play: boolean) {
     const player = video.current;
     const cut = cuts[index];
     if (!player || !cut) return;
     setPlaying(index);
     setTime(cut.timeline_start + offset);
-    const src = sourceMediaUrl(projectId, cut.source_video_id);
+    const src = sourceSrc(cut.source_video_id);
     if (loadedSrc.current !== src) {
       loadedSrc.current = src;
       pending.current = { offset, play };
@@ -101,6 +111,19 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
     goTo(index, Math.max(0, at - cuts[index].timeline_start), false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature]);
+
+  // the copy of the source on screen just got made: switch to it at the same moment, paused
+  const currentSource = cuts[playing]?.source_video_id;
+  const currentReady = currentSource ? ready.has(currentSource) : false;
+  useEffect(() => {
+    const player = video.current;
+    const cut = cuts[playing];
+    if (!currentReady || !player || !cut || loadedSrc.current === previewUrl(projectId, cut.source_video_id)) return;
+    if (!player.paused) return;
+    setPlayError("");
+    goTo(playing, Math.max(0, timeRef.current - cut.timeline_start), false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentReady, currentSource]);
 
   useEffect(() => { list.current?.scrollTo?.({ top: list.current.scrollHeight }); }, [data.messages.length]);
 
@@ -196,6 +219,9 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
 
   return <div className="mt-4 space-y-3">
     <div className="flex flex-wrap items-center justify-end gap-2">
+      {previews.data && previews.data.total > 0 && <span role="status" aria-label="휴대폰용 미리보기" className="mr-auto text-xs text-slate-500">
+        {`휴대폰용 미리보기 ${previews.data.ready.length + previews.data.failed.length >= previews.data.total ? "준비됨" : "만드는 중"} ${previews.data.ready.length}/${previews.data.total}${previews.data.failed.length ? ` · 못 만든 영상 ${previews.data.failed.length}개` : ""}`}
+      </span>}
       {render.isSuccess && <span role="status" className="text-sm text-sky-700">4K 영상을 만들기 시작했어요. 홈에서 확인해요.</span>}
       {render.error && <span className="text-sm text-rose-700">{errorText(render.error)}</span>}
       <Button type="button" variant="secondary" disabled={busy || data.undo_count === 0} onClick={() => undo.mutate()}><Undo2 size={16} />되돌리기{data.undo_count > 0 ? ` (${data.undo_count})` : ""}</Button>
@@ -208,7 +234,9 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
           onLoadedMetadata={onLoaded} onTimeUpdate={onTime} onPlay={onPlay}
           onPause={() => setStamp(timeRef.current)}
           onSeeked={() => { const player = video.current; const cut = cuts[playing]; if (player?.paused && cut && !pending.current) setStamp(cut.timeline_start + Math.min(Math.max(player.currentTime - cut.start_seconds, 0), cut.length)); }}
-          onError={() => setPlayError("영상을 재생할 수 없어요. 서버 연결을 확인해 주세요.")} />
+          onError={() => setPlayError(current && !ready.has(current.source_video_id)
+            ? "이 영상의 휴대폰용 미리보기를 아직 만드는 중이에요. 다 되면 바로 틀 수 있어요."
+            : "영상을 재생할 수 없어요. 서버 연결을 확인해 주세요.")} />
         {current && <span className="pointer-events-none absolute right-2 top-2 rounded bg-black/60 px-2 py-0.5 text-xs text-white">컷 {current.number} · {current.source_filename}</span>}
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm tabular-nums text-slate-600">
