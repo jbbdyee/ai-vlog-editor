@@ -149,6 +149,13 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
     }
   }
 
+  // A cut that runs to the very end of its source can reach the file's end before the check above:
+  // the browser then stops by itself (paused), so move on here (학원 하루 컷 1·6·62 used to stop).
+  function onEnded() {
+    if (pending.current) return;
+    if (playing < cuts.length - 1) goTo(playing + 1, 0, true);
+  }
+
   function onPlay() {
     setStamp(null);
     setPlayError("");
@@ -231,7 +238,7 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
     <section aria-label="편집안 미리보기" className="min-w-0 space-y-3">
       <div className="relative">
         <video ref={video} aria-label="편집안 재생" className="block aspect-video w-full rounded-xl bg-black" controls playsInline preload="metadata"
-          onLoadedMetadata={onLoaded} onTimeUpdate={onTime} onPlay={onPlay}
+          onLoadedMetadata={onLoaded} onTimeUpdate={onTime} onPlay={onPlay} onEnded={onEnded}
           onPause={() => setStamp(timeRef.current)}
           onSeeked={() => { const player = video.current; const cut = cuts[playing]; if (player?.paused && cut && !pending.current) setStamp(cut.timeline_start + Math.min(Math.max(player.currentTime - cut.start_seconds, 0), cut.length)); }}
           onError={() => setPlayError(current && !ready.has(current.source_video_id)

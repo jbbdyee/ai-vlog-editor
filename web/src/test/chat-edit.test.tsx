@@ -67,6 +67,24 @@ describe("TODO 26 chat editing screen", () => {
     expect(await screen.findByRole("button", { name: "컷 2, 4.0초" })).toBeInTheDocument();
   });
 
+  it("moves on to the next cut when a cut runs to the end of its source file", async () => {
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url.endsWith(`/projects/${project}`)) return Promise.resolve(response({ project_id: project, name: "학원 하루", status: "COMPLETED" }));
+      return Promise.resolve(response(view(4)));
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[`/projects/${project}/chat-edit`]}><Routes>
+      <Route path="projects/:projectId/chat-edit" element={<ChatEditPage />} />
+    </Routes></MemoryRouter></QueryClientProvider>);
+
+    await userEvent.click(await screen.findByRole("button", { name: "컷 1, 6.0초" }));
+    const player = screen.getByLabelText("편집안 재생") as HTMLVideoElement;
+    fireEvent.loadedMetadata(player);
+    fireEvent.ended(player);
+    expect(await screen.findByText(/^컷 2 · 4\.0초/)).toBeInTheDocument();
+    expect(player.currentTime).toBe(10);
+  });
+
   it("TODO 27: picks a 다른 장면 picture and saves a sentence as a rule chip", async () => {
     const picked: unknown[] = [];
     let rules: { id: string; text: string }[] = [];
