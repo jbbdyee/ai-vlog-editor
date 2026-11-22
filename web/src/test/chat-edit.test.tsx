@@ -61,8 +61,10 @@ describe("TODO 26 chat editing screen", () => {
     expect(sent).toEqual([{ message: "[00:06] 이 장면 짧게", at_seconds: 6, brain: "claude" }]);
     expect(screen.getByRole("button", { name: "컷 2, 2.7초, 방금 고침" })).toBeInTheDocument();
     expect(screen.getByText("규칙으로 바로")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "더 보기" }));
     expect(screen.getByText(/Claude 1번/)).toBeInTheDocument();
-
+    await userEvent.click(screen.getByRole("button", { name: "닫기" }));
+    
     await userEvent.click(screen.getByRole("button", { name: "되돌리기 (1)" }));
     expect(await screen.findByRole("button", { name: "컷 2, 4.0초" })).toBeInTheDocument();
   });
@@ -123,6 +125,7 @@ describe("TODO 26 chat editing screen", () => {
     expect(screen.getByText("실제로 한 일")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "규칙으로 저장" }));
+    await userEvent.click(screen.getByRole("button", { name: "더 보기" }));
     expect(await screen.findByRole("button", { name: "규칙 지우기: 다른 장면으로" })).toBeInTheDocument();
     expect(screen.getByText("규칙으로 저장됨")).toBeInTheDocument();
   });
@@ -146,6 +149,7 @@ describe("TODO 26 chat editing screen", () => {
       <Route path="projects/:projectId/chat-edit" element={<ChatEditPage />} />
     </Routes></MemoryRouter></QueryClientProvider>);
 
+    await userEvent.click(await screen.findByRole("button", { name: "더 보기" }));
     expect(await screen.findByText(candidate.text)).toBeInTheDocument();
     expect(screen.getByText(`근거: ${candidate.why}`)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "규칙으로" }));
@@ -175,6 +179,7 @@ describe("TODO 26 chat editing screen", () => {
     render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[`/projects/${project}/chat-edit`]}><Routes>
       <Route path="projects/:projectId/chat-edit" element={<ChatEditPage />} />
     </Routes></MemoryRouter></QueryClientProvider>);
+    await userEvent.click(await screen.findByRole("button", { name: "더 보기" }));
     await userEvent.click(await screen.findByRole("button", { name: "8분" }));
     await userEvent.click(await screen.findByRole("button", { name: "이 길이로 다시 만들기" }));
     expect(await screen.findByText(/추천으로 다시 만들었어/)).toBeInTheDocument();
@@ -210,8 +215,32 @@ describe("TODO 26 chat editing screen", () => {
       <Route path="projects/:projectId/chat-edit" element={<ChatEditPage />} />
     </Routes></MemoryRouter></QueryClientProvider>);
 
+    await userEvent.click(await screen.findByRole("button", { name: "더 보기" }));
     expect(await screen.findByText("휴대폰용 미리보기 준비됨 1/2 · 못 만든 영상 1개")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText("편집안 재생").getAttribute("src")).toBe(`/api/projects/${project}/sources/${source}/preview`));
     expect(asked).toEqual([{ first: [source] }]);
+  });
+  it("TODO 37: keeps only the latest exchange on screen and shows a dot on ⋯ for a rule candidate", async () => {
+    const chat = [
+      { id: "u1", role: "user", text: "[00:01] 1번 빼", at_seconds: 1, done: [], skipped: [], engine: null, error: null, changed: [], undo: false },
+      { id: "a1", role: "assistant", text: "옛날 답", at_seconds: null, done: [], skipped: [], engine: "rule", error: null, changed: [], undo: false },
+      { id: "u2", role: "user", text: "[00:06] 이 장면 짧게", at_seconds: 6, done: [], skipped: [], engine: null, error: null, changed: [], undo: false },
+      { id: "a2", role: "assistant", text: "새 답", at_seconds: null, done: [], skipped: [], engine: "rule", error: null, changed: [], undo: false },
+    ];
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url.endsWith(`/projects/${project}`)) return Promise.resolve(response({ project_id: project, name: "학원 하루", status: "COMPLETED" }));
+      return Promise.resolve(response({ ...view(4, chat, 2), rule_candidates: [{ key: "k", text: "규칙 하나", why: "이유" }] }));
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[`/projects/${project}/chat-edit`]}><Routes>
+      <Route path="projects/:projectId/chat-edit" element={<ChatEditPage />} />
+    </Routes></MemoryRouter></QueryClientProvider>);
+
+    expect(await screen.findByText("새 답")).toBeInTheDocument();
+    expect(screen.queryByText("옛날 답")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("새 규칙 후보")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "되돌리기 (2)" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "지난 대화 2개 보기" }));
+    expect(screen.getByText("옛날 답")).toBeInTheDocument();
   });
 });

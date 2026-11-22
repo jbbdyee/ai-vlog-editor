@@ -1,16 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Clapperboard, LoaderCircle, RefreshCw, Send, Undo2, X } from "lucide-react";
+import { ArrowLeft, Clapperboard, LoaderCircle, MoreHorizontal, Send, Undo2, X } from "lucide-react";
 import { Link, useLocation, useParams } from "react-router-dom";
-import { addEditRule, answerRuleCandidate, clock, cutAt, deleteEditRule, ensurePreviews, getChatEdit, getEditRules, pickChatChoice, previewUrl, remakeFromStoryDirection, sendChatEdit, startFromStoryDirection, thumbUrl, undoChatEdit, type ChatCut, type ChatEditView, type ChatMessage } from "@/api/chat-edit";
+import { addEditRule, clock, cutAt, ensurePreviews, getChatEdit, getEditRules, pickChatChoice, previewUrl, remakeFromStoryDirection, sendChatEdit, startFromStoryDirection, thumbUrl, undoChatEdit, type ChatCut, type ChatEditView, type ChatMessage } from "@/api/chat-edit";
 import { ApiError, getProject, isProjectId, sourceMediaUrl } from "@/api/projects";
 import { startRendering } from "@/api/edit-render";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { MyEditCard } from "@/features/chat-edit/my-edit-card";
-import { TasteBriefCard } from "@/features/chat-edit/taste-brief-card";
+import { EditRoomMenu } from "@/features/chat-edit/edit-room-menu";
 
-const WON_PER_USD = 1450;
 const errorText = (error: unknown) => error instanceof ApiError ? `${error.message}${error.code ? ` (${error.code})` : ""}` : "요청을 완료하지 못했습니다.";
 
 function engineLabel(engine: string | null): string | null {
@@ -29,6 +27,8 @@ export function ChatEditPage() {
   const project = useQuery({ queryKey: ["project", projectId], queryFn: () => getProject(projectId), enabled: valid });
   const view = useQuery({ queryKey: ["chat-edit", projectId], queryFn: () => getChatEdit(projectId), enabled: valid });
   if (!valid) return <div className="mx-auto max-w-2xl py-24"><Alert>올바른 프로젝트 ID가 아닙니다.</Alert></div>;
+  // TODO 37: with a plan, the edit room draws its own one-line top bar
+  if (view.data && view.data.cuts.length > 0) return <Editor projectId={projectId} name={project.data?.name ?? "프로젝트"} data={view.data} />;
   return <div className="py-4 sm:py-6">
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
       <Link to={`/projects/${projectId}`} className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-900"><ArrowLeft size={16} /> 홈</Link>
@@ -37,9 +37,7 @@ export function ChatEditPage() {
     </div>
     {view.isPending && <p className="mt-6 text-sm text-slate-500">편집안을 불러오는 중…</p>}
     {view.isError && <div className="mt-6"><Alert>{errorText(view.error)}</Alert></div>}
-    {view.data && (view.data.cuts.length === 0
-      ? <NoPlan projectId={projectId} onDone={() => void client.invalidateQueries({ queryKey: ["chat-edit", projectId] })} />
-      : <Editor projectId={projectId} data={view.data} />)}
+    {view.data && <NoPlan projectId={projectId} onDone={() => void client.invalidateQueries({ queryKey: ["chat-edit", projectId] })} />}
   </div>;
 }
 
@@ -52,7 +50,7 @@ function NoPlan({ projectId, onDone }: { projectId: string; onDone: () => void }
   </div>;
 }
 
-function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) {
+function Editor({ projectId, name, data }: { projectId: string; name: string; data: ChatEditView }) {
   const client = useQueryClient();
   const cuts = data.cuts;
   const total = data.total_seconds;
@@ -65,6 +63,7 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
   const [message, setMessage] = useState("");
   const [brain, setBrain] = useState<string | null>(data.default_brain);
   const [playError, setPlayError] = useState("");
+  const [olderOpen, setOlderOpen] = useState(false);
   const list = useRef<HTMLDivElement>(null);
   const timeRef = useRef(0);
   timeRef.current = time;
@@ -185,17 +184,9 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
     onError: () => void client.invalidateQueries({ queryKey: ["chat-edit", projectId] }),
   });
   const busy = send.isPending || undo.isPending || pick.isPending || remake.isPending;
-  // TODO 27: sentences saved as rules, shared by every project
+  // TODO 27: sentences saved as rules, shared by every project (the chips themselves live in the ⋯ menu)
   const rules = useQuery({ queryKey: ["edit-rules"], queryFn: getEditRules });
-  const setRules = (value: Awaited<ReturnType<typeof getEditRules>>) => client.setQueryData(["edit-rules"], value);
-  const addRule = useMutation({ mutationFn: addEditRule, onSuccess: setRules });
-  const removeRule = useMutation({ mutationFn: deleteEditRule, onSuccess: setRules });
-  // TODO 28: candidates found in what I chose; accepting one makes it a rule chip
-  const answer = useMutation({
-    mutationFn: ({ key, accept }: { key: string; accept: boolean }) => answerRuleCandidate(projectId, key, accept),
-    onSuccess: (value) => { refresh(value); void client.invalidateQueries({ queryKey: ["edit-rules"] }); },
-    onError: () => void client.invalidateQueries({ queryKey: ["chat-edit", projectId] }),
-  });
+  const addRule = useMutation({ mutationFn: addEditRule, onSuccess: (value) => client.setQueryData(["edit-rules"], value) });
   const candidates = data.rule_candidates ?? [];
   const ruleTexts = new Set((rules.data ?? []).map((rule) => rule.text));
   const plain = (text: string) => text.replace(/^\s*\[\d{1,3}:\d{2}\]\s*/, "").replace(/\s+/g, " ").trim();
@@ -216,26 +207,49 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
   const marked = changed.size * 2 <= cuts.length ? changed : new Set<string>();
   const { hash } = useLocation();
   const openTaste = hash === "#taste-brief";
-  useEffect(() => {
-    if (openTaste) window.setTimeout(() => document.getElementById("taste-brief")?.scrollIntoView?.({ block: "center" }), 600);
-  }, [openTaste]);
+  const [menuOpen, setMenuOpen] = useState(openTaste);
 
-  const claude = data.usage.find((item) => item.key === "claude");
-  const local = data.usage.find((item) => item.key === "ollama");
+  // TODO 37: only the latest exchange (my last message and the answers after it) stays on screen
+  const lastUser = data.messages.map((item) => item.role).lastIndexOf("user");
+  // (a run of answers with no message of mine, e.g. many remakes, shows just the newest one)
+  const split = lastUser >= 0 && data.messages.length - lastUser <= 3 ? lastUser : Math.max(0, data.messages.length - 1);
+  const older = data.messages.slice(0, split);
+  const recent = data.messages.slice(split);
+
   const current = cuts[playing];
+  const previewDone = previews.data ? previews.data.ready.length + previews.data.failed.length >= previews.data.total : true;
+  const previewStatus = previews.data && previews.data.total > 0
+    ? `휴대폰용 미리보기 ${previewDone ? "준비됨" : "만드는 중"} ${previews.data.ready.length}/${previews.data.total}${previews.data.failed.length ? ` · 못 만든 영상 ${previews.data.failed.length}개` : ""}`
+    : null;
 
-  return <div className="mt-4 space-y-3">
-    <div className="flex flex-wrap items-center justify-end gap-2">
-      {previews.data && previews.data.total > 0 && <span role="status" aria-label="휴대폰용 미리보기" className="mr-auto text-xs text-slate-500">
-        {`휴대폰용 미리보기 ${previews.data.ready.length + previews.data.failed.length >= previews.data.total ? "준비됨" : "만드는 중"} ${previews.data.ready.length}/${previews.data.total}${previews.data.failed.length ? ` · 못 만든 영상 ${previews.data.failed.length}개` : ""}`}
-      </span>}
-      {render.isSuccess && <span role="status" className="text-sm text-sky-700">4K 영상을 만들기 시작했어요. 홈에서 확인해요.</span>}
-      {render.error && <span className="text-sm text-rose-700">{errorText(render.error)}</span>}
-      <Button type="button" variant="secondary" disabled={busy || data.undo_count === 0} onClick={() => undo.mutate()}><Undo2 size={16} />되돌리기{data.undo_count > 0 ? ` (${data.undo_count})` : ""}</Button>
-      <Button type="button" disabled={render.isPending || render.isSuccess} onClick={() => render.mutate()}>{render.isPending ? <LoaderCircle size={16} className="animate-spin" /> : <Clapperboard size={16} />}4K 영상 만들기</Button>
-    </div>
-    <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
-    <section aria-label="편집안 미리보기" className="min-w-0 space-y-3">
+  const showMessage = (item: ChatMessage, index: number) => <div key={item.id ?? index} className={item.role === "user" ? "flex flex-col items-end gap-0.5" : ""}>
+    <Bubble item={item} projectId={projectId} busy={busy} onPick={(choice) => item.id && pick.mutate({ messageId: item.id, choice })} />
+    {item.role === "user" && (ruleTexts.has(plain(item.text))
+      ? <span className="text-[11px] text-sky-700">규칙으로 저장됨</span>
+      : <button type="button" disabled={addRule.isPending} onClick={() => addRule.mutate(item.text)} className="text-[11px] text-slate-500 hover:text-sky-700">규칙으로 저장</button>)}
+  </div>;
+
+  return <div className="pb-4">
+    <header className="sticky top-0 z-30 -mx-4 flex items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur sm:mx-0 sm:mt-3 sm:rounded-2xl sm:border">
+      <Link to={`/projects/${projectId}`} aria-label="홈" className="rounded-full p-2 text-slate-600 hover:bg-slate-100"><ArrowLeft size={20} /></Link>
+      <div className="min-w-0 flex-1 leading-tight">
+        <h1 className="truncate text-[15px] font-bold text-slate-900 sm:text-base">{name}</h1>
+        <p className="text-xs tabular-nums text-slate-500">{clock(total)} · 컷 {cuts.length}개</p>
+      </div>
+      <button type="button" aria-label={data.undo_count > 0 ? `되돌리기 (${data.undo_count})` : "되돌리기"} title="되돌리기" disabled={busy || data.undo_count === 0} onClick={() => undo.mutate()}
+        className="relative rounded-full p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-40">
+        <Undo2 size={20} />{data.undo_count > 0 && <span className="absolute -right-0.5 -top-0.5 min-w-4 rounded-full bg-sky-600 px-1 text-[10px] font-bold leading-4 text-white">{data.undo_count}</span>}
+      </button>
+      <button type="button" aria-label="더 보기" title="더 보기" onClick={() => setMenuOpen(true)} className="relative rounded-full p-2 text-slate-600 hover:bg-slate-100">
+        <MoreHorizontal size={20} />{candidates.length > 0 && <span aria-label="새 규칙 후보" className="absolute right-1 top-1 h-2 w-2 rounded-full bg-sky-600" />}
+      </button>
+      <Button type="button" size="sm" disabled={render.isPending || render.isSuccess} onClick={() => render.mutate()}>{render.isPending ? <LoaderCircle size={16} className="animate-spin" /> : <Clapperboard size={16} />}영상 만들기</Button>
+    </header>
+    {render.isSuccess && <p role="status" className="mt-2 text-sm text-sky-700">4K 영상을 만들기 시작했어요. 홈에서 확인해요.</p>}
+    {render.error && <p className="mt-2 text-sm text-rose-700">{errorText(render.error)}</p>}
+
+    <div className="mt-3 grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+    <section aria-label="편집안 미리보기" className="min-w-0 space-y-2">
       <div className="relative">
         <video ref={video} aria-label="편집안 재생" className="block aspect-video w-full rounded-xl bg-black" controls playsInline preload="metadata"
           onLoadedMetadata={onLoaded} onTimeUpdate={onTime} onPlay={onPlay} onEnded={onEnded}
@@ -244,105 +258,70 @@ function Editor({ projectId, data }: { projectId: string; data: ChatEditView }) 
           onError={() => setPlayError(current && !ready.has(current.source_video_id)
             ? "이 영상의 휴대폰용 미리보기를 아직 만드는 중이에요. 다 되면 바로 틀 수 있어요."
             : "영상을 재생할 수 없어요. 서버 연결을 확인해 주세요.")} />
-        {current && <span className="pointer-events-none absolute right-2 top-2 rounded bg-black/60 px-2 py-0.5 text-xs text-white">컷 {current.number} · {current.source_filename}</span>}
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-2 text-sm tabular-nums text-slate-600">
-        <span aria-label="편집 속 시각">{clock(time)} / {clock(total)} · 컷 {cuts.length}개</span>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <div role="group" aria-label="다시 만들 길이" className="flex flex-wrap gap-1.5">
-            {[0, 5, 8, 12, 20].map((minutes) => <button key={minutes} type="button" aria-pressed={remakeMinutes === minutes} disabled={busy} onClick={() => setRemakeMinutes(minutes)}
-              className={`h-8 rounded-full px-3 text-[13px] ${remakeMinutes === minutes ? "bg-sky-100 font-bold text-sky-800" : "border border-slate-300 bg-white text-slate-600 hover:border-sky-400"}`}>{minutes ? `${minutes}분` : "AI 추천"}</button>)}
-          </div>
-          <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => remake.mutate()} title="지금 편집안은 되돌리기로 다시 가져올 수 있어요">{remake.isPending ? <LoaderCircle size={14} className="animate-spin" /> : <RefreshCw size={14} />}{remake.isPending ? "만드는 중…" : "이 길이로 다시 만들기"}</Button>
-        </div>
+      <div className="flex items-center gap-2 text-xs tabular-nums text-slate-500">
+        <span aria-label="편집 속 시각">{clock(time)} / {clock(total)}</span>
+        <span className="h-1 flex-1 overflow-hidden rounded-full bg-slate-200"><span className="block h-full bg-sky-500" style={{ width: `${total > 0 ? Math.min(100, (time / total) * 100) : 0}%` }} /></span>
+        {marked.size > 0 && <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-sm border border-amber-500 bg-amber-100 align-[-1px]" />방금 고친 컷</span>}
       </div>
+      {!previewDone && previewStatus && <p className="text-xs text-slate-500">{previewStatus}</p>}
       {playError && <Alert>{playError}</Alert>}
-      <CutStrip cuts={cuts} total={total} time={time} playing={playing} changed={marked} onPick={(index) => { video.current?.pause(); goTo(index, 0, false); setStamp(cuts[index].timeline_start); }} />
-      {marked.size > 0 && <p className="text-xs text-slate-500"><i className="mr-1 inline-block h-2.5 w-2.5 rounded-sm border border-amber-500 bg-amber-100 align-[-1px]" />방금 고친 컷</p>}
-      {current && <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
-        <p className="font-semibold text-slate-800">컷 {current.number} · {current.length.toFixed(1)}초 <span className="font-normal text-slate-500">({current.source_filename} {current.start_seconds.toFixed(1)}–{current.end_seconds.toFixed(1)}초)</span></p>
-        <p className="mt-1 text-slate-600">{current.speech}</p>
-        {current.caption && <p className="mt-1 text-xs text-slate-500">화면: {current.caption}</p>}
-      </div>}
-      {data.unused.length > 0 && <details className="rounded-xl border border-slate-200 bg-white p-3 text-sm">
-        <summary className="cursor-pointer text-slate-700">안 쓴 장면 {data.unused.length}개 <span className="text-xs text-slate-500">· "안 쓴 장면 2 넣어 줘"</span></summary>
-        <ol className="mt-2 space-y-1 text-xs text-slate-500">{data.unused.map((scene) => <li key={scene.candidate_id}><b className="text-slate-700">장면 {scene.number}</b> · {scene.source_filename} · {(scene.end_seconds - scene.start_seconds).toFixed(1)}초 · {scene.speech}</li>)}</ol>
-      </details>}
-      <details open={openTaste} className="rounded-xl border border-slate-200 bg-white p-3 text-sm">
-        <summary className="cursor-pointer text-slate-700">내 취향 · 내 편집본과 비교</summary>
-        <div className="mt-3 space-y-4"><TasteBriefCard projectId={projectId} /><MyEditCard projectId={projectId} /></div>
-      </details>
+      <CutStrip projectId={projectId} cuts={cuts} playing={playing} changed={marked} onPick={(index) => { video.current?.pause(); goTo(index, 0, false); setStamp(cuts[index].timeline_start); }} />
     </section>
 
-    <section aria-label="대화창" className="flex min-w-0 flex-col rounded-2xl border border-slate-200 bg-white p-3 lg:max-h-[calc(100vh-7rem)] lg:sticky lg:top-3">
-      <div className="mb-2 flex flex-wrap items-center gap-1.5 border-b border-slate-200 pb-2" aria-label="내 규칙">
-        <span className="text-xs text-slate-500">내 규칙</span>
-        {(rules.data ?? []).map((rule) => <span key={rule.id} className="flex items-center gap-1 rounded-full border border-sky-300 px-2 py-0.5 text-xs text-sky-700">
-          {rule.text}<button type="button" aria-label={`규칙 지우기: ${rule.text}`} disabled={removeRule.isPending} onClick={() => removeRule.mutate(rule.id)}><X size={12} /></button>
-        </span>)}
-        {rules.data?.length === 0 && <span className="text-[11px] text-slate-500">아직 없어요</span>}
-      </div>
-      {candidates.length > 0 && <div className="mb-2 space-y-1.5" aria-label="규칙 후보">
-        {candidates.map((item) => <div key={item.key} className="rounded-lg border border-dashed border-sky-300 bg-sky-50 px-3 py-2 text-sm">
-          <p className="text-[11px] text-sky-700">규칙 후보 · {item.key.startsWith("my_edit") || item.why.includes("내 편집본") ? "내 편집본과 비교해서 찾음" : "내 선택 기록에서 찾음"}</p>
-          <p className="mt-0.5 font-semibold text-slate-800">{item.text}</p>
-          <p className="mt-0.5 text-xs text-slate-500">근거: {item.why}</p>
-          <div className="mt-1.5 flex gap-2">
-            <Button type="button" size="sm" disabled={answer.isPending} onClick={() => answer.mutate({ key: item.key, accept: true })}>규칙으로</Button>
-            <Button type="button" size="sm" variant="secondary" disabled={answer.isPending} onClick={() => answer.mutate({ key: item.key, accept: false })}>아니야</Button>
-          </div>
-        </div>)}
+    <section aria-label="대화창" className="flex min-w-0 flex-col gap-2 lg:sticky lg:top-20 lg:max-h-[calc(100vh-11rem)] lg:rounded-2xl lg:border lg:border-slate-200 lg:bg-white lg:p-3">
+      {current && <div className="rounded-xl bg-slate-50 px-3 py-2 text-sm">
+        <p className="font-semibold text-slate-800">컷 {current.number} · {current.length.toFixed(1)}초 <span className="font-normal text-xs text-slate-500">{current.source_filename} {current.start_seconds.toFixed(1)}–{current.end_seconds.toFixed(1)}초</span></p>
+        <p className="mt-0.5 line-clamp-2 text-slate-600">{current.speech}</p>
       </div>}
-      {(addRule.error || removeRule.error || answer.error) && <div className="mb-2"><Alert>{errorText(addRule.error ?? removeRule.error ?? answer.error)}</Alert></div>}
-      <div ref={list} className="min-h-40 flex-1 space-y-2 overflow-y-auto pr-1" aria-live="polite">
-        {data.messages.length === 0 && <p className="text-sm text-slate-500">영상을 멈추고 고칠 점을 말해 줘요.</p>}
-        {data.messages.map((item, index) => <div key={item.id ?? index} className={item.role === "user" ? "flex flex-col items-end gap-0.5" : ""}>
-          <Bubble item={item} projectId={projectId} busy={busy} onPick={(choice) => item.id && pick.mutate({ messageId: item.id, choice })} />
-          {item.role === "user" && (ruleTexts.has(plain(item.text))
-            ? <span className="text-[11px] text-sky-700">규칙으로 저장됨</span>
-            : <button type="button" disabled={addRule.isPending} onClick={() => addRule.mutate(item.text)} className="text-[11px] text-slate-500 hover:text-sky-700">규칙으로 저장</button>)}
-        </div>)}
+      <div ref={list} className="min-h-0 flex-1 space-y-2 overflow-y-auto" aria-live="polite">
+        {older.length > 0 && <button type="button" aria-expanded={olderOpen} onClick={() => setOlderOpen(!olderOpen)} className="text-xs text-slate-500 hover:text-sky-700">{olderOpen ? "지난 대화 접기" : `지난 대화 ${older.length}개 보기`}</button>}
+        {olderOpen && <div className="space-y-2 opacity-80">{older.map(showMessage)}</div>}
+        {data.messages.length === 0 && <p className="text-sm text-slate-500">아래 장면 그림을 눌러 컷을 고르고, 고칠 점을 말해 줘요.</p>}
+        {recent.map((item, index) => showMessage(item, split + index))}
         {send.isPending && <p className="flex items-center gap-2 text-sm text-slate-500"><LoaderCircle size={14} className="animate-spin" />고치는 중…</p>}
       </div>
-      {(send.error || undo.error || pick.error || remake.error) && <div className="mt-2"><Alert>{errorText(send.error ?? undo.error ?? pick.error ?? remake.error)}</Alert></div>}
-      <form className="mt-3 space-y-2 border-t border-slate-200 pt-3" onSubmit={(event) => { event.preventDefault(); submit(); }}>
-        {current && <div className="flex flex-wrap gap-1.5" aria-label="바로 고치기">
+      {(send.error || undo.error || pick.error || remake.error || addRule.error) && <Alert>{errorText(send.error ?? undo.error ?? pick.error ?? remake.error ?? addRule.error)}</Alert>}
+      <form className="sticky bottom-0 z-20 -mx-4 space-y-2 border-t border-slate-200 bg-white/95 px-4 pb-[max(.75rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur lg:static lg:mx-0 lg:bg-transparent lg:px-0 lg:pb-0" onSubmit={(event) => { event.preventDefault(); submit(); }}>
+        {current && <div className="flex gap-1.5 overflow-x-auto" aria-label="바로 고치기">
           {[["이 컷 짧게", "이 장면 짧게"], ["다른 장면으로", "다른 장면으로"], ["이 컷 빼기", `${current.number}번 빼`]].map(([label, text]) =>
-            <button key={label} type="button" disabled={busy} onClick={() => quick(text)} className="h-8 rounded-full border border-slate-300 bg-white px-3 text-[13px] text-slate-700 hover:border-sky-400 disabled:opacity-50">{label}</button>)}
+            <button key={label} type="button" disabled={busy} onClick={() => quick(text)} className="h-8 shrink-0 rounded-full border border-slate-300 bg-white px-3 text-[13px] text-slate-700 hover:border-sky-400 disabled:opacity-50">{label}</button>)}
         </div>}
-        <div className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-300 bg-white px-2 focus-within:ring-2 focus-within:ring-sky-500">
+        <div className="flex min-w-0 items-center gap-2 rounded-full border border-slate-300 bg-white pl-3 pr-1 focus-within:ring-2 focus-within:ring-sky-500">
           {stamp !== null && <span className="flex shrink-0 items-center gap-1 rounded-full border border-sky-300 px-2 py-0.5 text-xs tabular-nums text-sky-700">[{clock(stamp)}]<button type="button" aria-label="시각 떼기" onClick={() => setStamp(null)}><X size={12} /></button></span>}
           <input id="chat-edit-input" aria-label="고칠 내용" value={message} maxLength={400} disabled={busy} onChange={(event) => setMessage(event.target.value)}
-            placeholder={stamp !== null ? "이 장면을 어떻게 고칠까요?" : "고칠 내용을 말해 줘요 (영상을 멈추면 시각이 붙어요)"}
+            placeholder={stamp !== null ? "이 장면을 어떻게 고칠까요?" : "고칠 점을 말해 줘요"}
             className="min-w-0 flex-1 bg-transparent py-2 text-sm text-slate-800 placeholder:text-slate-500 focus:outline-none" />
+          <button type="submit" aria-label="고치기" disabled={busy || !message.trim()} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-40">
+            {send.isPending ? <LoaderCircle size={16} className="animate-spin" /> : <Send size={16} />}
+          </button>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="submit" size="sm" disabled={busy || !message.trim()}><span className="flex items-center gap-1">{send.isPending ? <LoaderCircle size={14} className="animate-spin" /> : <Send size={14} />}고치기</span></Button>
-          {data.brains.length > 0 && <label className="ml-auto flex items-center gap-1 text-xs text-slate-500">어려운 말 담당
-            <select aria-label="편집 두뇌" value={brain ?? ""} onChange={(event) => setBrain(event.target.value)} className="rounded border border-slate-300 bg-white px-1 py-0.5 text-xs text-slate-700">
-              {data.brains.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
-            </select></label>}
-        </div>
-        <p className="text-[11px] text-slate-500">{data.brains.length === 0 ? "AI가 꺼져 있어 간단한 말만 알아들어요." : "간단한 말은 바로(무료), 나머지는 AI가 읽어요."}
-          {claude && ` · Claude ${claude.calls}번 $${claude.usd.toFixed(4)} (약 ${Math.max(1, Math.round(claude.usd * WON_PER_USD))}원)`}{local && ` · 로컬 AI ${local.calls}번`}</p>
         {data.dropped > 0 && <p className="text-[11px] text-amber-700">분석이 바뀌어 없어진 장면 {data.dropped}개는 다음 고치기 때 편집안에서 빠져요.</p>}
       </form>
     </section>
     </div>
+    {menuOpen && <EditRoomMenu projectId={projectId} data={data} busy={busy} brain={brain} onBrain={setBrain}
+      remakeMinutes={remakeMinutes} onRemakeMinutes={setRemakeMinutes} onRemake={() => remake.mutate()} remaking={remake.isPending}
+      previewStatus={previewStatus} openTaste={openTaste} onClose={() => setMenuOpen(false)} />}
   </div>;
 }
 
-function CutStrip({ cuts, total, time, playing, changed, onPick }: { cuts: ChatCut[]; total: number; time: number; playing: number; changed: Set<string>; onPick: (index: number) => void }) {
-  return <div className="relative py-1" aria-label="컷 띠">
-    <div className="flex gap-[3px]">
-      {cuts.map((cut, index) => <button key={cut.candidate_id} type="button" onClick={() => onPick(index)}
-        title={`컷 ${cut.number} · ${cut.length.toFixed(1)}초 · ${cut.speech}`} aria-label={`컷 ${cut.number}, ${cut.length.toFixed(1)}초${changed.has(cut.candidate_id) ? ", 방금 고침" : ""}`}
-        style={{ flexGrow: Math.max(cut.length, 0.5), flexBasis: 0 }}
-        className={`h-10 min-w-[6px] overflow-hidden rounded-[4px] border text-[10px] tabular-nums ${changed.has(cut.candidate_id) ? "border-amber-500 bg-amber-100 text-amber-800" : "border-sky-200 bg-sky-100 text-sky-800"} ${index === playing ? "outline outline-2 outline-offset-1 outline-sky-600" : ""}`}>
-        {cut.length >= 2 ? cut.number : ""}
-      </button>)}
-    </div>
-    {total > 0 && <span aria-hidden className="pointer-events-none absolute bottom-0 top-0 w-0.5 bg-sky-300" style={{ left: `${Math.min(100, (time / total) * 100)}%` }} />}
+/** TODO 37: the cuts as a row of scene pictures (it scrolls sideways and keeps the cut on screen in view). */
+function CutStrip({ projectId, cuts, playing, changed, onPick }: { projectId: string; cuts: ChatCut[]; playing: number; changed: Set<string>; onPick: (index: number) => void }) {
+  const strip = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const box = strip.current;
+    const item = box?.querySelector<HTMLElement>(`[data-cut-index="${playing}"]`);
+    if (box && item) box.scrollTo?.({ left: item.offsetLeft - box.clientWidth / 2 + item.clientWidth / 2, behavior: "smooth" });
+  }, [playing]);
+  return <div ref={strip} className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0" aria-label="컷 띠">
+    {cuts.map((cut, index) => <button key={cut.candidate_id} type="button" data-cut-index={index} onClick={() => onPick(index)}
+      title={`컷 ${cut.number} · ${cut.length.toFixed(1)}초 · ${cut.speech}`} aria-label={`컷 ${cut.number}, ${cut.length.toFixed(1)}초${changed.has(cut.candidate_id) ? ", 방금 고침" : ""}`}
+      className={`relative w-[84px] shrink-0 overflow-hidden rounded-lg border-2 sm:w-24 ${index === playing ? "border-sky-600" : changed.has(cut.candidate_id) ? "border-amber-500" : "border-transparent"}`}>
+      <img src={thumbUrl(projectId, cut.source_video_id, (cut.start_seconds + cut.end_seconds) / 2)} alt="" loading="lazy" className="block aspect-video w-full bg-slate-200 object-cover" />
+      <span className="absolute left-1 top-1 rounded bg-black/60 px-1 text-[10px] font-bold tabular-nums text-white">{cut.number}</span>
+      <span className="absolute bottom-1 right-1 rounded bg-black/60 px-1 text-[10px] tabular-nums text-white">{cut.length.toFixed(1)}초</span>
+    </button>)}
   </div>;
 }
 
