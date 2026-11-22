@@ -31,6 +31,16 @@ OUTPUT_WIDTH = 1280
 OUTPUT_HEIGHT = 720
 OUTPUT_FPS = 30
 OUTPUT_AUDIO_RATE = 48_000
+# TODO 38: every cut's sound fades out and the next fades in, so cut boundaries do not "click".
+# A fade keeps each clip's length, unlike a crossfade, so subtitle timing stays exact.
+CUT_AUDIO_FADE_SECONDS = 0.12
+
+
+def _cut_audio_fade(length: float) -> str:
+    fade = min(CUT_AUDIO_FADE_SECONDS, max(length, 0.0) / 4)
+    if fade < 0.005:
+        return ""
+    return f",afade=t=in:d={fade:.3f},afade=t=out:st={length - fade:.6f}:d={fade:.3f}"
 
 
 class ProjectRenderError(RuntimeError):
@@ -377,7 +387,8 @@ def _concat_command(
         filters.append(
             f"[{audio_input}]aresample={OUTPUT_AUDIO_RATE},"
             "aformat=sample_fmts=fltp:channel_layouts=stereo,"
-            f"asetpts=PTS-STARTPTS,apad,atrim=duration={audio_length:.6f}[a{index}]"
+            f"asetpts=PTS-STARTPTS,apad,atrim=duration={audio_length:.6f}"
+            f"{_cut_audio_fade(audio_length)}[a{index}]"
         )
     filters.append("".join(f"[v{i}][a{i}]" for i in range(len(clips))) +
                    f"concat=n={len(clips)}:v=1:a=1[v][a]")
