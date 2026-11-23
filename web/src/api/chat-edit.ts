@@ -14,6 +14,8 @@ export interface ChatCut {
   length: number;
   speech: string;
   caption: string | null;
+  /** TODO 40: effect saved for the finished video ("zoom" = 확대, "push" = 천천히 줌). */
+  zoom?: "zoom" | "push" | null;
 }
 
 export interface ChatUnused {

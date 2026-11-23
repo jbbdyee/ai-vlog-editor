@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 
 from backend.app.models import SceneCandidate as StoredSceneCandidate, SourceVideo, Transcript
+from backend.app.services import cut_effects
 from backend.app.services.candidate_generator import SceneCandidate as ClipSceneCandidate
 from backend.app.services.clip_renderer import ClipRenderError, RenderedClip, render_clip
 from backend.app.services.media_probe import MediaInfo, MediaProbeError, probe_media
@@ -212,8 +213,10 @@ def render_project_edit_plan(
                 if subtitle_durations is None:
                     subtitle_error_code = "SUBTITLE_TIMELINE_FAILED"
 
+            # TODO 40: effects saved from the edit-room chat (outputs/projects/<id>/cut_effects.json).
+            effects = cut_effects.for_cuts(root, project_id, [segment.candidate_id for segment in segments])
             commands = _concat_commands(rendered, has_audio, final_path, ffmpeg_executable,
-                                        Path(temporary), audio_durations=timeline_durations)
+                                        Path(temporary), audio_durations=timeline_durations, effects=effects)
             for command in commands:
                 try:
                     result = run_ffmpeg(
@@ -364,7 +367,7 @@ def _assert_plan_current(
 
 def _concat_command(
     clips: list[RenderedClip], has_audio: list[bool], destination: Path, executable: str,
-    audio_durations: list[float] | None = None,
+    audio_durations: list[float] | None = None, effects: list[dict | None] | None = None,
 ) -> list[str]:
     command = [executable, "-v", "error", "-nostdin", "-y"]
     for clip in clips:
@@ -376,14 +379,16 @@ def _concat_command(
             command.extend(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"])
     filters = []
     for index, clip in enumerate(clips):
+        audio_length = audio_durations[index] if audio_durations else clip.duration_seconds
+        effect = cut_effects.video_filter(effects[index] if effects else None, OUTPUT_WIDTH, OUTPUT_HEIGHT,
+                                          OUTPUT_FPS, audio_length)
         filters.append(
             f"[{index}:v:0]fps={OUTPUT_FPS},scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:"
             "force_original_aspect_ratio=decrease,"
             f"pad={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2,"
-            f"setsar=1,format=yuv420p,setpts=PTS-STARTPTS[v{index}]"
+            f"setsar=1{effect},format=yuv420p,setpts=PTS-STARTPTS[v{index}]"
         )
         audio_input = f"{index}:a:0" if has_audio[index] else str(silence_index[index])
-        audio_length = audio_durations[index] if audio_durations else clip.duration_seconds
         filters.append(
             f"[{audio_input}]aresample={OUTPUT_AUDIO_RATE},"
             "aformat=sample_fmts=fltp:channel_layouts=stereo,"
@@ -413,10 +418,11 @@ def _command_chars(command: list[str]) -> int:
 
 def _concat_commands(
     clips: list[RenderedClip], has_audio: list[bool], destination: Path, executable: str, workspace: Path,
-    audio_durations: list[float] | None = None,
+    audio_durations: list[float] | None = None, effects: list[dict | None] | None = None,
 ) -> list[list[str]]:
     """One ffmpeg command as before; for a long plan, groups encoded alike and then copied together unchanged."""
-    single = _concat_command(clips, has_audio, destination, executable, audio_durations=audio_durations)
+    single = _concat_command(clips, has_audio, destination, executable, audio_durations=audio_durations,
+                             effects=effects)
     if _command_chars(single) <= MAX_COMMAND_CHARS:
         return [single]
     commands, parts = [], []
@@ -424,7 +430,8 @@ def _concat_commands(
         last = first + CONCAT_GROUP_SIZE
         part = workspace / f"group-{len(parts):03d}.mp4"
         commands.append(_concat_command(clips[first:last], has_audio[first:last], part, executable,
-                                        audio_durations=audio_durations[first:last] if audio_durations else None))
+                                        audio_durations=audio_durations[first:last] if audio_durations else None,
+                                        effects=effects[first:last] if effects else None))
         parts.append(part)
     listing = workspace / "groups.txt"
     listing.write_text("".join(f"file '{part.name}'\n" for part in parts), encoding="utf-8")

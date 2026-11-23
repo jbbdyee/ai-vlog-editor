@@ -28,7 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.app.models import SourceVideo
-from backend.app.services import speaker_voice, taste_log
+from backend.app.services import cut_effects, speaker_voice, taste_log
 from backend.app.services.day_brief import load_day_brief
 from backend.app.services.edit_brain import Brain, cost_usd, parse_json
 from backend.app.services.llm_edit_interpreter import LLMEditError
@@ -742,6 +742,9 @@ def send_message(session: Session, output_root: Path, project_id: UUID, message:
     chat["messages"].append({"id": user_id, "role": "user", "text": message, "at_seconds": at_seconds, "at": _now()})
 
     found = cut_at(inputs.cuts, at_seconds)
+    zoom = cut_effects.zoom_request(message, found[0] + 1 if found else None)
+    if zoom is not False:
+        return _set_zoom(output_root, project_id, chat, inputs, zoom[0], zoom[1], user_id, message)
     wanted = replace_request(message, found[0] + 1 if found else None)
     if wanted is not False:
         return _offer_choices(output_root, project_id, chat, inputs, wanted, user_id)
@@ -773,6 +776,40 @@ def send_message(session: Session, output_root: Path, project_id: UUID, message:
                              "engine": understood.engine, "changed": [str(value) for value in applied.changed], "at": _now()})
     save_chat(output_root, project_id, chat)
     return SendResult(applied.done, applied.skipped, applied.changed, understood.engine)
+
+
+def _set_zoom(output_root: Path, project_id: UUID, chat: dict, inputs: ChatInputs, number: int | None,
+              zoom: str | None, user_id: str, message: str) -> SendResult:
+    """TODO 40: "이 컷 확대" / "여기 천천히 줌" / "확대 빼" saves an effect for the finished video; the plan stays."""
+    reply: dict = {"id": _new_id(), "reply_to": user_id, "role": "assistant", "engine": "rule", "at": _now()}
+    done: tuple[str, ...] = ()
+    changed: frozenset[UUID] = frozenset()
+    if number is None or not 1 <= number <= len(inputs.cuts):
+        reply.update(text="어느 컷인지 모르겠어. 영상을 멈추거나 컷을 누른 뒤 다시 말해 줘." if number is None
+                     else f"{number}번 컷이 없어. 컷 띠의 번호로 다시 알려 줘.", no_change=True)
+    else:
+        cut = inputs.cuts[number - 1]
+        effects = cut_effects.load_effects(output_root, project_id)
+        before = cut_effects.zoom_of(effects, cut.candidate_id)
+        if before == zoom:
+            reply.update(text=f"바뀐 것 없음. {number}번 컷은 이미 "
+                              f"{cut_effects.ZOOM_LABELS[zoom] + ' 들어가 있어' if zoom else '확대가 없어'}.",
+                         no_change=True)
+        else:
+            snapshot = _snapshot(inputs.cuts, message[:80])
+            snapshot["marks"] = [user_id, reply["id"]]
+            snapshot["effects"] = effects
+            chat["history"].append(snapshot)
+            cut_effects.save_effects(output_root, project_id, cut_effects.set_zoom(effects, cut.candidate_id, zoom))
+            line = (f"{number}번 컷에 {cut_effects.ZOOM_LABELS[zoom]} 넣었어" if zoom
+                    else f"{number}번 컷 {cut_effects.ZOOM_LABELS[before]} 뺐어")
+            done = (line,)
+            changed = frozenset({cut.candidate_id})
+            reply.update(text=line + ". 완성 영상(영상 만들기)에서 보여.", done=list(done), skipped=[],
+                         no_change=False, changed=[str(cut.candidate_id)])
+    chat["messages"].append(reply)
+    save_chat(output_root, project_id, chat)
+    return SendResult(done, (), changed, "rule")
 
 
 def _offer_choices(output_root: Path, project_id: UUID, chat: dict, inputs: ChatInputs, number: int | None,
@@ -876,6 +913,8 @@ def undo(session: Session, output_root: Path, project_id: UUID) -> str:
     if not cuts:
         raise ChatEditError("UNDO_SCENES_GONE", "되돌릴 편집안의 장면이 더 이상 없어요.")
     _save_plan(session, project_id, cuts)
+    if isinstance(previous.get("effects"), dict):  # TODO 40: an effect change is undone like a plan change
+        cut_effects.save_effects(output_root, project_id, previous["effects"])
     marks = set(previous.get("marks") or ())
     taste_log.mark_undone(output_root, marks)  # TODO 28: a taken-back change is not part of my taste
     for item in chat["messages"]:

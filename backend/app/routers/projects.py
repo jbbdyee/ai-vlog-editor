@@ -39,7 +39,7 @@ from backend.app.services.project_reel import (ReelEditRefused, ReelOptions, Ree
                                               edit_reel_draft, unused_shots, job_state, reel_output_dir, render_job_state,
                                               saved_draft, start_reel_draft, start_reel_render, undo_reel_draft)
 from backend.app.services.reel_render import draft_fingerprint, saved_video
-from backend.app.services import edit_brain, edit_rules, face_mosaic, longform_captions, longform_chat, my_edit_compare, reel_text, reference_style, scene_thumbs, source_previews, taste_log
+from backend.app.services import cut_effects, edit_brain, edit_rules, face_mosaic, longform_captions, longform_chat, my_edit_compare, reel_text, reference_style, scene_thumbs, source_previews, taste_log
 from backend.app.services.reel_modes import (AUTO_MODE, DEFAULT_PACE, DEFAULT_SHORT_SECONDS, MODE_BY_KEY, MODES, PACES,
                                              SHORT_LENGTHS)
 from backend.app.services.story_length import (LENGTH_OPTIONS, Moment, accept_minutes, fit_to_length, footage_seconds,
@@ -1075,6 +1075,7 @@ class ChatCutResponse(BaseModel):
     length: float
     speech: str
     caption: str | None = None
+    zoom: str | None = None  # TODO 40: "zoom" | "push", shown on the cut picture
 
 
 class ChatUnusedResponse(BaseModel):
@@ -1166,13 +1167,14 @@ def _chat_view(session: Session, output_root: Path, project_id: UUID,
     inputs = longform_chat.load_inputs(session, output_root, project_id)
     chat = longform_chat.load_chat(output_root, project_id)
     brains = edit_brain.available_brains()
+    effects = cut_effects.load_effects(output_root, project_id)
     cuts = []
     for number, (begin, cut) in enumerate(zip(longform_chat.starts(inputs.cuts), inputs.cuts), start=1):
         scene = inputs.scenes[cut.candidate_id]
         cuts.append(ChatCutResponse(
             number=number, candidate_id=cut.candidate_id, source_video_id=scene.source_video_id,
             source_filename=scene.filename, start_seconds=cut.start, end_seconds=cut.end, timeline_start=begin,
-            length=cut.length, caption=scene.caption,
+            length=cut.length, caption=scene.caption, zoom=cut_effects.zoom_of(effects, cut.candidate_id),
             speech=longform_chat._speech(inputs.lines.get(scene.source_video_id, ()), cut.start, cut.end, 160)))
     unused = [ChatUnusedResponse(
         number=number, candidate_id=scene.candidate_id, source_video_id=scene.source_video_id,
