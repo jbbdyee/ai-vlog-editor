@@ -245,6 +245,39 @@ describe("TODO 26 chat editing screen", () => {
     expect(posts.filter((url) => url.includes("finishing"))).toEqual([]);
   });
 
+  it("TODO 41-2: calls Claude only after the price is confirmed and lists the suggestions", async () => {
+    const posts: string[] = [];
+    const estimate = { model: "claude-sonnet-5-5", cuts: 3, pictures: 9, chunks: 1, input_tokens: 3000, output_tokens: 500,
+      output_tokens_high: 900, usd_low: 0.01, usd_high: 0.02, rules: [], has_brief: false, reference: [], cuts_with_effects: 0 };
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith(`/projects/${project}`)) return Promise.resolve(response({ project_id: project, name: "학원 하루", status: "COMPLETED" }));
+      if (url.endsWith("/finishing") && init?.method === "POST") {
+        posts.push(String(init.body));
+        return Promise.resolve(response({ ...estimate, made_at: "2026-11-23T13:00:00Z", spent_usd: 0.012, spent_model: "claude-sonnet-5-5",
+          titles: ["콧구멍 벌렁 주의"], suggestions: [{ number: 2, candidate_id: ids[1], zoom: "push", why: "놀라는 얼굴",
+            texts: [{ kind: "react", text: "벌렁", at: 1.2 }, { kind: "narr", text: "근데 갑자기", at: 2 }], sounds: [{ name: "띠용", at: 1.2 }] }] }));
+      }
+      if (url.endsWith("/finishing")) return Promise.resolve(response(estimate));
+      return Promise.resolve(response(view(4)));
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[`/projects/${project}/chat-edit`]}><Routes>
+      <Route path="projects/:projectId/chat-edit" element={<ChatEditPage />} />
+    </Routes></MemoryRouter></QueryClientProvider>);
+
+    await userEvent.click(await screen.findByRole("button", { name: "더 보기" }));
+    await userEvent.click(await screen.findByRole("button", { name: "손질 시작" }));
+    expect(posts).toEqual([]);
+    await userEvent.click(screen.getByRole("button", { name: "부르기" }));
+    const list = await screen.findByLabelText("Claude 제안");
+    expect(posts).toEqual([JSON.stringify({ run: true })]);
+    expect(list).toHaveTextContent("제안 1컷 · 든 돈 약 20원($0.012) · 아직 편집에 안 넣었어요");
+    expect(list).toHaveTextContent("2번 컷 · 놀라는 얼굴");
+    expect(list).toHaveTextContent("🔍 천천히 줌 💬 '벌렁' 1.2초 💬 (근데 갑자기) 2.0초 🔊 띠용 1.2초");
+    expect(screen.getByLabelText("훅 제목 후보")).toHaveTextContent("콧구멍 벌렁 주의");
+    expect(screen.getByRole("button", { name: "다시 손질 받기" })).toBeInTheDocument();
+  });
+
   it("TODO 37: keeps only the latest exchange on screen and shows a dot on ⋯ for a rule candidate", async () => {
     const chat = [
       { id: "u1", role: "user", text: "[00:01] 1번 빼", at_seconds: 1, done: [], skipped: [], engine: null, error: null, changed: [], undo: false },

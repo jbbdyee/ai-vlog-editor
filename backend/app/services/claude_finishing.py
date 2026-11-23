@@ -4,14 +4,20 @@ Cutory picks the scenes (free, local); Claude only decorates them: zoom, a react
 sound effect at the funny moment of a cut, plus hook titles. Every cut goes with three pictures (start, middle, end)
 and its speech, next to my rules, my taste brief and the numbers measured from a video I like (TODO 33).
 
-41-1 (this file so far): build what would be sent and estimate the bill. Nothing is called and nothing is saved.
+41-1: build what would be sent and estimate the bill (no call).
+41-2: one paid call, sent in chunks of at most 99 pictures; the answer is saved as suggestions in
+outputs/projects/<id>/claude_finishing.json. The effects file (cut_effects.json) is not touched.
 """
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 from dataclasses import dataclass
-from typing import Sequence
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Callable, Sequence
 from uuid import UUID
 
 from backend.app.services import cut_effects, edit_brain, sound_effects
@@ -161,3 +167,133 @@ def estimate(model: str, header: str, rows: Sequence[CutRow], pictures: int | No
 
 def model_name() -> str:
     return os.environ.get("CUTORY_FINISH_MODEL") or MODEL_DEFAULT
+
+
+# ---- 41-2: one paid call (in chunks of pictures), the answer saved as suggestions ------------------------------------
+
+TITLES_PER_CHUNK = 2
+MAX_TITLES = 6
+WHY_CHARS = 40
+TITLE_CHARS = 30
+ZOOM_CHOICES = ("zoom", "push", "none")
+
+TASK = (
+    "아래 컷들을 보고, 꾸밀 만한 컷만 cuts에 넣어라(n은 컷 번호). 꾸미지 않을 컷은 빼라. "
+    "texts/sounds의 at은 그 컷 시작부터 몇 초인지(0 이상, 컷 길이 이하). 웃음·놀람·말이 끝나는 펀치라인 순간에 맞춰라. "
+    "titles에는 이 컷들에서 찾은 가장 재밌는 순간으로 영상 첫머리에 띄울 훅 제목 후보를 {titles}개까지(한국어 {chars}자 이내)."
+)
+
+
+def schema() -> dict:
+    text = {"type": "object", "additionalProperties": False, "required": ["kind", "text", "at"],
+            "properties": {"kind": {"type": "string", "enum": ["react", "narr"]}, "text": {"type": "string"},
+                           "at": {"type": "number"}}}
+    sound = {"type": "object", "additionalProperties": False, "required": ["name", "at"],
+             "properties": {"name": {"type": "string", "enum": list(sound_effects.NAMES)}, "at": {"type": "number"}}}
+    cut = {"type": "object", "additionalProperties": False, "required": ["n", "zoom", "texts", "sounds", "why"],
+           "properties": {"n": {"type": "integer"}, "zoom": {"type": "string", "enum": list(ZOOM_CHOICES)},
+                          "texts": {"type": "array", "items": text}, "sounds": {"type": "array", "items": sound},
+                          "why": {"type": "string"}}}
+    return {"type": "object", "additionalProperties": False, "required": ["cuts", "titles"],
+            "properties": {"cuts": {"type": "array", "items": cut}, "titles": {"type": "array", "items": {"type": "string"}}}}
+
+
+def _image_block(path: Path) -> dict:
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                        "data": base64.b64encode(Path(path).read_bytes()).decode("ascii")}}
+
+
+def chunk_blocks(header: str, chunk: Sequence[CutRow], pictures: dict[UUID, Sequence[Path]]) -> list[dict]:
+    task = TASK.format(titles=TITLES_PER_CHUNK, chars=TITLE_CHARS)
+    blocks: list[dict] = [{"type": "text", "text": f"{header}\n\n{task}\n\n컷 {chunk[0].number}~{chunk[-1].number}번:"}]
+    for row in chunk:
+        blocks.append({"type": "text", "text": row.line()})
+        blocks.extend(_image_block(path) for path in pictures.get(row.candidate_id, ()))
+    return blocks
+
+
+def _clamp(value: object, top: float) -> float:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    return round(min(max(number, 0.0), top), 1)
+
+
+def read_answer(text: str, chunk: Sequence[CutRow]) -> tuple[list[dict], list[str]]:
+    """Claude's JSON -> suggestions for cuts of this chunk only (cuts I already decorated are skipped), and titles."""
+    data = json.loads(text)
+    by_number = {row.number: row for row in chunk}
+    out: dict[int, dict] = {}
+    for item in data.get("cuts") or []:
+        row = by_number.get(item.get("n")) if isinstance(item, dict) else None
+        if row is None or row.existing or row.number in out:
+            continue
+        top = max(0.0, row.end - row.start)
+        texts = []
+        for entry in item.get("texts") or []:
+            words = cut_effects.clean_words(str(entry.get("text") or "")).strip("()（） ")
+            if entry.get("kind") in cut_effects.TEXT_LABELS and words:
+                texts.append({"kind": entry["kind"], "text": words, "at": _clamp(entry.get("at"), top)})
+        sounds = [{"name": entry["name"], "at": _clamp(entry.get("at"), top)} for entry in item.get("sounds") or []
+                  if entry.get("name") in sound_effects.NAMES]
+        zoom = item.get("zoom") if item.get("zoom") in cut_effects.ZOOM_LABELS else None
+        texts, sounds = texts[: cut_effects.MAX_TEXTS], sounds[: cut_effects.MAX_SOUNDS]
+        if zoom or texts or sounds:
+            out[row.number] = {"number": row.number, "candidate_id": str(row.candidate_id), "zoom": zoom,
+                               "texts": texts, "sounds": sounds, "why": str(item.get("why") or "")[:WHY_CHARS]}
+    titles = [str(title).strip()[:TITLE_CHARS] for title in data.get("titles") or [] if str(title).strip()]
+    return [out[number] for number in sorted(out)], titles[:TITLES_PER_CHUNK]
+
+
+AskBlocks = Callable[[str, list, dict], tuple[str, int, int]]  # (system, content blocks, schema) -> (json, in, out)
+
+
+@dataclass(frozen=True)
+class Finished:
+    suggestions: list[dict]
+    titles: list[str]
+    input_tokens: int
+    output_tokens: int
+    pictures: int
+
+
+def finish(header: str, rows: Sequence[CutRow], pictures: dict[UUID, Sequence[Path]], ask: AskBlocks) -> Finished:
+    suggestions: list[dict] = []
+    titles: list[str] = []
+    used_in = used_out = 0
+    for first in range(0, len(rows), CHUNK_CUTS):
+        chunk = rows[first:first + CHUNK_CUTS]
+        text, input_tokens, output_tokens = ask(SYSTEM, chunk_blocks(header, chunk, pictures), schema())
+        used_in, used_out = used_in + input_tokens, used_out + output_tokens
+        found, named = read_answer(text, chunk)
+        suggestions += found
+        titles += [title for title in named if title not in titles]
+    return Finished(suggestions, titles[:MAX_TITLES], used_in, used_out,
+                    sum(len(pictures.get(row.candidate_id, ())) for row in rows))
+
+
+def suggestions_path(output_root: Path, project_id: UUID) -> Path:
+    """Claude's answer lives here (Git-ignored outputs/), never in cut_effects.json until I put it in (41-3)."""
+    return Path(output_root) / str(project_id) / "claude_finishing.json"
+
+
+def save_result(output_root: Path, project_id: UUID, done: Finished, *, model: str) -> dict:
+    data = {"made_at": datetime.now(timezone.utc).isoformat(), "model": model,
+            "input_tokens": done.input_tokens, "output_tokens": done.output_tokens,
+            "usd": round(edit_brain.cost_usd(model, done.input_tokens, done.output_tokens), 4),
+            "pictures": done.pictures, "suggestions": done.suggestions, "titles": done.titles}
+    path = suggestions_path(output_root, project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    temporary.replace(path)
+    return data
+
+
+def load_result(output_root: Path, project_id: UUID) -> dict | None:
+    try:
+        data = json.loads(suggestions_path(output_root, project_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None

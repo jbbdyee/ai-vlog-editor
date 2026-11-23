@@ -74,7 +74,7 @@ export function EditRoomMenu({ projectId, data, busy, brain, onBrain, remakeMinu
           </div>)}
         </section>}
 
-        <FinishingCard projectId={projectId} cutCount={data.cuts.length} />
+        <FinishingCard projectId={projectId} cuts={data.cuts} />
 
         <section className="space-y-2">
           <h3 className="font-semibold text-slate-800">길이 바꿔 다시 만들기</h3>

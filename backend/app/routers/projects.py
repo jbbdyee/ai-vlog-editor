@@ -1522,34 +1522,130 @@ class FinishingResponse(BaseModel):
     has_brief: bool = False
     reference: list[str] = []  # TODO 33 numbers sent along
     cuts_with_effects: int = 0  # cuts I already decorated (left as they are)
+    # TODO 41-2: the saved answer (None until Claude ran once)
+    made_at: str | None = None
+    spent_usd: float | None = None
+    spent_model: str | None = None
+    suggestions: list[dict] = []
+    titles: list[str] = []
 
 
-def _finishing_sync(factory, output_root: Path, project_id: UUID) -> FinishingResponse:
+class FinishingRequest(BaseModel):
+    run: bool = False  # False: only the estimate (no AI call)
+
+
+FINISH_EFFORT = "medium"  # finding the funny moment needs some thought; "high" roughly doubles the thinking bill
+
+
+def _claude_finish_ask(model: str):
+    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not key:
+        raise HTTPException(status_code=503, detail={"code": "CLAUDE_KEY_MISSING", "message": "Claude 키가 없어 손질할 수 없어요."})
+
+    def ask(system: str, blocks: list, schema: dict) -> tuple[str, int, int]:
+        import anthropic
+        client = anthropic.Anthropic(api_key=key, timeout=600.0, max_retries=1)
+        response = client.messages.create(
+            model=model, max_tokens=16000, system=system, messages=[{"role": "user", "content": blocks}],
+            output_config={"effort": FINISH_EFFORT, "format": {"type": "json_schema", "schema": schema}})
+        if response.stop_reason == "refusal":
+            raise ValueError("refusal")
+        text = next((block.text for block in response.content if block.type == "text"), "")
+        return text, int(response.usage.input_tokens), int(response.usage.output_tokens)
+    return ask
+
+
+def _finishing_inputs_sync(factory, output_root: Path, project_id: UUID, storage=None):
     with factory() as session:
         inputs = longform_chat.load_inputs(session, output_root, project_id)
+        sources: dict[UUID, Path] = {}
+        if storage is not None:
+            for source in session.scalars(select(SourceVideo).where(SourceVideo.project_id == project_id)):
+                preview = source_previews.preview_path(output_root, project_id, source.id)
+                if source_previews.is_ready(preview):  # the light 720p copy: same timing, much faster to seek
+                    sources[source.id] = preview
+                    continue
+                try:
+                    sources[source.id] = storage.resolve(source.storage_reference)
+                except SourceStorageError:
+                    continue
     rows = claude_finishing.cut_rows(inputs, cut_effects.load_effects(output_root, project_id))
     rules = edit_rules.rule_texts(output_root)
     brief = taste_score.load_brief(output_root)
     reference = claude_finishing.reference_lines(reference_style.load_result(output_root))
-    model = claude_finishing.model_name()
-    guess = claude_finishing.estimate(model, claude_finishing.header_text(rules, brief, reference), rows)
-    return FinishingResponse(model=model, cuts=guess.cuts, pictures=guess.pictures, chunks=guess.chunks,
-                             input_tokens=guess.input_tokens, output_tokens=guess.output_tokens,
-                             output_tokens_high=guess.output_tokens_high, usd_low=guess.usd_low, usd_high=guess.usd_high,
-                             rules=rules, has_brief=bool(brief.strip()), reference=reference,
-                             cuts_with_effects=sum(1 for row in rows if row.existing))
+    return rows, sources, rules, brief, reference
+
+
+def _finishing_pictures_sync(output_root: Path, project_id: UUID, rows, sources: dict[UUID, Path]) -> dict[UUID, list[Path]]:
+    from concurrent.futures import ThreadPoolExecutor
+
+    jobs = [(row.candidate_id, row.source_video_id, at) for row in rows if row.source_video_id in sources
+            for at in claude_finishing.picture_times(row)]
+
+    def one(job):
+        candidate_id, source_id, at = job
+        try:
+            return candidate_id, scene_thumbs.scene_thumb(output_root, project_id, source_id, sources[source_id], at,
+                                                          width=claude_finishing.PICTURE_WIDTH)
+        except scene_thumbs.ThumbError:
+            return candidate_id, None
+    pictures: dict[UUID, list[Path]] = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for candidate_id, path in pool.map(one, jobs):
+            if path is not None:
+                pictures.setdefault(candidate_id, []).append(path)
+    return pictures
 
 
 @router.get("/{project_id}/finishing", response_model=FinishingResponse)
 async def get_project_finishing(request: Request, project_id: UUID) -> FinishingResponse:
-    """What Claude finishing would send for this edit plan and what it would cost. Calls nothing."""
+    """What Claude finishing would send and cost, plus the saved suggestions. Calls nothing."""
+    return await _finishing(request, project_id, FinishingRequest())
+
+
+@router.post("/{project_id}/finishing", response_model=FinishingResponse)
+async def post_project_finishing(request: Request, project_id: UUID,
+                                 payload: FinishingRequest | None = None) -> FinishingResponse:
+    """run=true: one paid Claude call that suggests effects per cut (saved apart; the edit is not changed)."""
+    return await _finishing(request, project_id, payload or FinishingRequest())
+
+
+async def _finishing(request: Request, project_id: UUID, payload: FinishingRequest) -> FinishingResponse:
+    output_root = request.app.state.project_render_output_root
     try:
-        return await run_in_threadpool(_finishing_sync, _session_factory(request),
-                                       request.app.state.project_render_output_root, project_id)
+        rows, sources, rules, brief, reference = await run_in_threadpool(
+            _finishing_inputs_sync, _session_factory(request), output_root, project_id,
+            request.app.state.source_storage if payload.run else None)
     except SceneProjectNotFoundError as error:
         raise _project_not_found() from error
     except longform_chat.ChatEditError as error:
         raise _chat_http_error(error) from error
+    if not rows:
+        raise HTTPException(status_code=409, detail={"code": "NO_EDIT_PLAN", "message": "편집안을 먼저 만들어 주세요."})
+    model = claude_finishing.model_name()
+    header = claude_finishing.header_text(rules, brief, reference)
+    if payload.run:
+        try:
+            ask = _claude_finish_ask(model)
+            pictures = await run_in_threadpool(_finishing_pictures_sync, output_root, project_id, rows, sources)
+            done = await run_in_threadpool(claude_finishing.finish, header, rows, pictures, ask)
+        except HTTPException:
+            raise
+        except (ValueError, KeyError, TypeError) as error:
+            raise HTTPException(status_code=502, detail={"code": "FINISH_BAD_REPLY", "message": "Claude 답을 읽지 못했어요."}) from error
+        except Exception as error:  # network / API errors: say so, nothing is saved
+            raise HTTPException(status_code=502, detail={"code": "FINISH_CALL_FAILED", "message": f"Claude 호출이 실패했어요 ({type(error).__name__})."}) from error
+        await run_in_threadpool(claude_finishing.save_result, output_root, project_id, done, model=model)
+    guess = claude_finishing.estimate(model, header, rows)
+    saved = claude_finishing.load_result(output_root, project_id) or {}
+    return FinishingResponse(model=model, cuts=guess.cuts, pictures=guess.pictures, chunks=guess.chunks,
+                             input_tokens=guess.input_tokens, output_tokens=guess.output_tokens,
+                             output_tokens_high=guess.output_tokens_high, usd_low=guess.usd_low, usd_high=guess.usd_high,
+                             rules=rules, has_brief=bool(brief.strip()), reference=reference,
+                             cuts_with_effects=sum(1 for row in rows if row.existing),
+                             made_at=saved.get("made_at"), spent_usd=saved.get("usd"), spent_model=saved.get("model"),
+                             suggestions=[item for item in saved.get("suggestions") or [] if isinstance(item, dict)],
+                             titles=[str(title) for title in saved.get("titles") or []])
 
 
 class ChatPickRequest(BaseModel):

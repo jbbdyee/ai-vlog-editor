@@ -217,11 +217,31 @@ export interface FinishingEstimate {
   has_brief: boolean;
   reference: string[];
   cuts_with_effects: number;
+  /** TODO 41-2: the saved answer (empty until Claude ran once). */
+  made_at?: string | null;
+  spent_usd?: number | null;
+  spent_model?: string | null;
+  suggestions?: FinishingSuggestion[];
+  titles?: string[];
 }
 
-/** The estimate only; no AI call. */
+export interface FinishingSuggestion {
+  number: number;
+  candidate_id: string;
+  zoom: "zoom" | "push" | null;
+  texts: { kind: "react" | "narr"; text: string; at: number }[];
+  sounds: { name: string; at: number }[];
+  why: string;
+}
+
+/** The estimate and the saved suggestions; no AI call. */
 export function getFinishing(id: string): Promise<FinishingEstimate> {
   return request<FinishingEstimate>(`/projects/${id}/finishing`);
+}
+
+/** A paid Claude call: suggestions per cut, saved apart (the edit is not changed). */
+export function runFinishing(id: string): Promise<FinishingEstimate> {
+  return request<FinishingEstimate>(`/projects/${id}/finishing`, { method: "POST", headers: json, body: JSON.stringify({ run: true }) });
 }
 
 /** A paid Claude call: scores every scene 0~3 from my taste and my edit's examples. */

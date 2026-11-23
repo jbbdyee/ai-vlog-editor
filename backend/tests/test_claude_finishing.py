@@ -1,5 +1,9 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 from uuid import uuid4
 
 from backend.app.services import claude_finishing as finishing
@@ -72,6 +76,64 @@ class ClaudeFinishingTest(unittest.TestCase):
         self.assertEqual(guess.output_tokens_high, guess.output_tokens + 76 * 150)
         self.assertAlmostEqual(guess.usd_low, (guess.input_tokens * 2 + guess.output_tokens * 10) / 1e6, places=4)
         self.assertGreater(guess.usd_high, guess.usd_low)
+
+
+class ClaudeFinishingAnswerTest(unittest.TestCase):
+    def _rows(self, count, existing_at=None):
+        return [finishing.CutRow(number, uuid4(), uuid4(), 10.0, 14.0, "[나] 대박", "교실",
+                                 "확대" if number == existing_at else "") for number in range(1, count + 1)]
+
+    def test_read_answer_keeps_valid_effects_only(self):
+        rows = self._rows(3, existing_at=3)
+        answer = {"cuts": [
+            {"n": 1, "zoom": "zoom", "why": "웃는 순간",
+             "texts": [{"kind": "react", "text": "벌렁", "at": 1.234}, {"kind": "narr", "text": "(근데 갑자기)", "at": 9},
+                       {"kind": "react", "text": "  ", "at": 1}],
+             "sounds": [{"name": "쿵", "at": -1}, {"name": "빵", "at": 1}]},
+            {"n": 2, "zoom": "none", "texts": [], "sounds": [], "why": "없음"},  # nothing to add -> dropped
+            {"n": 3, "zoom": "push", "texts": [], "sounds": [], "why": "내가 이미 꾸민 컷"},  # mine -> left alone
+            {"n": 9, "zoom": "zoom", "texts": [], "sounds": [], "why": "없는 컷"}],
+            "titles": ["콧구멍 벌렁 주의", "학원 가는 날", "세 번째"]}
+        suggestions, titles = finishing.read_answer(json.dumps(answer, ensure_ascii=False), rows)
+        self.assertEqual(len(suggestions), 1)
+        first = suggestions[0]
+        self.assertEqual((first["number"], first["candidate_id"], first["zoom"]), (1, str(rows[0].candidate_id), "zoom"))
+        self.assertEqual(first["texts"], [{"kind": "react", "text": "벌렁", "at": 1.2},
+                                          {"kind": "narr", "text": "근데 갑자기", "at": 4.0}])
+        self.assertEqual(first["sounds"], [{"name": "쿵", "at": 0.0}])
+        self.assertEqual(titles, ["콧구멍 벌렁 주의", "학원 가는 날"])
+
+    def test_finish_sends_99_pictures_at_most_and_adds_up_tokens(self):
+        rows = self._rows(40)
+        pictures = {row.candidate_id: [Path(f"p{row.number}_{i}.jpg") for i in range(3)] for row in rows}
+        sent = []
+
+        def ask(system, blocks, schema):
+            sent.append(blocks)
+            numbers = [int(block["text"].split("번")[0]) for block in blocks[1:] if block["type"] == "text"]
+            return json.dumps({"cuts": [{"n": numbers[0], "zoom": "push", "texts": [], "sounds": [], "why": "첫 컷"}],
+                               "titles": ["같은 제목"]}), 1000, 100
+
+        with mock.patch.object(finishing, "_image_block", lambda path: {"type": "image", "path": str(path)}):
+            done = finishing.finish("머리글", rows, pictures, ask)
+        self.assertEqual([sum(1 for block in blocks if block["type"] == "image") for blocks in sent], [99, 21])
+        self.assertTrue(sent[1][0]["text"].startswith("머리글"))
+        self.assertIn("컷 34~40번:", sent[1][0]["text"])
+        self.assertEqual([item["number"] for item in done.suggestions], [1, 34])
+        self.assertEqual(done.titles, ["같은 제목"])
+        self.assertEqual((done.input_tokens, done.output_tokens, done.pictures), (2000, 200, 120))
+
+    def test_schema_lists_every_sound_and_saved_result_reads_back(self):
+        sound_names = finishing.schema()["properties"]["cuts"]["items"]["properties"]["sounds"]["items"]["properties"]["name"]["enum"]
+        self.assertEqual(sound_names, ["쿵", "뿅", "휙", "띵", "띠용", "찰칵"])
+        project = uuid4()
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertIsNone(finishing.load_result(Path(folder), project))
+            done = finishing.Finished([{"number": 1}], ["제목"], 60000, 7000, 228)
+            finishing.save_result(Path(folder), project, done, model="claude-sonnet-5-5")
+            saved = finishing.load_result(Path(folder), project)
+        self.assertEqual(saved["usd"], 0.19)
+        self.assertEqual((saved["suggestions"], saved["titles"], saved["pictures"]), ([{"number": 1}], ["제목"], 228))
 
 
 if __name__ == "__main__":
