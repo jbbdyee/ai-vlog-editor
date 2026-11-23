@@ -23,6 +23,8 @@ import threading
 import time
 from typing import Sequence
 
+from backend.app.services import reference_captions
+
 SUFFIXES = {".mp4", ".mov", ".m4v", ".mkv", ".webm"}
 # Scene analysis uses 10, but on my 8-minute edit 10 found 48 cuts (median 6.7s) while frame matching (TODO 29)
 # found 64 (5.6s); 4~5 gives 64 cuts and 5.56s. Cuts between similar shots of one place score low.
@@ -143,9 +145,15 @@ def measure(path: Path, name: str, *, ffmpeg: str | None = None, ffprobe: str | 
     duration = probe_duration(path, ffprobe)
     lengths = cut_lengths(find_cuts(path, ffmpeg), duration)
     numbers = stats(lengths)
+    # TODO 33-2: subtitles too; if reading them fails the cut rhythm is still shown
+    try:
+        captions = reference_captions.measure(path, duration, ffmpeg=ffmpeg)
+    except reference_captions.CaptionError as error:
+        captions = {"error_code": error.code}
     return {"filename": name, "measured_at": datetime.now(timezone.utc).isoformat(),
             "seconds_taken": round(time.monotonic() - started, 1), "video_duration": round(duration, 2),
-            "stats": numbers, "lengths": lengths, "candidates": rule_candidates(numbers)}
+            "stats": numbers, "lengths": lengths,
+            "candidates": rule_candidates(numbers) + captions.get("candidates", []), "captions": captions}
 
 
 # ---- one job at a time (in memory, like my_edit_compare) ------------------------------------------------------------

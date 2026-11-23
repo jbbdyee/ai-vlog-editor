@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, LoaderCircle, Upload } from "lucide-react";
 import { addEditRule, clock, getEditRules } from "@/api/chat-edit";
 import { ApiError } from "@/api/projects";
-import { getReferenceStyle, uploadReference, type ReferenceResult, type ReferenceStatus } from "@/api/reference-style";
+import { getReferenceStyle, uploadReference, type ReferenceCaptions, type ReferenceResult, type ReferenceStatus } from "@/api/reference-style";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
@@ -15,6 +15,11 @@ const ERROR_LABEL: Record<string, string> = {
 };
 const errorText = (error: unknown) => error instanceof ApiError ? `${error.message}${error.code ? ` (${error.code})` : ""}` : "요청을 완료하지 못했습니다.";
 const percent = (value: number) => `${Math.round(value * 100)}%`;
+const CAPTION_ERROR: Record<string, string> = {
+  OCR_UNAVAILABLE: "이 PC에서는 글자 읽기를 쓸 수 없어 자막은 재지 못했어요.",
+  OCR_FAILED: "자막 글자를 읽지 못했어요.",
+  FRAMES_FAILED: "자막을 볼 화면을 뽑지 못했어요.",
+};
 
 /** TODO 33-1: upload a reels/vlog I like → its cut rhythm → [규칙으로] makes it a rule chip. */
 export function ReferenceStyleCard() {
@@ -42,14 +47,14 @@ export function ReferenceStyleCard() {
       <h2 className="font-semibold text-slate-800">좋아하는 영상 따라 하기</h2>
       {data?.result && <span className="text-xs text-slate-500">{data.result.filename} · {clock(data.result.video_duration)}</span>}
     </div>
-    {!data?.result && !busy && <p className="text-slate-600">좋아하는 릴스·브이로그를 올리면 컷이 바뀌는 리듬을 재서 규칙 후보로 보여 줘요. AI·유료 호출은 없어요.</p>}
+    {!data?.result && !busy && <p className="text-slate-600">좋아하는 릴스·브이로그를 올리면 컷과 자막이 바뀌는 리듬을 재서 규칙 후보로 보여 줘요. AI·유료 호출은 없어요.</p>}
     <input ref={input} type="file" accept="video/*" className="hidden" aria-label="좋아하는 영상 파일"
       onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) upload.mutate(file); }} />
     <Button type="button" size="sm" disabled={busy} onClick={() => input.current?.click()}>
       <span className="flex items-center gap-1"><Upload size={14} />{data?.result ? "다른 영상 올리기" : "좋아하는 영상 올리기"}</span>
     </Button>
     {progress !== null && <p className="flex items-center gap-2 text-slate-600"><LoaderCircle size={14} className="animate-spin" />올리는 중 {Math.round(progress * 100)}%</p>}
-    {running && <p className="flex items-center gap-2 text-slate-600"><LoaderCircle size={14} className="animate-spin" />컷 찾는 중… (8분 4K 영상이면 몇 분 걸려요)</p>}
+    {running && <p className="flex items-center gap-2 text-slate-600"><LoaderCircle size={14} className="animate-spin" />컷과 자막 찾는 중… (8분 4K 영상이면 몇 분 걸려요)</p>}
     {data?.status === "FAILED" && <Alert>{ERROR_LABEL[data.error_code ?? ""] ?? `재지 못했어요 (${data.error_code})`}</Alert>}
     {(upload.error || accept.error || status.error) && <Alert>{errorText(upload.error ?? accept.error ?? status.error)}</Alert>}
     {data?.result && !running && <Rhythm result={data.result} saved={saved} pending={accept.isPending} onAccept={(text) => accept.mutate(text)} />}
@@ -74,6 +79,7 @@ export function Rhythm({ result, saved, pending, onAccept }: { result: Reference
       {result.lengths.map((length, index) => <i key={index} title={`${length.toFixed(1)}초`} className={`min-w-px flex-1 rounded-sm ${length < 2 ? "bg-sky-300" : length > 8 ? "bg-slate-500" : "bg-sky-600"}`}
         style={{ height: `${Math.max(6, (length / longest) * 100)}%` }} />)}
     </div>}
+    {result.captions && <Captions captions={result.captions} />}
     {result.candidates.length > 0 && <div className="space-y-1.5">
       {result.candidates.map((item) => {
         const done = saved.has(item.text);
@@ -84,6 +90,30 @@ export function Rhythm({ result, saved, pending, onAccept }: { result: Reference
         </div>;
       })}
     </div>}
-    <p className="text-[11px] text-slate-500">&lsquo;N초 넘지 않게&rsquo;는 추천을 다시 만들 때 프로그램이 지키고, &lsquo;N초 안팎&rsquo;·&lsquo;짧은 컷 섞기&rsquo;는 AI가 참고해요. 천천히 넘어가는 장면 전환은 컷으로 못 잡을 수 있어요.</p>
+    <p className="text-[11px] text-slate-500">&lsquo;N초 넘지 않게&rsquo;는 추천을 다시 만들 때 프로그램이 지키고, &lsquo;N초 안팎&rsquo;·&lsquo;짧은 컷 섞기&rsquo;는 AI가 참고해요. 천천히 넘어가는 장면 전환은 컷으로 못 잡을 수 있어요. 자막은 윈도우 글자 읽기로 재서 꾸민 글씨는 놓치거나 틀리게 읽을 수 있어요(글자 수는 대략값). 자막 규칙은 아직 영상 만들기에 쓰이지 않아요.</p>
+  </div>;
+}
+
+/** TODO 33-2: how often subtitles change, how long they are, where they sit. */
+export function Captions({ captions }: { captions: ReferenceCaptions }) {
+  if (captions.error_code || !captions.stats) {
+    return <p className="text-xs text-slate-500">{CAPTION_ERROR[captions.error_code ?? ""] ?? "자막은 재지 못했어요."}</p>;
+  }
+  const s = captions.stats;
+  if (s.caption_count === 0) return <p className="text-xs text-slate-500">자막을 찾지 못했어요.</p>;
+  const zones = (["위", "가운데", "아래"] as const).map((name) => ({ name, share: s.zone_share[name] ?? 0 }));
+  return <div className="space-y-2" aria-label="자막">
+    <h3 className="text-xs font-semibold text-slate-600">자막</h3>
+    <div className="grid grid-cols-2 gap-2">
+      <Number_ label="자막 수" value={`${s.caption_count}개`} />
+      <Number_ label="바뀌는 간격 (가운데 값)" value={`${s.median_gap.toFixed(1)}초`} />
+      <Number_ label="한 번에 글자 수 (대략)" value={`${s.median_chars}자`} />
+      <Number_ label="자막이 나오는 시간" value={percent(s.on_screen_share)} />
+    </div>
+    <div aria-label="자막 위치" className="flex h-6 overflow-hidden rounded bg-white text-[11px]">
+      {zones.filter((zone) => zone.share > 0).map((zone) => <span key={zone.name}
+        className={`flex items-center justify-center truncate text-white ${zone.name === "가운데" ? "bg-sky-600" : zone.name === "위" ? "bg-sky-300" : "bg-slate-500"}`}
+        style={{ width: `${zone.share * 100}%` }}>{zone.name} {percent(zone.share)}</span>)}
+    </div>
   </div>;
 }

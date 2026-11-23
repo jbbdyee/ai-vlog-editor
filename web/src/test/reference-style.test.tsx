@@ -14,7 +14,13 @@ const result: ReferenceResult = {
   candidates: [
     { key: "max_cut", text: "한 컷은 4초 넘지 않게", why: "컷 10개 중 9개가 3.7초 이하" },
     { key: "median_cut", text: "한 컷은 2초 안팎", why: "한 컷 가운데 값 2.2초" },
+    { key: "caption_interval", text: "자막은 1초쯤마다 바꾸기", why: "자막이 바뀌는 간격 가운데 값 1.0초" },
   ],
+  captions: {
+    step: 0.5,
+    stats: { caption_count: 34, change_count: 30, median_gap: 1.0, median_chars: 5.5, on_screen_share: 0.749,
+      zone_share: { 위: 0.147, 가운데: 0.735, 아래: 0.118 } },
+  },
 };
 
 function show(rules: { id: string; text: string }[]) {
@@ -40,7 +46,10 @@ describe("TODO 33-1 follow a video I like", () => {
     expect(await screen.findByText("2.2초")).toBeInTheDocument();
     expect(screen.getByText("44%")).toBeInTheDocument();
     expect(screen.getByText("내 규칙에 있음")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "규칙으로" }));
+    expect(screen.getByText("34개")).toBeInTheDocument();
+    expect(screen.getByText("5.5자")).toBeInTheDocument();
+    expect(screen.getByText("가운데 74%")).toBeInTheDocument();
+    await userEvent.click(screen.getAllByRole("button", { name: "규칙으로" })[0]);
     const post = fetch.mock.calls.find(([, init]) => init?.method === "POST");
     expect(JSON.parse(String(post?.[1]?.body))).toEqual({ text: "한 컷은 4초 넘지 않게" });
     expect(await screen.findAllByText("내 규칙에 있음")).toHaveLength(2);

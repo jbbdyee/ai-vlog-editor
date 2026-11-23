@@ -14,6 +14,22 @@ export interface ReferenceStats {
 
 export interface ReferenceCandidate { key: string; text: string; why: string }
 
+/** TODO 33-2: subtitles read with Windows' built-in OCR (character count is approximate). */
+export interface CaptionStats {
+  caption_count: number;
+  change_count: number;
+  median_gap: number;
+  median_chars: number;
+  on_screen_share: number;
+  zone_share: Record<"위" | "가운데" | "아래", number>;
+}
+
+export interface ReferenceCaptions {
+  step?: number;
+  stats?: CaptionStats;
+  error_code?: string;
+}
+
 export interface ReferenceResult {
   filename: string;
   measured_at: string;
@@ -22,6 +38,7 @@ export interface ReferenceResult {
   stats: ReferenceStats;
   lengths: number[];
   candidates: ReferenceCandidate[];
+  captions?: ReferenceCaptions;
 }
 
 export interface ReferenceStatus {
