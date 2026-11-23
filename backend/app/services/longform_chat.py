@@ -28,7 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.app.models import SourceVideo
-from backend.app.services import cut_effects, speaker_voice, taste_log
+from backend.app.services import cut_effects, sound_effects, speaker_voice, taste_log
 from backend.app.services.day_brief import load_day_brief
 from backend.app.services.edit_brain import Brain, cost_usd, parse_json
 from backend.app.services.llm_edit_interpreter import LLMEditError
@@ -742,6 +742,9 @@ def send_message(session: Session, output_root: Path, project_id: UUID, message:
     chat["messages"].append({"id": user_id, "role": "user", "text": message, "at_seconds": at_seconds, "at": _now()})
 
     found = cut_at(inputs.cuts, at_seconds)
+    sound = cut_effects.sound_request(message, found[0] + 1 if found else None, found[1] if found else None)
+    if sound is not False:  # before words: "여기 효과음 '쿵' 넣어" is a sound, not a reaction word
+        return _set_sound(output_root, project_id, chat, inputs, sound, user_id, message)
     words = cut_effects.text_request(message, found[0] + 1 if found else None, found[1] if found else None)
     if words is not False:  # before zoom: "여기 '확대' 띄워" is a word, not a zoom
         return _set_text(output_root, project_id, chat, inputs, words, user_id, message)
@@ -845,6 +848,30 @@ def _set_text(output_root: Path, project_id: UUID, chat: dict, inputs: ChatInput
         label = cut_effects.TEXT_LABELS[request.kind or "react"]
         return (cut_effects.set_texts(effects, cut.candidate_id, [*kept, item]),
                 f"{number}번 컷 {at:.1f}초에 {label} {cut_effects.text_label(item)} 넣었어")
+    return _change_effect(output_root, project_id, chat, inputs, request.number, user_id, message, change)
+
+
+def _set_sound(output_root: Path, project_id: UUID, chat: dict, inputs: ChatInputs,
+               request: cut_effects.SoundRequest, user_id: str, message: str) -> SendResult:
+    """TODO 40-3: "여기 효과음 쿵" at the paused second / "효과음 빼"."""
+    names = "·".join(sound_effects.NAMES)
+
+    def change(effects: dict, number: int, cut: Cut):
+        sounds = cut_effects.sounds_of(effects, cut.candidate_id)
+        if not request.add:
+            kept = [item for item in sounds if request.name and item["name"] != request.name]
+            if len(kept) == len(sounds):
+                return f"{number}번 컷에는 {'효과음 ' + request.name if request.name else '효과음'}이 없어."
+            gone = ", ".join(item["name"] for item in sounds if item not in kept)
+            return cut_effects.set_sounds(effects, cut.candidate_id, kept), f"{number}번 컷 효과음 {gone} 뺐어"
+        if request.name is None:
+            return f"어떤 소리를 넣을까? {names} 중에서 골라 줘. 예: 여기 효과음 쿵"
+        at = round(min(request.at, cut.length), 1)
+        if any(old["name"] == request.name and abs(old["at"] - at) < 0.05 for old in sounds):
+            return f"{number}번 컷 {at:.1f}초에 이미 효과음 {request.name}이 있어."
+        item = {"name": request.name, "at": at}
+        return (cut_effects.set_sounds(effects, cut.candidate_id, [*sounds, item]),
+                f"{number}번 컷 {at:.1f}초에 효과음 {request.name} 넣었어")
     return _change_effect(output_root, project_id, chat, inputs, request.number, user_id, message, change)
 
 

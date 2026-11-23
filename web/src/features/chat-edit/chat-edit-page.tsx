@@ -316,13 +316,14 @@ function CutStrip({ projectId, cuts, playing, changed, onPick }: { projectId: st
   }, [playing]);
   return <div ref={strip} className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0" aria-label="컷 띠">
     {cuts.map((cut, index) => <button key={cut.candidate_id} type="button" data-cut-index={index} onClick={() => onPick(index)}
-      title={`컷 ${cut.number} · ${cut.length.toFixed(1)}초 · ${cut.speech}`} aria-label={`컷 ${cut.number}, ${cut.length.toFixed(1)}초${cut.zoom ? (cut.zoom === "push" ? ", 천천히 줌" : ", 확대") : ""}${cut.texts?.length ? `, 글자 ${cut.texts.join(" ")}` : ""}${changed.has(cut.candidate_id) ? ", 방금 고침" : ""}`}
+      title={`컷 ${cut.number} · ${cut.length.toFixed(1)}초 · ${cut.speech}`} aria-label={`컷 ${cut.number}, ${cut.length.toFixed(1)}초${cut.zoom ? (cut.zoom === "push" ? ", 천천히 줌" : ", 확대") : ""}${cut.texts?.length ? `, 글자 ${cut.texts.join(" ")}` : ""}${cut.sounds?.length ? `, 효과음 ${cut.sounds.join(" ")}` : ""}${changed.has(cut.candidate_id) ? ", 방금 고침" : ""}`}
       className={`relative w-[84px] shrink-0 overflow-hidden rounded-lg border-2 sm:w-24 ${index === playing ? "border-sky-600" : changed.has(cut.candidate_id) ? "border-amber-500" : "border-transparent"}`}>
       <img src={thumbUrl(projectId, cut.source_video_id, (cut.start_seconds + cut.end_seconds) / 2)} alt="" loading="lazy" className="block aspect-video w-full bg-slate-200 object-cover" />
       <span className="absolute left-1 top-1 rounded bg-black/60 px-1 text-[10px] font-bold tabular-nums text-white">{cut.number}</span>
       <span className="absolute bottom-1 right-1 rounded bg-black/60 px-1 text-[10px] tabular-nums text-white">{cut.length.toFixed(1)}초</span>
       {cut.zoom && <span className="absolute right-1 top-1 rounded bg-sky-600/90 px-1 text-[10px] font-bold text-white" title="완성 영상에 들어가는 효과">🔍 {cut.zoom === "push" ? "줌" : "확대"}</span>}
       {cut.texts && cut.texts.length > 0 && <span className="absolute bottom-1 left-1 max-w-[60%] truncate rounded bg-amber-400/95 px-1 text-[10px] font-bold text-slate-900" title={`완성 영상에 들어가는 글자: ${cut.texts.join(" · ")}`}>💬 {cut.texts[0]}{cut.texts.length > 1 ? ` +${cut.texts.length - 1}` : ""}</span>}
+      {cut.sounds && cut.sounds.length > 0 && <span className="absolute left-6 top-1 max-w-[45%] truncate rounded bg-violet-600/90 px-1 text-[10px] font-bold text-white" title={`완성 영상에 들어가는 효과음: ${cut.sounds.join(" · ")}`}>🔊 {cut.sounds[0]}{cut.sounds.length > 1 ? ` +${cut.sounds.length - 1}` : ""}</span>}
     </button>)}
   </div>;
 }

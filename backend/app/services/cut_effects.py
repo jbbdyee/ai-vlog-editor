@@ -9,6 +9,8 @@ The edit-room chat reads effect sentences by rules (no AI), and the project rend
 40-2: words on the picture. ``react`` = a big yellow reaction word ("벌렁") that pops out for 1.2 s at the upper right,
 ``narr`` = a bracketed narration "(근데 갑자기)" low in the middle until the cut ends. Each keeps ``at``, the second
 inside the cut where the video was paused ("여기"), and is burned in after the cuts are joined.
+40-3: ``sounds`` = "여기 효과음 쿵" (쿵·뿅·휙·띵·띠용·찰칵, made by code in sound_effects), also with ``at``,
+mixed in after the words, 8 dB under the speech.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from tempfile import TemporaryDirectory
 from typing import Callable, Literal, Mapping, Sequence
 from uuid import UUID
 
-from backend.app.services import reel_text
+from backend.app.services import reel_text, sound_effects
 
 Zoom = Literal["zoom", "push"]
 ZOOMS: tuple[str, ...] = ("zoom", "push")
@@ -45,6 +47,7 @@ REACT_X, REACT_Y = 0.76, 0.26  # centre of the reaction word, share of the frame
 # The narration's bottom edge, as a share of the height from the bottom. Spoken-line captions sit lower: the
 # long-form captions (longform_captions, two lines) reach about 0.18 and the SRT burn-in (hard_subtitles) about 0.2.
 NARR_BOTTOM = 0.24
+MAX_SOUNDS = 4  # per cut
 
 
 # --- file ------------------------------------------------------------------------------------------------------------
@@ -73,6 +76,10 @@ def load_effects(output_root: Path, project_id: UUID) -> dict[str, dict]:
         texts = [item for item in (_clean_text_item(item) for item in items) if item][:MAX_TEXTS]
         if texts:
             entry["texts"] = texts
+        items = value.get("sounds") if isinstance(value.get("sounds"), list) else []
+        sounds = [item for item in (_clean_sound_item(item) for item in items) if item][:MAX_SOUNDS]
+        if sounds:
+            entry["sounds"] = sounds
         if entry:
             out[str(key)] = entry
     return out
@@ -87,6 +94,16 @@ def _clean_text_item(item: object) -> dict | None:
     except (TypeError, ValueError):
         return None
     return {"kind": item["kind"], "text": text, "at": round(at, 3)} if text else None
+
+
+def _clean_sound_item(item: object) -> dict | None:
+    if not isinstance(item, dict) or item.get("name") not in sound_effects.NAMES:
+        return None
+    try:
+        at = max(0.0, float(item.get("at") or 0.0))
+    except (TypeError, ValueError):
+        return None
+    return {"name": item["name"], "at": round(at, 3)}
 
 
 def clean_words(text: str) -> str:
@@ -126,6 +143,22 @@ def set_texts(effects: Mapping[str, dict], candidate_id: UUID, texts: Sequence[d
         entry["texts"] = [dict(item) for item in texts][-MAX_TEXTS:]
     else:
         entry.pop("texts", None)
+    if not entry:
+        out.pop(str(candidate_id))
+    return out
+
+
+def sounds_of(effects: Mapping[str, dict], candidate_id: UUID) -> list[dict]:
+    return list((effects.get(str(candidate_id)) or {}).get("sounds") or ())
+
+
+def set_sounds(effects: Mapping[str, dict], candidate_id: UUID, sounds: Sequence[dict]) -> dict[str, dict]:
+    out = {key: dict(value) for key, value in effects.items()}
+    entry = out.setdefault(str(candidate_id), {})
+    if sounds:
+        entry["sounds"] = [dict(item) for item in sounds][-MAX_SOUNDS:]
+    else:
+        entry.pop("sounds", None)
     if not entry:
         out.pop(str(candidate_id))
     return out
@@ -199,6 +232,35 @@ def text_request(message: str, here: int | None, offset: float | None) -> TextRe
     return False
 
 
+_SOUND_WORD = re.compile(r"효과음|효과\s*소리|사운드|sfx|소리", re.IGNORECASE)
+_SOUND_NAMES = sorted(sound_effects.NAMES, key=len, reverse=True)
+
+
+@dataclass(frozen=True)
+class SoundRequest:
+    number: int | None  # 1-based cut
+    at: float  # seconds inside the cut
+    name: str | None  # None with add=True = which sound is unclear; None with add=False = remove every sound
+    add: bool
+
+
+def sound_request(message: str, here: int | None, offset: float | None) -> SoundRequest | Literal[False]:
+    """"여기 효과음 쿵" -> add 쿵 at the paused second, "3번 효과음 띵" -> at the cut start, "효과음 빼" -> remove all,
+    "효과음 쿵 빼" -> remove 쿵. False when the sentence is not about a sound effect."""
+    text = _STAMP.sub("", message).strip()
+    if not _SOUND_WORD.search(text):
+        return False
+    name = next((item for item in _SOUND_NAMES if item in text), None)
+    if name is None and not re.search(r"효과음|효과\s*소리|sfx", text, re.IGNORECASE):
+        return False  # "소리 줄여" is about the speech, not an effect
+    number = re.search(r"(\d+)\s*번", text)
+    target = int(number.group(1)) if number else here
+    if _OFF_WORD.search(text):
+        return SoundRequest(target, 0.0, name, False)
+    at = offset if (offset is not None and target == here) else 0.0
+    return SoundRequest(target, round(at, 3), name, True)
+
+
 # --- render filter ---------------------------------------------------------------------------------------------------
 
 def _even(value: float) -> int:
@@ -251,6 +313,21 @@ def text_events(effects: Sequence[Mapping | None], cut_lengths: Sequence[float])
             if end - start >= 0.2:
                 events.append(TextEvent(item["kind"], round(begin + start, 3), round(begin + end, 3),
                                         text_label(item)))
+        begin += length
+    return events
+
+
+def has_sounds(effects: Sequence[Mapping | None] | None) -> bool:
+    return any((effect or {}).get("sounds") for effect in effects or ())
+
+
+def sound_events(effects: Sequence[Mapping | None], cut_lengths: Sequence[float]) -> list[sound_effects.SoundEvent]:
+    """Each cut's sounds on the finished video: cut start + the paused second (a sound may ring into the next cut)."""
+    events, begin = [], 0.0
+    for effect, length in zip(effects, cut_lengths):
+        for item in (effect or {}).get("sounds") or ():
+            at = min(float(item.get("at") or 0.0), max(0.0, length - 0.05))
+            events.append(sound_effects.SoundEvent(item["name"], round(begin + at, 3)))
         begin += length
     return events
 

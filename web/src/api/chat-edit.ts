@@ -18,6 +18,8 @@ export interface ChatCut {
   zoom?: "zoom" | "push" | null;
   /** TODO 40-2: words on the cut in the finished video ("벌렁", "(근데 갑자기)"). */
   texts?: string[];
+  /** TODO 40-3: sound effects on the cut in the finished video ("쿵", "띵"). */
+  sounds?: string[];
 }
 
 export interface ChatUnused {

@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 
 from backend.app.models import SceneCandidate as StoredSceneCandidate, SourceVideo, Transcript
-from backend.app.services import cut_effects
+from backend.app.services import cut_effects, sound_effects
 from backend.app.services.candidate_generator import SceneCandidate as ClipSceneCandidate
 from backend.app.services.clip_renderer import ClipRenderError, RenderedClip, render_clip
 from backend.app.services.media_probe import MediaInfo, MediaProbeError, probe_media
@@ -235,6 +235,14 @@ def render_project_edit_plan(
                                            OUTPUT_HEIGHT, ffmpeg_executable, run=run_ffmpeg)
                 except cut_effects.TextBurnError as error:
                     raise ProjectRenderError("EFFECT_TEXT_FAILED", "Words on the cuts could not be added.") from error
+            if cut_effects.has_sounds(effects) and final_path.is_file():
+                # TODO 40-3: sound effects made by code, 8 dB under the speech (cut-edge fades stay as they are).
+                lengths = timeline_durations or [clip.duration_seconds for clip in rendered]
+                try:
+                    sound_effects.mix_sounds(final_path, cut_effects.sound_events(effects, lengths),
+                                             ffmpeg_executable, run=run_ffmpeg)
+                except sound_effects.SoundMixError as error:
+                    raise ProjectRenderError("EFFECT_SOUND_FAILED", "Sound effects could not be added.") from error
             if not final_path.is_file() or final_path.stat().st_size == 0:
                 raise ProjectRenderError("OUTPUT_MISSING", "Final MP4 was not created.")
             try:
