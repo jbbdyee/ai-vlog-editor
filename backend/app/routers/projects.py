@@ -1076,6 +1076,7 @@ class ChatCutResponse(BaseModel):
     speech: str
     caption: str | None = None
     zoom: str | None = None  # TODO 40: "zoom" | "push", shown on the cut picture
+    texts: list[str] = []  # TODO 40-2: words on the cut, e.g. ["벌렁", "(근데 갑자기)"]
 
 
 class ChatUnusedResponse(BaseModel):
@@ -1175,6 +1176,7 @@ def _chat_view(session: Session, output_root: Path, project_id: UUID,
             number=number, candidate_id=cut.candidate_id, source_video_id=scene.source_video_id,
             source_filename=scene.filename, start_seconds=cut.start, end_seconds=cut.end, timeline_start=begin,
             length=cut.length, caption=scene.caption, zoom=cut_effects.zoom_of(effects, cut.candidate_id),
+            texts=[cut_effects.text_label(item) for item in cut_effects.texts_of(effects, cut.candidate_id)],
             speech=longform_chat._speech(inputs.lines.get(scene.source_video_id, ()), cut.start, cut.end, 160)))
     unused = [ChatUnusedResponse(
         number=number, candidate_id=scene.candidate_id, source_video_id=scene.source_video_id,

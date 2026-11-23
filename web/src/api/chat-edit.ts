@@ -16,6 +16,8 @@ export interface ChatCut {
   caption: string | null;
   /** TODO 40: effect saved for the finished video ("zoom" = 확대, "push" = 천천히 줌). */
   zoom?: "zoom" | "push" | null;
+  /** TODO 40-2: words on the cut in the finished video ("벌렁", "(근데 갑자기)"). */
+  texts?: string[];
 }
 
 export interface ChatUnused {

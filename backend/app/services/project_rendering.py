@@ -227,6 +227,14 @@ def render_project_edit_plan(
                     raise ProjectRenderError("CONCAT_START_FAILED", "Could not start video concatenation.") from error
                 if result.returncode != 0:
                     raise ProjectRenderError("CONCAT_FAILED", "Video concatenation failed.")
+            if cut_effects.has_texts(effects) and final_path.is_file():
+                # TODO 40-2: reaction words and bracketed narration, timed by each cut's measured length.
+                lengths = timeline_durations or [clip.duration_seconds for clip in rendered]
+                try:
+                    cut_effects.burn_texts(final_path, cut_effects.text_events(effects, lengths), OUTPUT_WIDTH,
+                                           OUTPUT_HEIGHT, ffmpeg_executable, run=run_ffmpeg)
+                except cut_effects.TextBurnError as error:
+                    raise ProjectRenderError("EFFECT_TEXT_FAILED", "Words on the cuts could not be added.") from error
             if not final_path.is_file() or final_path.stat().st_size == 0:
                 raise ProjectRenderError("OUTPUT_MISSING", "Final MP4 was not created.")
             try:

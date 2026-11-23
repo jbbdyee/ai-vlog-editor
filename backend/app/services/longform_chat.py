@@ -742,6 +742,9 @@ def send_message(session: Session, output_root: Path, project_id: UUID, message:
     chat["messages"].append({"id": user_id, "role": "user", "text": message, "at_seconds": at_seconds, "at": _now()})
 
     found = cut_at(inputs.cuts, at_seconds)
+    words = cut_effects.text_request(message, found[0] + 1 if found else None, found[1] if found else None)
+    if words is not False:  # before zoom: "여기 '확대' 띄워" is a word, not a zoom
+        return _set_text(output_root, project_id, chat, inputs, words, user_id, message)
     zoom = cut_effects.zoom_request(message, found[0] + 1 if found else None)
     if zoom is not False:
         return _set_zoom(output_root, project_id, chat, inputs, zoom[0], zoom[1], user_id, message)
@@ -778,9 +781,10 @@ def send_message(session: Session, output_root: Path, project_id: UUID, message:
     return SendResult(applied.done, applied.skipped, applied.changed, understood.engine)
 
 
-def _set_zoom(output_root: Path, project_id: UUID, chat: dict, inputs: ChatInputs, number: int | None,
-              zoom: str | None, user_id: str, message: str) -> SendResult:
-    """TODO 40: "이 컷 확대" / "여기 천천히 줌" / "확대 빼" saves an effect for the finished video; the plan stays."""
+def _change_effect(output_root: Path, project_id: UUID, chat: dict, inputs: ChatInputs, number: int | None,
+                   user_id: str, message: str, change) -> SendResult:
+    """TODO 40: an effect for the finished video is saved per cut; the plan stays and undo brings the old effects.
+    ``change(effects, number, cut)`` gives (new effects, done line), or the reason text when nothing changes."""
     reply: dict = {"id": _new_id(), "reply_to": user_id, "role": "assistant", "engine": "rule", "at": _now()}
     done: tuple[str, ...] = ()
     changed: frozenset[UUID] = frozenset()
@@ -790,26 +794,58 @@ def _set_zoom(output_root: Path, project_id: UUID, chat: dict, inputs: ChatInput
     else:
         cut = inputs.cuts[number - 1]
         effects = cut_effects.load_effects(output_root, project_id)
-        before = cut_effects.zoom_of(effects, cut.candidate_id)
-        if before == zoom:
-            reply.update(text=f"바뀐 것 없음. {number}번 컷은 이미 "
-                              f"{cut_effects.ZOOM_LABELS[zoom] + ' 들어가 있어' if zoom else '확대가 없어'}.",
-                         no_change=True)
+        outcome = change(effects, number, cut)
+        if isinstance(outcome, str):
+            reply.update(text=f"바뀐 것 없음. {outcome}", no_change=True)
         else:
             snapshot = _snapshot(inputs.cuts, message[:80])
             snapshot["marks"] = [user_id, reply["id"]]
             snapshot["effects"] = effects
             chat["history"].append(snapshot)
-            cut_effects.save_effects(output_root, project_id, cut_effects.set_zoom(effects, cut.candidate_id, zoom))
-            line = (f"{number}번 컷에 {cut_effects.ZOOM_LABELS[zoom]} 넣었어" if zoom
-                    else f"{number}번 컷 {cut_effects.ZOOM_LABELS[before]} 뺐어")
-            done = (line,)
+            cut_effects.save_effects(output_root, project_id, outcome[0])
+            done = (outcome[1],)
             changed = frozenset({cut.candidate_id})
-            reply.update(text=line + ". 완성 영상(영상 만들기)에서 보여.", done=list(done), skipped=[],
+            reply.update(text=outcome[1] + ". 완성 영상(영상 만들기)에서 보여.", done=list(done), skipped=[],
                          no_change=False, changed=[str(cut.candidate_id)])
     chat["messages"].append(reply)
     save_chat(output_root, project_id, chat)
     return SendResult(done, (), changed, "rule")
+
+
+def _set_zoom(output_root: Path, project_id: UUID, chat: dict, inputs: ChatInputs, number: int | None,
+              zoom: str | None, user_id: str, message: str) -> SendResult:
+    """TODO 40-1: "이 컷 확대" / "여기 천천히 줌" / "확대 빼"."""
+    def change(effects: dict, number: int, cut: Cut):
+        before = cut_effects.zoom_of(effects, cut.candidate_id)
+        if before == zoom:
+            return (f"{number}번 컷은 이미 "
+                    f"{cut_effects.ZOOM_LABELS[zoom] + ' 들어가 있어' if zoom else '확대가 없어'}.")
+        return (cut_effects.set_zoom(effects, cut.candidate_id, zoom),
+                f"{number}번 컷에 {cut_effects.ZOOM_LABELS[zoom]} 넣었어" if zoom
+                else f"{number}번 컷 {cut_effects.ZOOM_LABELS[before]} 뺐어")
+    return _change_effect(output_root, project_id, chat, inputs, number, user_id, message, change)
+
+
+def _set_text(output_root: Path, project_id: UUID, chat: dict, inputs: ChatInputs,
+              request: cut_effects.TextRequest, user_id: str, message: str) -> SendResult:
+    """TODO 40-2: "여기 '벌렁' 띄워" / "여기 (근데 갑자기) 넣어" at the paused second / "글자 빼"."""
+    def change(effects: dict, number: int, cut: Cut):
+        texts = cut_effects.texts_of(effects, cut.candidate_id)
+        if request.words is None:
+            kept = [item for item in texts if request.kind and item["kind"] != request.kind]
+            if len(kept) == len(texts):
+                return f"{number}번 컷에는 {cut_effects.TEXT_LABELS.get(request.kind or '', '글자')}가 없어."
+            gone = ", ".join(cut_effects.text_label(item) for item in texts if item not in kept)
+            return cut_effects.set_texts(effects, cut.candidate_id, kept), f"{number}번 컷 글자 {gone} 뺐어"
+        at = round(min(request.at, cut.length), 1)
+        item = {"kind": request.kind, "text": request.words, "at": at}
+        if any(old["kind"] == item["kind"] and old["text"] == item["text"] for old in texts):
+            return f"{number}번 컷에 이미 {cut_effects.text_label(item)}가 있어."
+        kept = [old for old in texts if not (old["kind"] == item["kind"] and abs(old["at"] - at) < 0.05)]
+        label = cut_effects.TEXT_LABELS[request.kind or "react"]
+        return (cut_effects.set_texts(effects, cut.candidate_id, [*kept, item]),
+                f"{number}번 컷 {at:.1f}초에 {label} {cut_effects.text_label(item)} 넣었어")
+    return _change_effect(output_root, project_id, chat, inputs, request.number, user_id, message, change)
 
 
 def _offer_choices(output_root: Path, project_id: UUID, chat: dict, inputs: ChatInputs, number: int | None,
