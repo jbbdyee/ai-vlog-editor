@@ -25,6 +25,12 @@ class RuleFileTests(unittest.TestCase):
         self.assertEqual(edit_rules.max_cut_seconds(["컷은 10초 이하로", "5초를 넘기지 마"]), 5.0)
         self.assertIsNone(edit_rules.max_cut_seconds(["공항 장면은 꼭 넣어"]))
 
+    def test_typical_cut_seconds(self):
+        self.assertEqual(edit_rules.typical_cut_seconds(["한 컷은 5.5초 안팎", "한 컷은 8초 넘지 않게"]), 5.5)
+        self.assertIsNone(edit_rules.typical_cut_seconds(["한 컷은 8초 넘지 않게"]))
+        self.assertIsNone(edit_rules.typical_cut_seconds(["자막은 1초쯤마다 바꾸기", "자막 한 번에 6글자 안팎"]))
+        self.assertIsNone(edit_rules.max_cut_seconds(["한 컷은 5.5초 안팎"]))
+
 
 class StoryPromptTests(unittest.TestCase):
     def test_rules_go_into_the_prompt(self):

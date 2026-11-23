@@ -37,6 +37,15 @@ class LeaveOutTests(TestCase):
         self.assertEqual(len(out), 4)
         self.assertTrue(set(out) <= {s.candidate_id for s in evening})
 
+    def test_typical_cut_rule_keeps_target_over_m_scenes(self):
+        scenes = [scene(MORNING, seconds=4.0) for _ in range(30)]  # 120 s: under the 60% budget of 480 s
+        self.assertEqual(leave_out(scenes, 480), [])
+        out = leave_out(scenes, 69, typical_cut=5.0)  # 69 s / (5 s x 1.15) -> 12 stay
+        self.assertEqual(len(scenes) - len(out), 12)
+        self.assertNotIn(scenes[0].candidate_id, out)
+        self.assertNotIn(scenes[-1].candidate_id, out)
+        self.assertEqual(leave_out(scenes[:10], 69, typical_cut=5.0), [])  # already fewer than 12
+
     def test_my_voice_rule_never_leaves_my_scenes_out(self):
         mine = [scene(MORNING, mine=1) for _ in range(6)]
         scenes = [scene(MORNING), *mine, scene(EVENING)]

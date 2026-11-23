@@ -125,7 +125,7 @@ def _half(value: float) -> str:
 
 
 def rule_candidates(numbers: dict) -> list[dict]:
-    """'N초 넘지 않게' (kept by Python) from the 90th percentile, 'M초 안팎' (read by the AI) from the median."""
+    """'N초 넘지 않게' (kept by Python) from the 90th percentile, 'M초 안팎' (TODO 33-3: sets how many scenes stay) from the median."""
     if numbers.get("cut_count", 0) < 3:
         return []
     out = []

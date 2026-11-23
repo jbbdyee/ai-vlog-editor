@@ -90,7 +90,7 @@ export function Rhythm({ result, saved, pending, onAccept }: { result: Reference
         </div>;
       })}
     </div>}
-    <p className="text-[11px] text-slate-500">&lsquo;N초 넘지 않게&rsquo;는 추천을 다시 만들 때 프로그램이 지키고, &lsquo;N초 안팎&rsquo;·&lsquo;짧은 컷 섞기&rsquo;는 AI가 참고해요. 천천히 넘어가는 장면 전환은 컷으로 못 잡을 수 있어요. 자막은 윈도우 글자 읽기로 재서 꾸민 글씨는 놓치거나 틀리게 읽을 수 있어요(글자 수는 대략값). 자막 규칙은 아직 영상 만들기에 쓰이지 않아요.</p>
+    <p className="text-[11px] text-slate-500">추천을 다시 만들 때 &lsquo;N초 넘지 않게&rsquo;는 프로그램이 지키고, &lsquo;N초 안팎&rsquo;은 남길 장면 수를 정해요(8분이면 약 8분 ÷ N초). &lsquo;짧은 컷 섞기&rsquo;는 AI가 참고해요. 천천히 넘어가는 장면 전환은 컷으로 못 잡을 수 있어요. 자막은 윈도우 글자 읽기로 재서 꾸민 글씨는 놓치거나 틀리게 읽을 수 있어요(글자 수는 대략값). 자막 규칙은 아직 영상 만들기에 쓰이지 않아요.</p>
   </div>;
 }
 

@@ -1006,12 +1006,14 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
     # TODO 32-3: too many scenes for the length -> leave out the less important ones instead of cutting all short
     # TODO 32-4: with taste scores (my description + my edit's examples) they decide what goes first
     tastes = taste_score.load_scores(request.app.state.project_render_output_root, project_id)
+    typical_cut = edit_rules.typical_cut_seconds(rules)  # TODO 33-3: '한 컷은 M초 안팎' -> about target / M scenes
     left_out = leave_out([SceneVoice(s.candidate.candidate_id, s.candidate.source_video_id,
                                      float(s.candidate.end_seconds - s.candidate.start_seconds),
                                      *voices.get(s.candidate.candidate_id, (0, 0)),
                                      taste=tastes[s.candidate.candidate_id][0] if s.candidate.candidate_id in tastes
                                      else (1 if tastes else None))
-                          for chapter in direction.chapters for s in chapter.scenes], target * 60, bool(my_voice))
+                          for chapter in direction.chapters for s in chapter.scenes], target * 60, bool(my_voice),
+                         typical_cut)
     direction = without_scenes(direction, left_out)
     scenes = [s for chapter in direction.chapters for s in chapter.scenes]
     fit = fit_to_length([Moment(s.candidate.source_video_id, float(s.candidate.start_seconds), float(s.candidate.end_seconds))
@@ -1042,7 +1044,9 @@ async def recommend_project_story_direction(request: Request, project_id: UUID,
         project_id=project_id, title=direction.title, summary=direction.summary, engine=direction.engine,
         notes=list(direction.notes) + list(length_notes(fit))
         + ([f"내 규칙대로 {max_cut:g}초가 넘는 장면 {capped}개를 {max_cut:g}초로 줄였습니다."] if capped else [])
-        + ([f"내가 말하는 장면 {len(my_voice)}개는 길이를 줄이지 않았습니다."] if my_voice and max_cut else []),
+        + ([f"내가 말하는 장면 {len(my_voice)}개는 길이를 줄이지 않았습니다."] if my_voice and max_cut else [])
+        + ([f"내 규칙대로 한 컷이 {typical_cut:g}초 안팎이 되게 장면 {len(scenes)}개를 남겼습니다."]
+           if typical_cut and left_out else []),
         fallback_reason=direction.fallback_reason,
         chapters=chapters, target_minutes=target, recommended_minutes=recommended, length_reason=length_reason,
         length_options=sorted({*LENGTH_OPTIONS, recommended}),

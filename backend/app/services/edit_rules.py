@@ -84,6 +84,16 @@ def max_cut_seconds(texts: list[str]) -> float | None:
     return min(limits) if limits else None
 
 
+_TYPICAL_CUT = re.compile(r"(\d+(?:\.\d+)?)\s*초\s*(?:안팎|정도|쯤|내외)(?!\s*마다)")
+
+
+def typical_cut_seconds(texts: list[str]) -> float | None:
+    """TODO 33-3: '한 컷은 5.5초 안팎' -> 5.5 (a cut's usual length; caption rules like '자막은 1초쯤마다' are not cuts)."""
+    limits = [float(match.group(1)) for text in texts if "자막" not in text for match in _TYPICAL_CUT.finditer(text)]
+    limits = [value for value in limits if value >= 1]
+    return min(limits) if limits else None
+
+
 _MY_VOICE = re.compile(r"(내가\s*말하는|내\s*목소리|내\s*말)[^.]*?살")
 
 
