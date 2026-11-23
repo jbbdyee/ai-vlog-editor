@@ -244,6 +244,11 @@ export function runFinishing(id: string): Promise<FinishingEstimate> {
   return request<FinishingEstimate>(`/projects/${id}/finishing`, { method: "POST", headers: json, body: JSON.stringify({ run: true }) });
 }
 
+/** TODO 41-3: put the suggestions into the edit (all, or only these cuts); no AI call, one 되돌리기 takes them out. */
+export function applyFinishing(id: string, candidateIds?: string[]): Promise<ChatEditView> {
+  return request<ChatEditView>(`/projects/${id}/finishing/apply`, { method: "POST", headers: json, body: JSON.stringify({ candidate_ids: candidateIds ?? null }) });
+}
+
 /** A paid Claude call: scores every scene 0~3 from my taste and my edit's examples. */
 export function runTasteScores(id: string): Promise<TasteScores> {
   return request<TasteScores>(`/projects/${id}/taste-scores`, { method: "POST", headers: json, body: JSON.stringify({ run: true }) });

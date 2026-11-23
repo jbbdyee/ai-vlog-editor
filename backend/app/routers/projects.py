@@ -1211,7 +1211,7 @@ def _rule_candidates(output_root: Path) -> list[taste_log.Candidate]:
 
 
 def _chat_http_error(error: longform_chat.ChatEditError) -> HTTPException:
-    code = 409 if error.code in ("NO_EDIT_PLAN", "NOTHING_TO_UNDO", "UNDO_SCENES_GONE", "CHOICE_ALREADY_PICKED",
+    code = 409 if error.code in ("NO_EDIT_PLAN", "NOTHING_TO_UNDO", "NOTHING_TO_APPLY", "UNDO_SCENES_GONE", "CHOICE_ALREADY_PICKED",
                                  "CHOICE_STALE") else \
         503 if error.code == "BRAIN_UNAVAILABLE" else 502 if error.code.startswith(("LLM_", "CLAUDE_")) else 422
     return HTTPException(status_code=code, detail={"code": error.code, "message": error.message})
@@ -1646,6 +1646,21 @@ async def _finishing(request: Request, project_id: UUID, payload: FinishingReque
                              made_at=saved.get("made_at"), spent_usd=saved.get("usd"), spent_model=saved.get("model"),
                              suggestions=[item for item in saved.get("suggestions") or [] if isinstance(item, dict)],
                              titles=[str(title) for title in saved.get("titles") or []])
+
+
+class FinishingApplyRequest(BaseModel):
+    candidate_ids: list[UUID] | None = Field(default=None, max_length=400)  # None = every suggestion
+
+
+@router.post("/{project_id}/finishing/apply", response_model=ChatEditResponse)
+async def apply_project_finishing(request: Request, project_id: UUID,
+                                  payload: FinishingApplyRequest | None = None) -> ChatEditResponse:
+    """TODO 41-3: put Claude's suggestions into the cut effects (no AI call); one 되돌리기 takes them out again."""
+    wanted = (payload or FinishingApplyRequest()).candidate_ids
+    def work(session, root):
+        longform_chat.apply_finishing(session, root, project_id, wanted)
+        return None
+    return await _chat_work(request, project_id, work)
 
 
 class ChatPickRequest(BaseModel):

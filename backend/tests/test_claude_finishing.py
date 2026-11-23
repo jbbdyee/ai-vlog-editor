@@ -136,5 +136,53 @@ class ClaudeFinishingAnswerTest(unittest.TestCase):
         self.assertEqual((saved["suggestions"], saved["titles"], saved["pictures"]), ([{"number": 1}], ["제목"], 228))
 
 
+class FinishingApplyTest(unittest.TestCase):
+    """TODO 41-3: suggestions go into the cut effects; my cuts stay; one undo record holds the effects from before."""
+
+    def test_merge_keeps_my_cuts_and_times_inside_the_cut(self):
+        mine, theirs, gone = str(uuid4()), str(uuid4()), str(uuid4())
+        effects = {mine: {"sounds": [{"name": "쿵", "at": 1.0}]}}
+        suggestions = [
+            {"candidate_id": mine, "zoom": "zoom", "texts": [], "sounds": []},
+            {"candidate_id": theirs, "zoom": "push", "texts": [{"kind": "react", "text": "헉!", "at": 9.0},
+                                                               {"kind": "boom", "text": "x", "at": 0}],
+             "sounds": [{"name": "띠용", "at": 1.5}, {"name": "펑", "at": 1.0}]},
+            {"candidate_id": gone, "zoom": "zoom", "texts": [], "sounds": []},
+        ]
+        new, put = finishing.merge(effects, suggestions, {mine: 4.0, theirs: 3.0})
+        self.assertEqual(put, [theirs])
+        self.assertEqual(new[mine], effects[mine])
+        self.assertEqual(new[theirs], {"zoom": "push", "texts": [{"kind": "react", "text": "헉!", "at": 2.9}],
+                                       "sounds": [{"name": "띠용", "at": 1.5}]})
+        self.assertEqual(finishing.merge(effects, suggestions, {mine: 4.0, theirs: 3.0}, wanted=set())[1], [])
+
+    def test_apply_saves_effects_and_one_undo_record(self):
+        from backend.app.services import longform_chat
+        inputs = _inputs([(0.0, 4.0, "", []), (5.0, 8.0, "", [])])
+        first, second = (str(cut.candidate_id) for cut in inputs.cuts)
+        for cut in inputs.cuts:
+            cut.length = cut.end - cut.start
+        project = uuid4()
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            finishing.suggestions_path(root, project).parent.mkdir(parents=True)
+            finishing.suggestions_path(root, project).write_text(json.dumps({"suggestions": [
+                {"candidate_id": second, "zoom": "zoom", "texts": [], "sounds": [{"name": "쿵", "at": 1.0}]}]}),
+                encoding="utf-8")
+            before = cut_effects.set_zoom({}, inputs.cuts[0].candidate_id, "push")
+            cut_effects.save_effects(root, project, before)
+            with mock.patch.object(longform_chat, "load_inputs", return_value=inputs):
+                self.assertEqual(longform_chat.apply_finishing(None, root, project), 1)
+                with self.assertRaises(longform_chat.ChatEditError):  # nothing left to put in
+                    longform_chat.apply_finishing(None, root, project)
+            after = cut_effects.load_effects(root, project)
+            self.assertEqual(after[first], {"zoom": "push"})
+            self.assertEqual(after[second], {"zoom": "zoom", "sounds": [{"name": "쿵", "at": 1.0}]})
+            chat = longform_chat.load_chat(root, project)
+            self.assertEqual(len(chat["history"]), 1)
+            self.assertEqual(chat["history"][0]["effects"], before)
+            self.assertIn("2번", chat["messages"][-1]["text"])
+
+
 if __name__ == "__main__":
     unittest.main()

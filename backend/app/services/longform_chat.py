@@ -28,7 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.app.models import SourceVideo
-from backend.app.services import cut_effects, sound_effects, speaker_voice, taste_log
+from backend.app.services import claude_finishing, cut_effects, sound_effects, speaker_voice, taste_log
 from backend.app.services.day_brief import load_day_brief
 from backend.app.services.edit_brain import Brain, cost_usd, parse_json
 from backend.app.services.llm_edit_interpreter import LLMEditError
@@ -993,6 +993,36 @@ def undo(session: Session, output_root: Path, project_id: UUID) -> str:
                              "undo": True, "changed": changed, "at": _now()})
     save_chat(output_root, project_id, chat)
     return label
+
+
+def apply_finishing(session: Session, output_root: Path, project_id: UUID, wanted: Sequence[UUID] | None = None) -> int:
+    """TODO 41-3: put Claude's saved suggestions into the cut effects (all, or only ``wanted`` cuts). Cuts that already
+    have an effect stay as they are; one undo brings the effects from before."""
+    saved = claude_finishing.load_result(output_root, project_id) or {}
+    suggestions = [item for item in saved.get("suggestions") or [] if isinstance(item, dict)]
+    inputs = load_inputs(session, output_root, project_id)
+    lengths = {str(cut.candidate_id): cut.length for cut in inputs.cuts}
+    numbers = {str(cut.candidate_id): index + 1 for index, cut in enumerate(inputs.cuts)}
+    effects = cut_effects.load_effects(output_root, project_id)
+    new, put = claude_finishing.merge(effects, suggestions, lengths,
+                                      None if wanted is None else {str(item) for item in wanted})
+    if not put:
+        raise ChatEditError("NOTHING_TO_APPLY", "넣을 제안이 없어요. 이미 효과가 있는 컷은 그대로 둬요.")
+    chat = load_chat(output_root, project_id)
+    reply_id = _new_id()
+    shown = ", ".join(f"{numbers[key]}번" for key in sorted(put, key=numbers.get))
+    snapshot = _snapshot(inputs.cuts, f"Claude 제안 {len(put)}컷 넣기")
+    snapshot["marks"] = [reply_id]
+    snapshot["effects"] = effects
+    chat["history"].append(snapshot)
+    cut_effects.save_effects(output_root, project_id, new)
+    chat["messages"].append({"id": reply_id, "role": "assistant", "engine": "claude-finishing", "at": _now(),
+                             "text": f"Claude 제안을 {len(put)}컷에 넣었어({shown}). 완성 영상(영상 만들기)에서 보여. "
+                                     "마음에 안 들면 되돌리기를 눌러 줘.",
+                             "done": [f"{numbers[key]}번 컷 Claude 제안 넣음" for key in put], "skipped": [],
+                             "no_change": False, "changed": put})
+    save_chat(output_root, project_id, chat)
+    return len(put)
 
 
 def remake(session: Session, output_root: Path, project_id: UUID,

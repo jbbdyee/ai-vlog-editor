@@ -297,3 +297,36 @@ def load_result(output_root: Path, project_id: UUID) -> dict | None:
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+# --- 41-3: put the suggestions into the cut effects -------------------------------------------------------------------
+
+def merge(effects: dict[str, dict], suggestions: Sequence[dict], lengths: dict[str, float],
+          wanted: set[str] | None = None) -> tuple[dict[str, dict], list[str]]:
+    """Claude's suggestions -> new cut effects. Only cuts still in the plan and with no effect yet (mine stay as I made
+    them); times are kept inside the cut. Gives (new effects, candidate ids that got something)."""
+    out = {key: dict(value) for key, value in effects.items()}
+    put: list[str] = []
+    for item in suggestions:
+        key = str(item.get("candidate_id") or "")
+        if key not in lengths or out.get(key) or key in put or (wanted is not None and key not in wanted):
+            continue
+        last = max(0.0, round(lengths[key] - 0.1, 1))
+        entry: dict = {}
+        if item.get("zoom") in cut_effects.ZOOMS:
+            entry["zoom"] = item["zoom"]
+        texts = [{"kind": text["kind"], "text": cut_effects.clean_words(str(text.get("text") or "")),
+                  "at": min(last, max(0.0, float(text.get("at") or 0.0)))}
+                 for text in item.get("texts") or [] if isinstance(text, dict) and text.get("kind") in cut_effects.TEXT_KINDS]
+        texts = [text for text in texts if text["text"]][: cut_effects.MAX_TEXTS]
+        sounds = [{"name": sound["name"], "at": min(last, max(0.0, float(sound.get("at") or 0.0)))}
+                  for sound in item.get("sounds") or [] if isinstance(sound, dict) and sound.get("name") in sound_effects.NAMES]
+        sounds = sounds[: cut_effects.MAX_SOUNDS]
+        if texts:
+            entry["texts"] = texts
+        if sounds:
+            entry["sounds"] = sounds
+        if entry:
+            out[key] = entry
+            put.append(key)
+    return out, put

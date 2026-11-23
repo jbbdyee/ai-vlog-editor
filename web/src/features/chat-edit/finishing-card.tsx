@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LoaderCircle, Sparkles } from "lucide-react";
-import { getFinishing, runFinishing, thumbUrl, type ChatCut, type FinishingSuggestion } from "@/api/chat-edit";
+import { applyFinishing, getFinishing, runFinishing, thumbUrl, type ChatCut, type FinishingSuggestion } from "@/api/chat-edit";
 import { ApiError } from "@/api/projects";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -28,9 +28,16 @@ export function FinishingCard({ projectId, cuts }: { projectId: string; cuts: Ch
     client.setQueryData(key, value);
     setConfirming(false);
   } });
+  // TODO 41-3: put suggestions into the edit; the chat view (cut effects + undo) is refreshed
+  const apply = useMutation({ mutationFn: (ids?: string[]) => applyFinishing(projectId, ids), onSuccess: (value) => {
+    client.setQueryData(["chat-edit", projectId], value);
+    void client.invalidateQueries({ queryKey: ["finishing", projectId] });
+  } });
   const data = typeof info.data?.usd_low === "number" ? info.data : undefined;
   const suggestions = data?.suggestions ?? [];
   const byId = new Map(cuts.map((cut) => [cut.candidate_id, cut]));
+  const decorated = (cut?: ChatCut) => Boolean(cut && (cut.zoom || cut.texts?.length || cut.sounds?.length));
+  const waiting = suggestions.filter((item) => byId.has(item.candidate_id) && !decorated(byId.get(item.candidate_id)));
   return <section aria-label="Claude 마무리 손질" className="space-y-2 rounded-xl border border-sky-200 bg-sky-50/60 p-3">
     <div className="flex items-center gap-1.5">
       <Sparkles size={16} className="text-sky-600" />
@@ -64,7 +71,13 @@ export function FinishingCard({ projectId, cuts }: { projectId: string; cuts: Ch
             </div>
           </div>}
       {data.made_at && <div aria-label="Claude 제안" className="space-y-2">
-        <p className="text-xs text-slate-600">제안 {suggestions.length}컷{typeof data.spent_usd === "number" ? ` · 든 돈 약 ${won(data.spent_usd)}원($${data.spent_usd.toFixed(3)})` : ""} · 아직 편집에 안 넣었어요</p>
+        <p className="text-xs text-slate-600">제안 {suggestions.length}컷{typeof data.spent_usd === "number" ? ` · 든 돈 약 ${won(data.spent_usd)}원($${data.spent_usd.toFixed(3)})` : ""} · {waiting.length ? `넣을 수 있는 컷 ${waiting.length}개` : "모두 편집에 들어갔어요"}</p>
+        {waiting.length > 0 && <div className="flex items-center gap-2">
+          <Button type="button" size="sm" disabled={apply.isPending} onClick={() => apply.mutate(undefined)}>
+            <span className="flex items-center gap-1">{apply.isPending && <LoaderCircle size={14} className="animate-spin" />}모두 넣기 ({waiting.length}컷)</span></Button>
+          <span className="text-[11px] text-slate-500">무료 · 편집실 ↶ 되돌리기 한 번이면 빠져요</span>
+        </div>}
+        {apply.isSuccess && <p role="status" className="text-xs text-sky-700">넣었어요. 영상 만들기를 하면 완성 영상에서 보여요.</p>}
         {(data.titles ?? []).length > 0 && <div aria-label="훅 제목 후보" className="flex flex-wrap gap-1.5">
           {(data.titles ?? []).map((title) => <span key={title} className="rounded-full border border-sky-300 bg-white px-2 py-0.5 text-xs font-semibold text-sky-800">{title}</span>)}
         </div>}
@@ -74,16 +87,20 @@ export function FinishingCard({ projectId, cuts }: { projectId: string; cuts: Ch
             return <li key={item.candidate_id} className="flex gap-2 rounded-lg bg-white p-1.5">
               {cut && <img alt="" loading="lazy" className="h-12 w-20 shrink-0 rounded object-cover"
                 src={thumbUrl(projectId, cut.source_video_id, cut.start_seconds + cut.length / 2)} />}
-              <div className="min-w-0 text-xs">
+              <div className="min-w-0 flex-1 text-xs">
                 <p className="font-semibold text-slate-800">{item.number}번 컷 <span className="font-normal text-slate-500">· {item.why}</span></p>
                 <p className="text-slate-700">{chips(item).join("  ")}</p>
               </div>
+              {cut && (decorated(cut)
+                ? <span className="shrink-0 self-center rounded-full bg-sky-100 px-2 py-0.5 text-[11px] text-sky-700">효과 있음</span>
+                : <Button type="button" size="sm" variant="secondary" disabled={apply.isPending} className="shrink-0 self-center"
+                    onClick={() => apply.mutate([item.candidate_id])}>넣기</Button>)}
             </li>;
           })}
         </ol>
       </div>}
     </>}
     {info.isLoading && <p className="text-xs text-slate-500">예상 금액 계산 중…</p>}
-    {(info.error || run.error) && <Alert>{(info.error ?? run.error) instanceof ApiError ? ((info.error ?? run.error) as ApiError).message : "요청을 처리하지 못했어요."}</Alert>}
+    {(info.error || run.error || apply.error) && <Alert>{(info.error ?? run.error ?? apply.error) instanceof ApiError ? ((info.error ?? run.error ?? apply.error) as ApiError).message : "요청을 처리하지 못했어요."}</Alert>}
   </section>;
 }
