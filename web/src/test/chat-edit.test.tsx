@@ -220,6 +220,31 @@ describe("TODO 26 chat editing screen", () => {
     await waitFor(() => expect(screen.getByLabelText("편집안 재생").getAttribute("src")).toBe(`/api/projects/${project}/sources/${source}/preview`));
     expect(asked).toEqual([{ first: [source] }]);
   });
+  it("TODO 41-1: shows what Claude finishing would send and its estimated price, without calling it", async () => {
+    const posts: string[] = [];
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "POST") posts.push(url);
+      if (url.endsWith(`/projects/${project}`)) return Promise.resolve(response({ project_id: project, name: "학원 하루", status: "COMPLETED" }));
+      if (url.endsWith("/finishing")) return Promise.resolve(response({ model: "claude-sonnet-5-5", cuts: 76, pictures: 228, chunks: 3,
+        input_tokens: 60000, output_tokens: 7000, output_tokens_high: 18400, usd_low: 0.19, usd_high: 0.3,
+        rules: ["한 컷은 5.5초 안팎"], has_brief: true, reference: ["자막 한 번에 5.5자 안팎"], cuts_with_effects: 2 }));
+      return Promise.resolve(response(view(4)));
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[`/projects/${project}/chat-edit`]}><Routes>
+      <Route path="projects/:projectId/chat-edit" element={<ChatEditPage />} />
+    </Routes></MemoryRouter></QueryClientProvider>);
+
+    await userEvent.click(await screen.findByRole("button", { name: "더 보기" }));
+    expect(await screen.findByLabelText("예상 금액")).toHaveTextContent("예상 약 280~440원");
+    const sends = screen.getByLabelText("함께 보내는 것");
+    expect(sends).toHaveTextContent("컷 76개 · 컷마다 사진 3장(모두 228장)");
+    expect(sends).toHaveTextContent("내 규칙 1개: 한 컷은 5.5초 안팎");
+    expect(sends).toHaveTextContent("좋아하는 영상 숫자: 자막 한 번에 5.5자 안팎");
+    expect(sends).toHaveTextContent("이미 효과를 넣은 컷 2개는 그대로");
+    expect(posts.filter((url) => url.includes("finishing"))).toEqual([]);
+  });
+
   it("TODO 37: keeps only the latest exchange on screen and shows a dot on ⋯ for a rule candidate", async () => {
     const chat = [
       { id: "u1", role: "user", text: "[00:01] 1번 빼", at_seconds: 1, done: [], skipped: [], engine: null, error: null, changed: [], undo: false },

@@ -6,6 +6,7 @@ import { answerRuleCandidate, deleteEditRule, getEditRules, type ChatEditView } 
 import { ApiError } from "@/api/projects";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { FinishingCard } from "@/features/chat-edit/finishing-card";
 import { MyEditCard } from "@/features/chat-edit/my-edit-card";
 import { ReferenceStyleCard } from "@/features/chat-edit/reference-style-card";
 import { TasteBriefCard } from "@/features/chat-edit/taste-brief-card";
@@ -72,6 +73,8 @@ export function EditRoomMenu({ projectId, data, busy, brain, onBrain, remakeMinu
             </div>
           </div>)}
         </section>}
+
+        <FinishingCard projectId={projectId} cutCount={data.cuts.length} />
 
         <section className="space-y-2">
           <h3 className="font-semibold text-slate-800">길이 바꿔 다시 만들기</h3>

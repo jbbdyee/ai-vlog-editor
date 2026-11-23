@@ -39,7 +39,7 @@ from backend.app.services.project_reel import (ReelEditRefused, ReelOptions, Ree
                                               edit_reel_draft, unused_shots, job_state, reel_output_dir, render_job_state,
                                               saved_draft, start_reel_draft, start_reel_render, undo_reel_draft)
 from backend.app.services.reel_render import draft_fingerprint, saved_video
-from backend.app.services import cut_effects, edit_brain, edit_rules, face_mosaic, longform_captions, longform_chat, my_edit_compare, reel_text, reference_style, scene_thumbs, source_previews, taste_log
+from backend.app.services import claude_finishing, cut_effects, edit_brain, edit_rules, face_mosaic, longform_captions, longform_chat, my_edit_compare, reel_text, reference_style, scene_thumbs, source_previews, taste_log
 from backend.app.services.reel_modes import (AUTO_MODE, DEFAULT_PACE, DEFAULT_SHORT_SECONDS, MODE_BY_KEY, MODES, PACES,
                                              SHORT_LENGTHS)
 from backend.app.services.story_length import (LENGTH_OPTIONS, Moment, accept_minutes, fit_to_length, footage_seconds,
@@ -1504,6 +1504,52 @@ async def _taste_scores(request: Request, project_id: UUID, payload: TasteScoreR
                               output_tokens=output_tokens,
                               usd=round(edit_brain.cost_usd(model, input_tokens, output_tokens), 4),
                               ran=ran, counts=counts, made_at=made_at, pictures=pictures)
+
+
+# ---- TODO 41: Claude finishing (41-1: what would be sent + the estimate; no call) ------------------------------------
+
+class FinishingResponse(BaseModel):
+    model: str
+    cuts: int
+    pictures: int
+    chunks: int
+    input_tokens: int
+    output_tokens: int
+    output_tokens_high: int
+    usd_low: float
+    usd_high: float
+    rules: list[str] = []
+    has_brief: bool = False
+    reference: list[str] = []  # TODO 33 numbers sent along
+    cuts_with_effects: int = 0  # cuts I already decorated (left as they are)
+
+
+def _finishing_sync(factory, output_root: Path, project_id: UUID) -> FinishingResponse:
+    with factory() as session:
+        inputs = longform_chat.load_inputs(session, output_root, project_id)
+    rows = claude_finishing.cut_rows(inputs, cut_effects.load_effects(output_root, project_id))
+    rules = edit_rules.rule_texts(output_root)
+    brief = taste_score.load_brief(output_root)
+    reference = claude_finishing.reference_lines(reference_style.load_result(output_root))
+    model = claude_finishing.model_name()
+    guess = claude_finishing.estimate(model, claude_finishing.header_text(rules, brief, reference), rows)
+    return FinishingResponse(model=model, cuts=guess.cuts, pictures=guess.pictures, chunks=guess.chunks,
+                             input_tokens=guess.input_tokens, output_tokens=guess.output_tokens,
+                             output_tokens_high=guess.output_tokens_high, usd_low=guess.usd_low, usd_high=guess.usd_high,
+                             rules=rules, has_brief=bool(brief.strip()), reference=reference,
+                             cuts_with_effects=sum(1 for row in rows if row.existing))
+
+
+@router.get("/{project_id}/finishing", response_model=FinishingResponse)
+async def get_project_finishing(request: Request, project_id: UUID) -> FinishingResponse:
+    """What Claude finishing would send for this edit plan and what it would cost. Calls nothing."""
+    try:
+        return await run_in_threadpool(_finishing_sync, _session_factory(request),
+                                       request.app.state.project_render_output_root, project_id)
+    except SceneProjectNotFoundError as error:
+        raise _project_not_found() from error
+    except longform_chat.ChatEditError as error:
+        raise _chat_http_error(error) from error
 
 
 class ChatPickRequest(BaseModel):

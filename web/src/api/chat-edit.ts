@@ -202,6 +202,28 @@ export function getTasteScores(id: string): Promise<TasteScores> {
   return request<TasteScores>(`/projects/${id}/taste-scores`);
 }
 
+/** TODO 41: what Claude finishing would send for the edit plan, and the estimated bill. */
+export interface FinishingEstimate {
+  model: string;
+  cuts: number;
+  pictures: number;
+  chunks: number;
+  input_tokens: number;
+  output_tokens: number;
+  output_tokens_high: number;
+  usd_low: number;
+  usd_high: number;
+  rules: string[];
+  has_brief: boolean;
+  reference: string[];
+  cuts_with_effects: number;
+}
+
+/** The estimate only; no AI call. */
+export function getFinishing(id: string): Promise<FinishingEstimate> {
+  return request<FinishingEstimate>(`/projects/${id}/finishing`);
+}
+
 /** A paid Claude call: scores every scene 0~3 from my taste and my edit's examples. */
 export function runTasteScores(id: string): Promise<TasteScores> {
   return request<TasteScores>(`/projects/${id}/taste-scores`, { method: "POST", headers: json, body: JSON.stringify({ run: true }) });
