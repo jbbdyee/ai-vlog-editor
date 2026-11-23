@@ -7,6 +7,7 @@ import { ApiError } from "@/api/projects";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { MyEditCard } from "@/features/chat-edit/my-edit-card";
+import { ReferenceStyleCard } from "@/features/chat-edit/reference-style-card";
 import { TasteBriefCard } from "@/features/chat-edit/taste-brief-card";
 
 const WON_PER_USD = 1450;
@@ -100,7 +101,7 @@ export function EditRoomMenu({ projectId, data, busy, brain, onBrain, remakeMinu
 
         <details open={openTaste} className="rounded-xl border border-slate-200 p-3">
           <summary className="cursor-pointer text-slate-700">내 취향 · 내 편집본과 비교</summary>
-          <div className="mt-3 space-y-4"><TasteBriefCard projectId={projectId} /><MyEditCard projectId={projectId} /></div>
+          <div className="mt-3 space-y-4"><TasteBriefCard projectId={projectId} /><ReferenceStyleCard /><MyEditCard projectId={projectId} /></div>
         </details>
 
         <section className="space-y-1.5">

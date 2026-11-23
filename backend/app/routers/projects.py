@@ -39,7 +39,7 @@ from backend.app.services.project_reel import (ReelEditRefused, ReelOptions, Ree
                                               edit_reel_draft, unused_shots, job_state, reel_output_dir, render_job_state,
                                               saved_draft, start_reel_draft, start_reel_render, undo_reel_draft)
 from backend.app.services.reel_render import draft_fingerprint, saved_video
-from backend.app.services import edit_brain, edit_rules, face_mosaic, longform_captions, longform_chat, my_edit_compare, reel_text, scene_thumbs, source_previews, taste_log
+from backend.app.services import edit_brain, edit_rules, face_mosaic, longform_captions, longform_chat, my_edit_compare, reel_text, reference_style, scene_thumbs, source_previews, taste_log
 from backend.app.services.reel_modes import (AUTO_MODE, DEFAULT_PACE, DEFAULT_SHORT_SECONDS, MODE_BY_KEY, MODES, PACES,
                                              SHORT_LENGTHS)
 from backend.app.services.story_length import (LENGTH_OPTIONS, Moment, accept_minutes, fit_to_length, footage_seconds,
@@ -1274,6 +1274,61 @@ async def add_edit_rule(request: Request, payload: EditRuleRequest) -> EditRules
 @router.delete("/edit-rules/{rule_id}", response_model=EditRulesResponse)
 async def delete_edit_rule(request: Request, rule_id: str) -> EditRulesResponse:
     return _rules_view(edit_rules.delete_rule(request.app.state.project_render_output_root, rule_id))
+
+
+# ---- TODO 33-1: cut rhythm of a video I like -> rule candidates (shared by every project) ----------------------------
+
+class ReferenceStyleResponse(BaseModel):
+    status: str
+    error_code: str | None = None
+    result: dict | None = None
+
+
+def _reference_view(request: Request) -> ReferenceStyleResponse:
+    job = reference_style.job_state()
+    return ReferenceStyleResponse(status=job.status, error_code=job.error_code,
+                                  result=reference_style.load_result(request.app.state.project_render_output_root))
+
+
+def _save_reference(request: Request, upload: UploadFile) -> str:
+    """Stream the upload, check it is a video, then replace the last reference (only one is kept)."""
+    name = Path(upload.filename or "reference.mp4").name
+    suffix = Path(name).suffix.lower()
+    if suffix not in reference_style.SUFFIXES:
+        raise HTTPException(status_code=415, detail={"code": "REFERENCE_NOT_VIDEO", "message": "영상 파일(mp4·mov 등)만 올릴 수 있어요."})
+    folder = reference_style.folder(request.app.state.project_render_output_root)
+    folder.mkdir(parents=True, exist_ok=True)
+    temporary = folder / f"upload{suffix}.tmp"
+    with temporary.open("wb") as out:
+        shutil.copyfileobj(upload.file, out, length=8 * 1024 * 1024)
+    try:
+        reference_style.probe_duration(temporary)
+    except reference_style.ReferenceError as error:
+        temporary.unlink(missing_ok=True)
+        raise HTTPException(status_code=415, detail={"code": error.code, "message": "영상으로 읽을 수 없는 파일이에요."}) from error
+    for old in folder.glob("video.*"):
+        old.unlink(missing_ok=True)
+    temporary.replace(folder / f"video{suffix}")
+    return name
+
+
+@router.get("/reference-style", response_model=ReferenceStyleResponse)
+async def get_reference_style(request: Request) -> ReferenceStyleResponse:
+    """TODO 33-1: the last measured reference video (cut count, cut length, rule candidates)."""
+    return await run_in_threadpool(_reference_view, request)
+
+
+@router.post("/reference-style", response_model=ReferenceStyleResponse, status_code=202)
+async def upload_reference_style(request: Request, file: UploadFile = File(...)) -> ReferenceStyleResponse:
+    """TODO 33-1: upload a video I like; measuring its cuts starts right away (no AI, no paid call)."""
+    if reference_style.job_state().status == "RUNNING":
+        raise HTTPException(status_code=409, detail={"code": "REFERENCE_RUNNING", "message": "이미 재는 중이에요."})
+    try:
+        name = await run_in_threadpool(_save_reference, request, file)
+    finally:
+        await file.close()
+    reference_style.start(request.app.state.project_render_output_root, name)
+    return await run_in_threadpool(_reference_view, request)
 
 
 # ---- TODO 32-4: my editing taste in my own words + scene scores from it ---------------------------------------------
