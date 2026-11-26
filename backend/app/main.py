@@ -21,7 +21,8 @@ from backend.app.services.persistent_render_execution import PersistentProjectRe
 from backend.app.services.render_events import (
     RenderEventConfigError, RenderEventDispatcher, RenderEventSettings,
 )
-from backend.app.services.stt_service import load_model
+# Kept under the name load_model because tests patch backend.app.main.load_model.
+from backend.app.services.stt_service import load_best_model as load_model
 from backend.app.storage.processing_workspace import LocalProcessingWorkspace
 from backend.app.storage.source_storage import LocalSourceStorage
 
