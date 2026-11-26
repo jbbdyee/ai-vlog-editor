@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { FinishingCard } from "@/features/chat-edit/finishing-card";
 import { MyEditCard } from "@/features/chat-edit/my-edit-card";
 import { ReferenceStyleCard } from "@/features/chat-edit/reference-style-card";
+import { ScenePickCard } from "@/features/chat-edit/scene-pick-card";
 import { TasteBriefCard } from "@/features/chat-edit/taste-brief-card";
 
 const WON_PER_USD = 1450;
@@ -74,6 +75,7 @@ export function EditRoomMenu({ projectId, data, busy, brain, onBrain, remakeMinu
           </div>)}
         </section>}
 
+        <ScenePickCard projectId={projectId} />
         <FinishingCard projectId={projectId} cuts={data.cuts} />
 
         <section className="space-y-2">

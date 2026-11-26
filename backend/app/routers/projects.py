@@ -39,7 +39,7 @@ from backend.app.services.project_reel import (ReelEditRefused, ReelOptions, Ree
                                               edit_reel_draft, unused_shots, job_state, reel_output_dir, render_job_state,
                                               saved_draft, start_reel_draft, start_reel_render, undo_reel_draft)
 from backend.app.services.reel_render import draft_fingerprint, saved_video
-from backend.app.services import claude_finishing, cut_effects, edit_brain, edit_rules, face_mosaic, longform_captions, longform_chat, my_edit_compare, reel_text, reference_style, scene_thumbs, source_previews, taste_log
+from backend.app.services import claude_finishing, claude_scene_pick, cut_effects, edit_brain, edit_rules, face_mosaic, longform_captions, longform_chat, my_edit_compare, reel_text, reference_style, scene_thumbs, source_previews, taste_log
 from backend.app.services.reel_modes import (AUTO_MODE, DEFAULT_PACE, DEFAULT_SHORT_SECONDS, MODE_BY_KEY, MODES, PACES,
                                              SHORT_LENGTHS)
 from backend.app.services.story_length import (LENGTH_OPTIONS, Moment, accept_minutes, fit_to_length, footage_seconds,
@@ -1646,6 +1646,149 @@ async def _finishing(request: Request, project_id: UUID, payload: FinishingReque
                              made_at=saved.get("made_at"), spent_usd=saved.get("usd"), spent_model=saved.get("model"),
                              suggestions=[item for item in saved.get("suggestions") or [] if isinstance(item, dict)],
                              titles=[str(title) for title in saved.get("titles") or []])
+
+
+# ---- TODO 43: Claude picks the scenes (43-2: what would be sent + the estimate; no call) -----------------------------
+
+class ScenePickResponse(BaseModel):
+    model: str
+    target_minutes: float
+    scenes: int
+    pictures: int
+    chunks: int
+    input_tokens: int
+    output_tokens: int
+    output_tokens_high: int
+    usd_low: float
+    usd_high: float
+    rules: list[str] = []
+    has_brief: bool = False
+    has_day_brief: bool = False
+    reference: list[str] = []
+    scenes_with_speech: int = 0
+    voice_marked: bool = False  # 나/남 marks are there (else every line goes as '?')
+    # TODO 43-3: the saved choice (None until Claude ran once)
+    picked: dict | None = None
+
+
+class ScenePickRequest(BaseModel):
+    minutes: float = Field(default=8.0, gt=0, le=60)
+    run: bool = False  # False: only the estimate (no AI call)
+
+
+PICK_EFFORT = "medium"  # same as the finishing (TODO 41)
+
+
+def _scene_pick_inputs_sync(factory, output_root: Path, project_id: UUID, storage=None):
+    with factory() as session:
+        inputs = longform_chat.load_inputs(session, output_root, project_id)
+        sources: dict[UUID, Path] = {}
+        if storage is not None:
+            for source in session.scalars(select(SourceVideo).where(SourceVideo.project_id == project_id)):
+                preview = source_previews.preview_path(output_root, project_id, source.id)
+                if source_previews.is_ready(preview):  # the light 720p copy: same timing, much faster to seek
+                    sources[source.id] = preview
+                    continue
+                try:
+                    sources[source.id] = storage.resolve(source.storage_reference)
+                except SourceStorageError:
+                    continue
+    rows = claude_scene_pick.scene_rows(inputs)
+    marked = any(line.speaker for lines in inputs.lines.values() for line in lines)
+    return rows, inputs.brief, marked, sources
+
+
+def _scene_pick_pictures_sync(output_root: Path, project_id: UUID, rows, sources: dict[UUID, Path]) -> dict[UUID, list[Path]]:
+    from concurrent.futures import ThreadPoolExecutor
+
+    jobs = [(row.candidate_id, row.source_video_id, at) for row in rows if row.source_video_id in sources
+            for at in claude_scene_pick.picture_times(row)]
+
+    def one(job):
+        candidate_id, source_id, at = job
+        try:
+            return candidate_id, scene_thumbs.scene_thumb(output_root, project_id, source_id, sources[source_id], at,
+                                                          width=claude_scene_pick.PICTURE_WIDTH)
+        except scene_thumbs.ThumbError:
+            return candidate_id, None
+    pictures: dict[UUID, list[Path]] = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for candidate_id, path in pool.map(one, jobs):
+            if path is not None:
+                pictures.setdefault(candidate_id, []).append(path)
+    return pictures
+
+
+def _claude_pick_ask(model: str):
+    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not key:
+        raise HTTPException(status_code=503, detail={"code": "CLAUDE_KEY_MISSING", "message": "Claude 키가 없어 장면을 고를 수 없어요."})
+
+    def ask(system: str, content, schema: dict) -> tuple[str, int, int]:
+        import anthropic
+        client = anthropic.Anthropic(api_key=key, timeout=600.0, max_retries=1)
+        response = client.messages.create(
+            model=model, max_tokens=32000, system=system, messages=[{"role": "user", "content": content}],
+            output_config={"effort": PICK_EFFORT, "format": {"type": "json_schema", "schema": schema}})
+        if response.stop_reason in ("refusal", "max_tokens"):
+            raise ValueError(response.stop_reason)
+        text = next((block.text for block in response.content if block.type == "text"), "")
+        return text, int(response.usage.input_tokens), int(response.usage.output_tokens)
+    return ask
+
+
+@router.get("/{project_id}/scene-pick", response_model=ScenePickResponse)
+async def get_project_scene_pick(request: Request, project_id: UUID,
+                                 minutes: float = Query(default=8.0, gt=0, le=60)) -> ScenePickResponse:
+    """What Claude scene picking would send and cost for a target length, plus the saved choice. Calls nothing."""
+    return await _scene_pick(request, project_id, ScenePickRequest(minutes=minutes))
+
+
+@router.post("/{project_id}/scene-pick", response_model=ScenePickResponse)
+async def post_project_scene_pick(request: Request, project_id: UUID,
+                                  payload: ScenePickRequest | None = None) -> ScenePickResponse:
+    """run=true: one paid Claude run that picks the scenes (saved apart; the edit plan is not changed)."""
+    return await _scene_pick(request, project_id, payload or ScenePickRequest())
+
+
+async def _scene_pick(request: Request, project_id: UUID, payload: ScenePickRequest) -> ScenePickResponse:
+    output_root = request.app.state.project_render_output_root
+    minutes = payload.minutes
+    try:
+        rows, day_brief, marked, sources = await run_in_threadpool(
+            _scene_pick_inputs_sync, _session_factory(request), output_root, project_id,
+            request.app.state.source_storage if payload.run else None)
+    except SceneProjectNotFoundError as error:
+        raise _project_not_found() from error
+    except longform_chat.ChatEditError as error:
+        raise _chat_http_error(error) from error
+    if not rows:
+        raise HTTPException(status_code=409, detail={"code": "NO_SCENE_CANDIDATES", "message": "장면 분석을 먼저 해 주세요."})
+    rules = edit_rules.rule_texts(output_root)
+    brief = taste_score.load_brief(output_root)
+    reference = claude_finishing.reference_lines(reference_style.load_result(output_root))
+    model = claude_scene_pick.model_name()
+    header = claude_scene_pick.header_text(rules, brief, day_brief, reference, minutes)
+    if payload.run:
+        try:
+            ask = _claude_pick_ask(model)
+            pictures = await run_in_threadpool(_scene_pick_pictures_sync, output_root, project_id, rows, sources)
+            done = await run_in_threadpool(claude_scene_pick.pick, header, rows, pictures, minutes * 60, ask)
+        except HTTPException:
+            raise
+        except (ValueError, KeyError, TypeError) as error:
+            raise HTTPException(status_code=502, detail={"code": "PICK_BAD_REPLY", "message": "Claude 답을 읽지 못했어요."}) from error
+        except Exception as error:  # network / API errors: say so, nothing is saved
+            raise HTTPException(status_code=502, detail={"code": "PICK_CALL_FAILED", "message": f"Claude 호출이 실패했어요 ({type(error).__name__})."}) from error
+        await run_in_threadpool(claude_scene_pick.save_result, output_root, project_id, done, model=model,
+                                target_minutes=minutes)
+    guess = claude_scene_pick.estimate(model, header, rows)
+    return ScenePickResponse(model=model, target_minutes=minutes, scenes=guess.scenes, pictures=guess.pictures,
+                             chunks=guess.chunks, input_tokens=guess.input_tokens, output_tokens=guess.output_tokens,
+                             output_tokens_high=guess.output_tokens_high, usd_low=guess.usd_low, usd_high=guess.usd_high,
+                             rules=rules, has_brief=bool(brief.strip()), has_day_brief=bool(day_brief.strip()),
+                             reference=reference, scenes_with_speech=sum(1 for row in rows if row.speech),
+                             voice_marked=marked, picked=claude_scene_pick.load_result(output_root, project_id))
 
 
 class FinishingApplyRequest(BaseModel):

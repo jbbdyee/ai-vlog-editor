@@ -37,6 +37,11 @@ PREFERRED_MODEL_NAME = "large-v3"
 PREFERRED_DEVICE = "cuda"
 PREFERRED_COMPUTE_TYPE = "float16"
 
+# TODO 43-1: same as the creator workspace (tools/transcribe_hq.py). Without them large-v3 dropped a whole minute of
+# 학원 하루 0804 (54 lines -> 8): skip silence first, and do not let one line steer the next.
+DECODE_OPTIONS = {"vad_filter": True, "vad_parameters": {"min_silence_duration_ms": 300},
+                  "condition_on_previous_text": False}
+
 _fallback_model: WhisperModel | None = None
 
 
@@ -140,6 +145,7 @@ def transcribe_audio(
             str(path),
             language=DEFAULT_LANGUAGE,
             word_timestamps=word_timestamps,
+            **DECODE_OPTIONS,
         )
         parsed = tuple(
             _parse_segment(segment, include_words=word_timestamps)

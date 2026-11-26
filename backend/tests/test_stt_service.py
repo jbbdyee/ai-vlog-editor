@@ -5,6 +5,7 @@ from unittest import TestCase
 from unittest.mock import Mock, patch
 
 from backend.app.services.stt_service import (
+    DECODE_OPTIONS,
     DEFAULT_COMPUTE_TYPE,
     DEFAULT_DEVICE,
     DEFAULT_LANGUAGE,
@@ -102,7 +103,7 @@ class STTServiceTests(TestCase):
         self.assertEqual(result.segments[1].text, "AI야 방금 장면 꼭 살려줘")
         self.assertEqual(result.segments[1].words, ())
         model.transcribe.assert_called_once_with(
-            str(self.audio_path), language=DEFAULT_LANGUAGE, word_timestamps=False
+            str(self.audio_path), language=DEFAULT_LANGUAGE, word_timestamps=False, **DECODE_OPTIONS
         )
 
     def test_word_timestamps_are_optional(self) -> None:

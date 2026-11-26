@@ -249,6 +249,71 @@ export function applyFinishing(id: string, candidateIds?: string[]): Promise<Cha
   return request<ChatEditView>(`/projects/${id}/finishing/apply`, { method: "POST", headers: json, body: JSON.stringify({ candidate_ids: candidateIds ?? null }) });
 }
 
+/** TODO 43: what Claude scene picking would send and cost for a target length. */
+export interface ScenePickEstimate {
+  model: string;
+  target_minutes: number;
+  scenes: number;
+  pictures: number;
+  chunks: number;
+  input_tokens: number;
+  output_tokens: number;
+  output_tokens_high: number;
+  usd_low: number;
+  usd_high: number;
+  rules: string[];
+  has_brief: boolean;
+  has_day_brief: boolean;
+  reference: string[];
+  scenes_with_speech: number;
+  voice_marked: boolean;
+  /** TODO 43-3: the saved choice (null until Claude ran once). */
+  picked?: ScenePicked | null;
+}
+
+export interface PickedScene {
+  number: number;
+  candidate_id: string;
+  source_video_id: string;
+  clock: string;
+  scene_start: number;
+  scene_end: number;
+  clip_start: number;
+  clip_end: number;
+  score: number;
+  what: string;
+  why: string;
+}
+
+export interface ScenePicked {
+  made_at: string;
+  model: string;
+  target_minutes: number;
+  usd: number;
+  total_seconds: number;
+  title: string;
+  summary: string;
+  chapters: { title: string; description: string; reason: string; scenes: PickedScene[] }[];
+  left_out: PickedScene[];
+}
+
+/** The estimate and the saved choice; no AI call. */
+export function getScenePick(id: string, minutes: number): Promise<ScenePickEstimate> {
+  return request<ScenePickEstimate>(`/projects/${id}/scene-pick?minutes=${minutes}`);
+}
+
+/** A paid Claude run: picks the scenes and their parts, saved apart (the edit plan is not changed). */
+export function runScenePick(id: string, minutes: number): Promise<ScenePickEstimate> {
+  return request<ScenePickEstimate>(`/projects/${id}/scene-pick`, { method: "POST", headers: json, body: JSON.stringify({ minutes, run: true }) });
+}
+
+/** TODO 43-4: put Claude's choice in place of the plan (same as 다시 만들기, so ↶ brings the old plan back). */
+export function remakeFromScenePick(id: string, picked: ScenePicked): Promise<ChatEditView> {
+  const clips = picked.chapters.flatMap((chapter) => chapter.scenes.map((scene) => ({
+    candidate_id: scene.candidate_id, start_seconds: scene.clip_start, end_seconds: scene.clip_end })));
+  return request<ChatEditView>(`/projects/${id}/chat-edit/remake`, { method: "POST", headers: json, body: JSON.stringify({ clips }) });
+}
+
 /** A paid Claude call: scores every scene 0~3 from my taste and my edit's examples. */
 export function runTasteScores(id: string): Promise<TasteScores> {
   return request<TasteScores>(`/projects/${id}/taste-scores`, { method: "POST", headers: json, body: JSON.stringify({ run: true }) });
