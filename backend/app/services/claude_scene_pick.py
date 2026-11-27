@@ -333,3 +333,83 @@ def load_result(output_root: Path, project_id: UUID) -> dict | None:
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+# ---- TODO 43 다음(A): widen Claude's parts to the '한 컷 M초 안팎' rule, no AI call ----------------------------------
+
+MERGE_GAP = 1.0  # picked scenes this close in the same video (nothing between) become one cut
+MINE_FIRST = 4  # a cut where I talk is left out last (above Claude's best score 3)
+
+
+def _scene_key(scene: dict) -> tuple[str, float]:
+    return str(scene["source_video_id"]), float(scene["scene_start"])
+
+
+def widen(result: dict, timing: dict, target_seconds: float, typical_cut: float | None = None,
+          mine: set | frozenset = frozenset(), max_cut: float | None = None) -> dict | None:
+    """Claude's picks -> cuts of about the usual length: back-to-back picked scenes merge, the lowest scores go when
+    there are too many, the rest widen around Claude's part (never into a scene Claude scored 0). Saves nothing."""
+    from backend.app.services.story_length import Moment, fit_to_length
+    from backend.app.services.story_select import SceneVoice, leave_out
+
+    chapters = result.get("chapters") or []
+    every = [s for chapter in chapters for s in chapter.get("scenes") or []] + list(result.get("left_out") or [])
+    if not any(chapter.get("scenes") for chapter in chapters):
+        return None
+    in_video: dict[str, list[dict]] = {}
+    for scene in every:
+        in_video.setdefault(str(scene["source_video_id"]), []).append(scene)
+    for scenes in in_video.values():
+        scenes.sort(key=lambda s: float(s["scene_start"]))
+    place = {_scene_key(s): i for scenes in in_video.values() for i, s in enumerate(scenes)}
+
+    groups: list[dict] = []  # one cut each, in day order
+    for index, chapter in enumerate(chapters):
+        last = None
+        for scene in chapter.get("scenes") or []:
+            video = str(scene["source_video_id"])
+            if (last is not None and video == str(last["source_video_id"])
+                    and place[_scene_key(scene)] == place[_scene_key(last)] + 1
+                    and float(scene["scene_start"]) - float(last["scene_end"]) <= MERGE_GAP):
+                group = groups[-1]
+                group["scenes"].append(scene)
+                group["end"] = max(group["end"], float(scene["clip_end"]))
+            else:
+                groups.append({"chapter": index, "scenes": [scene], "start": float(scene["clip_start"]),
+                               "end": float(scene["clip_end"])})
+            last = scene
+    merged = sum(len(g["scenes"]) - 1 for g in groups)
+    for group in groups:
+        group["id"] = UUID(str(group["scenes"][0]["candidate_id"]))
+        group["video"] = UUID(str(group["scenes"][0]["source_video_id"]))
+        group["mine"] = any(UUID(str(s["candidate_id"])) in mine for s in group["scenes"])
+        group["score"] = max(int(s.get("score") or 0) for s in group["scenes"])
+
+    out = set(leave_out([SceneVoice(g["id"], g["video"], g["end"] - g["start"],
+                                    taste=MINE_FIRST if g["mine"] else g["score"]) for g in groups],
+                        target_seconds, False, typical_cut))
+    kept = [g for g in groups if g["id"] not in out]
+
+    walls = []
+    for group in kept:
+        scenes = in_video[str(group["video"])]
+        first, final = place[_scene_key(group["scenes"][0])], place[_scene_key(group["scenes"][-1])]
+        low = max([float(s["scene_end"]) for s in scenes[:first] if int(s.get("score") or 0) == 0], default=0.0)
+        high = min([float(s["scene_start"]) for s in scenes[final + 1:] if int(s.get("score") or 0) == 0],
+                   default=float("inf"))
+        walls.append((low, high))
+    fit = fit_to_length([Moment(g["video"], g["start"], g["end"]) for g in kept], timing, target_seconds, walls)
+    clips = []
+    for group, (start, end) in zip(kept, fit.clips):
+        if max_cut and not group["mine"] and end - start > max_cut + 1e-3:
+            middle = (start + end) / 2
+            start, end = round(middle - max_cut / 2, 3), round(middle + max_cut / 2, 3)
+        clips.append({"candidate_id": str(group["id"]), "source_video_id": str(group["video"]),
+                      "numbers": [s["number"] for s in group["scenes"]], "chapter": group["chapter"],
+                      "start": start, "end": end, "picked_start": group["start"], "picked_end": group["end"]})
+    lengths = sorted(c["end"] - c["start"] for c in clips)
+    middle = len(lengths) // 2
+    median = lengths[middle] if len(lengths) % 2 else (lengths[middle - 1] + lengths[middle]) / 2
+    return {"clips": clips, "cuts": len(clips), "median_seconds": round(median, 1),
+            "total_seconds": round(sum(lengths), 1), "merged": merged, "left_out": len(groups) - len(kept),
+            "typical_cut": typical_cut}

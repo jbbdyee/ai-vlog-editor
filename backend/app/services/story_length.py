@@ -77,8 +77,10 @@ def accept_minutes(value: int | None, footage: float) -> bool:
     return value is not None and 1 <= value <= MAX_MINUTES and value * 60 <= footage
 
 
-def _bounds(moments: Sequence[Moment], timing: dict[UUID, SourceTiming]) -> list[tuple[float, float]]:
-    """Each moment may grow up to the midpoint towards its chosen neighbours in the same video."""
+def _bounds(moments: Sequence[Moment], timing: dict[UUID, SourceTiming],
+            walls: Sequence[tuple[float, float]] | None = None) -> list[tuple[float, float]]:
+    """Each moment may grow up to the midpoint towards its chosen neighbours in the same video (and never past its
+    walls, e.g. a scene Claude said to leave out)."""
     bounds: list[tuple[float, float]] = [(0.0, 0.0)] * len(moments)
     by_source: dict[UUID, list[int]] = {}
     for index, moment in enumerate(moments):
@@ -95,6 +97,8 @@ def _bounds(moments: Sequence[Moment], timing: dict[UUID, SourceTiming]) -> list
             if position + 1 < len(indexes):
                 nxt = moments[indexes[position + 1]]
                 high = min(high, (moments[i].end + nxt.start) / 2)
+            if walls is not None:
+                low, high = max(low, walls[i][0]), min(high, walls[i][1])
             low, high = min(low, moments[i].start), max(high, moments[i].end)
             bounds[i] = (low, high)
     return bounds
@@ -125,10 +129,11 @@ def _total(clips) -> float:
     return round(sum(end - start for start, end in clips), 3)
 
 
-def fit_to_length(moments: Sequence[Moment], timing: dict[UUID, SourceTiming], target_seconds: float) -> LengthFit:
+def fit_to_length(moments: Sequence[Moment], timing: dict[UUID, SourceTiming], target_seconds: float,
+                  walls: Sequence[tuple[float, float]] | None = None) -> LengthFit:
     if not moments:
         return LengthFit((), 0.0, 0.0, target_seconds)
-    bounds = _bounds(moments, timing)
+    bounds = _bounds(moments, timing, walls)
     widest = _clips(moments, bounds, timing, MAX_CLIP_SECONDS)
     best = _clips(moments, bounds, timing, 0.0)
     if _total(best) < target_seconds:

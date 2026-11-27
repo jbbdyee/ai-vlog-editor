@@ -269,6 +269,19 @@ export interface ScenePickEstimate {
   voice_marked: boolean;
   /** TODO 43-3: the saved choice (null until Claude ran once). */
   picked?: ScenePicked | null;
+  /** TODO 43 다음(A): the same choice widened to my usual cut length (no AI call). */
+  widened?: ScenePickWidened | null;
+}
+
+export interface ScenePickWidened {
+  clips: { candidate_id: string; source_video_id: string; numbers: number[]; chapter: number; start: number; end: number;
+    picked_start: number; picked_end: number }[];
+  cuts: number;
+  median_seconds: number;
+  total_seconds: number;
+  merged: number;
+  left_out: number;
+  typical_cut: number | null;
 }
 
 export interface PickedScene {
@@ -307,10 +320,13 @@ export function runScenePick(id: string, minutes: number): Promise<ScenePickEsti
   return request<ScenePickEstimate>(`/projects/${id}/scene-pick`, { method: "POST", headers: json, body: JSON.stringify({ minutes, run: true }) });
 }
 
-/** TODO 43-4: put Claude's choice in place of the plan (same as 다시 만들기, so ↶ brings the old plan back). */
-export function remakeFromScenePick(id: string, picked: ScenePicked): Promise<ChatEditView> {
-  const clips = picked.chapters.flatMap((chapter) => chapter.scenes.map((scene) => ({
-    candidate_id: scene.candidate_id, start_seconds: scene.clip_start, end_seconds: scene.clip_end })));
+/** TODO 43-4: put Claude's choice in place of the plan (same as 다시 만들기, so ↶ brings the old plan back).
+ * With `widened` the cuts are the ones widened to my usual cut length (TODO 43 다음 A). */
+export function remakeFromScenePick(id: string, picked: ScenePicked, widened?: ScenePickWidened | null): Promise<ChatEditView> {
+  const clips = widened?.clips.length
+    ? widened.clips.map((clip) => ({ candidate_id: clip.candidate_id, start_seconds: clip.start, end_seconds: clip.end }))
+    : picked.chapters.flatMap((chapter) => chapter.scenes.map((scene) => ({
+      candidate_id: scene.candidate_id, start_seconds: scene.clip_start, end_seconds: scene.clip_end })));
   return request<ChatEditView>(`/projects/${id}/chat-edit/remake`, { method: "POST", headers: json, body: JSON.stringify({ clips }) });
 }
 

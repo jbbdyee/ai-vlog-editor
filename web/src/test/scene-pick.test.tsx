@@ -61,4 +61,28 @@ describe("TODO 43-2 Claude scene picking estimate", () => {
     expect(calls.find((call) => call.url.endsWith("/chat-edit/remake"))?.body).toEqual(
       { clips: [{ candidate_id: "c1", start_seconds: 12, end_seconds: 18.5 }] });
   });
+
+  it("TODO 43 다음(A): shows the widened cuts and puts those in the plan", async () => {
+    const scene = { number: 1, candidate_id: "c1", source_video_id: "s1", clock: "09:10", scene_start: 10, scene_end: 13,
+      clip_start: 10, clip_end: 13, score: 3, what: "수다", why: "웃음" };
+    const picked = { made_at: "2026-11-26T12:00:00Z", model: "claude-sonnet-5-5", target_minutes: 8, usd: 0.31,
+      total_seconds: 3, title: "학원 하루", summary: "", chapters: [{ title: "아침", description: "", reason: "", scenes: [scene] }],
+      left_out: [] };
+    const widened = { clips: [{ candidate_id: "c1", source_video_id: "s1", numbers: [1], chapter: 0, start: 8.6, end: 14.2,
+      picked_start: 10, picked_end: 13 }], cuts: 1, median_seconds: 5.6, total_seconds: 5.6, merged: 2, left_out: 30, typical_cut: 5.5 };
+    const calls: { url: string; body: unknown }[] = [];
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
+      if (url.endsWith("/chat-edit/remake")) return Promise.resolve(response({ cuts: [] }));
+      return Promise.resolve(response({ ...estimate(8), picked, widened }));
+    }));
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><ScenePickCard projectId={project} /></QueryClientProvider>);
+    const note = await screen.findByLabelText("넓힌 컷");
+    expect(note).toHaveTextContent("편집안에는 컷 1개 · 한 컷 가운데 5.6초 · 합계 0:06로 넣어요");
+    expect(note).toHaveTextContent("붙어 있는 장면 2곳을 합치고, 점수 낮은 컷 30개를 빼고");
+    await userEvent.click(screen.getByRole("button", { name: "이대로 편집안 만들기" }));
+    await screen.findByText("Claude가 고른 장면으로 편집안을 바꿨어요.");
+    expect(calls.find((call) => call.url.endsWith("/chat-edit/remake"))?.body).toEqual(
+      { clips: [{ candidate_id: "c1", start_seconds: 8.6, end_seconds: 14.2 }] });
+  });
 });

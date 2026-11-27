@@ -38,7 +38,8 @@ export function ScenePickCard({ projectId }: { projectId: string }) {
   } });
   const data = typeof info.data?.usd_low === "number" ? info.data : undefined;
   const picked = data?.picked ?? undefined;
-  const apply = useMutation({ mutationFn: () => remakeFromScenePick(projectId, picked!), onSuccess: (value) => {
+  const widened = data?.widened ?? undefined;
+  const apply = useMutation({ mutationFn: () => remakeFromScenePick(projectId, picked!, widened), onSuccess: (value) => {
     client.setQueryData(["chat-edit", projectId], value);
   } });
   const pickedCount = picked?.chapters.reduce((sum, chapter) => sum + chapter.scenes.length, 0) ?? 0;
@@ -85,6 +86,11 @@ export function ScenePickCard({ projectId }: { projectId: string }) {
         <p className="text-xs text-slate-600">{picked.summary}</p>
         <p className="text-xs text-slate-500 tabular-nums">장면 {pickedCount}개 · 합계 {clock(picked.total_seconds)} (목표 {picked.target_minutes}분) · 뺀 장면 {picked.left_out.length}개 · 든 돈 약 {won(picked.usd)}원(${picked.usd.toFixed(3)})</p>
       </div>
+      {widened && <p aria-label="넓힌 컷" className="rounded-lg bg-white p-2 text-xs text-slate-700 tabular-nums">
+        편집안에는 컷 {widened.cuts}개 · 한 컷 가운데 {widened.median_seconds.toFixed(1)}초 · 합계 {clock(widened.total_seconds)}로 넣어요
+        <span className="block text-[11px] text-slate-500">
+          {widened.typical_cut ? `내 규칙 '한 컷 ${widened.typical_cut}초 안팎'에 맞춰 ` : ""}붙어 있는 장면 {widened.merged}곳을 합치고,
+          점수 낮은 컷 {widened.left_out}개를 빼고, 남은 컷은 앞뒤로 넓혔어요(Claude가 '빼야 함'이라 한 장면 안으로는 안 넓힘)</span></p>}
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" size="sm" disabled={apply.isPending} onClick={() => apply.mutate()}>
           <span className="flex items-center gap-1">{apply.isPending ? <LoaderCircle size={14} className="animate-spin" /> : <ListOrdered size={14} />}이대로 편집안 만들기</span></Button>

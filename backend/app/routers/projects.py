@@ -1583,6 +1583,7 @@ def _claude_finish_ask(model: str):
 def _finishing_inputs_sync(factory, output_root: Path, project_id: UUID, storage=None):
     with factory() as session:
         inputs = longform_chat.load_inputs(session, output_root, project_id)
+        timing = load_source_timing(session, project_id)
         sources: dict[UUID, Path] = {}
         if storage is not None:
             for source in session.scalars(select(SourceVideo).where(SourceVideo.project_id == project_id)):
@@ -1698,6 +1699,8 @@ class ScenePickResponse(BaseModel):
     voice_marked: bool = False  # 나/남 marks are there (else every line goes as '?')
     # TODO 43-3: the saved choice (None until Claude ran once)
     picked: dict | None = None
+    # TODO 43 다음(A): the saved choice widened to the '한 컷 M초 안팎' rule (no AI call); 이대로 편집안 만들기 uses it
+    widened: dict | None = None
 
 
 class ScenePickRequest(BaseModel):
@@ -1711,6 +1714,7 @@ PICK_EFFORT = "medium"  # same as the finishing (TODO 41)
 def _scene_pick_inputs_sync(factory, output_root: Path, project_id: UUID, storage=None):
     with factory() as session:
         inputs = longform_chat.load_inputs(session, output_root, project_id)
+        timing = load_source_timing(session, project_id)
         sources: dict[UUID, Path] = {}
         if storage is not None:
             for source in session.scalars(select(SourceVideo).where(SourceVideo.project_id == project_id)):
@@ -1724,7 +1728,26 @@ def _scene_pick_inputs_sync(factory, output_root: Path, project_id: UUID, storag
                     continue
     rows = claude_scene_pick.scene_rows(inputs)
     marked = any(line.speaker for lines in inputs.lines.values() for line in lines)
-    return rows, inputs.brief, marked, sources
+    return rows, inputs.brief, marked, sources, timing, inputs.lines
+
+
+def _widened_pick(picked: dict | None, timing, lines, rules: list[str]) -> dict | None:
+    """TODO 43 다음(A): Claude's parts widened to my usual cut length; scenes where I talk count as mine."""
+    if not picked:
+        return None
+    mine = set()
+    if edit_rules.keeps_my_voice(rules):
+        for chapter in picked.get("chapters") or []:
+            for scene in chapter.get("scenes") or []:
+                said = lines.get(UUID(str(scene["source_video_id"])), ())
+                if any(line.speaker == "me" and line.end > scene["clip_start"] and line.start < scene["clip_end"]
+                       for line in said):
+                    mine.add(UUID(str(scene["candidate_id"])))
+    try:
+        return claude_scene_pick.widen(picked, timing, float(picked.get("target_minutes") or 8) * 60,
+                                       edit_rules.typical_cut_seconds(rules), mine, edit_rules.max_cut_seconds(rules))
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _scene_pick_pictures_sync(output_root: Path, project_id: UUID, rows, sources: dict[UUID, Path]) -> dict[UUID, list[Path]]:
@@ -1784,7 +1807,7 @@ async def _scene_pick(request: Request, project_id: UUID, payload: ScenePickRequ
     output_root = request.app.state.project_render_output_root
     minutes = payload.minutes
     try:
-        rows, day_brief, marked, sources = await run_in_threadpool(
+        rows, day_brief, marked, sources, timing, lines = await run_in_threadpool(
             _scene_pick_inputs_sync, _session_factory(request), output_root, project_id,
             request.app.state.source_storage if payload.run else None)
     except SceneProjectNotFoundError as error:
@@ -1816,12 +1839,13 @@ async def _scene_pick(request: Request, project_id: UUID, payload: ScenePickRequ
         finally:
             _paid_end("pick", project_id)
     guess = claude_scene_pick.estimate(model, header, rows)
+    picked = claude_scene_pick.load_result(output_root, project_id)
     return ScenePickResponse(model=model, target_minutes=minutes, scenes=guess.scenes, pictures=guess.pictures,
                              chunks=guess.chunks, input_tokens=guess.input_tokens, output_tokens=guess.output_tokens,
                              output_tokens_high=guess.output_tokens_high, usd_low=guess.usd_low, usd_high=guess.usd_high,
                              rules=rules, has_brief=bool(brief.strip()), has_day_brief=bool(day_brief.strip()),
                              reference=reference, scenes_with_speech=sum(1 for row in rows if row.speech),
-                             voice_marked=marked, picked=claude_scene_pick.load_result(output_root, project_id))
+                             voice_marked=marked, picked=picked, widened=_widened_pick(picked, timing, lines, rules))
 
 
 class FinishingApplyRequest(BaseModel):
