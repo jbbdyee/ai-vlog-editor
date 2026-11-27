@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import threading
 from typing import Annotated
 from uuid import UUID, uuid5
 
@@ -1341,6 +1342,26 @@ async def upload_reference_style(request: Request, file: UploadFile = File(...))
     return await run_in_threadpool(_reference_view, request)
 
 
+# ---- paid Claude runs: one at a time per project and kind (a second click or request does not pay again) --------------
+
+_PAID_RUNNING: set[tuple[str, UUID]] = set()
+_PAID_LOCK = threading.Lock()
+
+
+def _paid_start(kind: str, project_id: UUID, label: str) -> None:
+    """Refuse (409) when the same paid run of this project is still going; else mark it as going."""
+    with _PAID_LOCK:
+        if (kind, project_id) in _PAID_RUNNING:
+            raise HTTPException(status_code=409, detail={"code": "PAID_RUN_IN_PROGRESS",
+                                                         "message": f"이미 {label} 중이에요. 끝나면 결과가 여기 떠요(돈은 한 번만 들어요)."})
+        _PAID_RUNNING.add((kind, project_id))
+
+
+def _paid_end(kind: str, project_id: UUID) -> None:
+    with _PAID_LOCK:
+        _PAID_RUNNING.discard((kind, project_id))
+
+
 # ---- TODO 32-4: my editing taste in my own words + scene scores from it ---------------------------------------------
 
 TASTE_MODEL_DEFAULT = "claude-sonnet-5-5"  # taste needs judgement; Haiku is ~20x cheaper if wanted (CUTORY_TASTE_MODEL)
@@ -1476,21 +1497,25 @@ async def _taste_scores(request: Request, project_id: UUID, payload: TasteScoreR
     input_tokens, output_tokens = taste_score.estimate_tokens(system, user, len(rows), pictures)
     ran = False
     if payload.run:
+        _paid_start("taste", project_id, "장면 점수 매기기")
         try:
-            ask = _claude_taste_ask(model)
-            made = await run_in_threadpool(_taste_pictures_sync, output_root, project_id, rows, sources)
-            pictures = sum(len(paths) for paths in made.values())
-            scores, input_tokens, output_tokens = await run_in_threadpool(
-                taste_score.score_with_pictures, brief, examples, rows, made, ask)
-        except HTTPException:
-            raise
-        except (ValueError, KeyError) as error:
-            raise HTTPException(status_code=502, detail={"code": "TASTE_BAD_REPLY", "message": "점수 답을 읽지 못했어요."}) from error
-        except Exception as error:  # network / API errors: say so, nothing is saved
-            raise HTTPException(status_code=502, detail={"code": "TASTE_CALL_FAILED", "message": f"Claude 호출이 실패했어요 ({type(error).__name__})."}) from error
-        taste_score.save_scores(output_root, project_id, scores, model=model, input_tokens=input_tokens,
-                                output_tokens=output_tokens, usd=edit_brain.cost_usd(model, input_tokens, output_tokens),
-                                examples=len(examples))
+            try:
+                ask = _claude_taste_ask(model)
+                made = await run_in_threadpool(_taste_pictures_sync, output_root, project_id, rows, sources)
+                pictures = sum(len(paths) for paths in made.values())
+                scores, input_tokens, output_tokens = await run_in_threadpool(
+                    taste_score.score_with_pictures, brief, examples, rows, made, ask)
+            except HTTPException:
+                raise
+            except (ValueError, KeyError) as error:
+                raise HTTPException(status_code=502, detail={"code": "TASTE_BAD_REPLY", "message": "점수 답을 읽지 못했어요."}) from error
+            except Exception as error:  # network / API errors: say so, nothing is saved
+                raise HTTPException(status_code=502, detail={"code": "TASTE_CALL_FAILED", "message": f"Claude 호출이 실패했어요 ({type(error).__name__})."}) from error
+            taste_score.save_scores(output_root, project_id, scores, model=model, input_tokens=input_tokens,
+                                    output_tokens=output_tokens, usd=edit_brain.cost_usd(model, input_tokens, output_tokens),
+                                    examples=len(examples))
+        finally:
+            _paid_end("taste", project_id)
         ran = True
     saved = taste_score.load_scores(output_root, project_id)
     counts = {str(value): sum(1 for score, _ in saved.values() if score == value) for value in range(4)} if saved else {}
@@ -1625,17 +1650,21 @@ async def _finishing(request: Request, project_id: UUID, payload: FinishingReque
     model = claude_finishing.model_name()
     header = claude_finishing.header_text(rules, brief, reference)
     if payload.run:
+        _paid_start("finish", project_id, "마무리 손질")
         try:
-            ask = _claude_finish_ask(model)
-            pictures = await run_in_threadpool(_finishing_pictures_sync, output_root, project_id, rows, sources)
-            done = await run_in_threadpool(claude_finishing.finish, header, rows, pictures, ask)
-        except HTTPException:
-            raise
-        except (ValueError, KeyError, TypeError) as error:
-            raise HTTPException(status_code=502, detail={"code": "FINISH_BAD_REPLY", "message": "Claude 답을 읽지 못했어요."}) from error
-        except Exception as error:  # network / API errors: say so, nothing is saved
-            raise HTTPException(status_code=502, detail={"code": "FINISH_CALL_FAILED", "message": f"Claude 호출이 실패했어요 ({type(error).__name__})."}) from error
-        await run_in_threadpool(claude_finishing.save_result, output_root, project_id, done, model=model)
+            try:
+                ask = _claude_finish_ask(model)
+                pictures = await run_in_threadpool(_finishing_pictures_sync, output_root, project_id, rows, sources)
+                done = await run_in_threadpool(claude_finishing.finish, header, rows, pictures, ask)
+            except HTTPException:
+                raise
+            except (ValueError, KeyError, TypeError) as error:
+                raise HTTPException(status_code=502, detail={"code": "FINISH_BAD_REPLY", "message": "Claude 답을 읽지 못했어요."}) from error
+            except Exception as error:  # network / API errors: say so, nothing is saved
+                raise HTTPException(status_code=502, detail={"code": "FINISH_CALL_FAILED", "message": f"Claude 호출이 실패했어요 ({type(error).__name__})."}) from error
+            await run_in_threadpool(claude_finishing.save_result, output_root, project_id, done, model=model)
+        finally:
+            _paid_end("finish", project_id)
     guess = claude_finishing.estimate(model, header, rows)
     saved = claude_finishing.load_result(output_root, project_id) or {}
     return FinishingResponse(model=model, cuts=guess.cuts, pictures=guess.pictures, chunks=guess.chunks,
@@ -1770,18 +1799,22 @@ async def _scene_pick(request: Request, project_id: UUID, payload: ScenePickRequ
     model = claude_scene_pick.model_name()
     header = claude_scene_pick.header_text(rules, brief, day_brief, reference, minutes)
     if payload.run:
+        _paid_start("pick", project_id, "장면 고르기")
         try:
-            ask = _claude_pick_ask(model)
-            pictures = await run_in_threadpool(_scene_pick_pictures_sync, output_root, project_id, rows, sources)
-            done = await run_in_threadpool(claude_scene_pick.pick, header, rows, pictures, minutes * 60, ask)
-        except HTTPException:
-            raise
-        except (ValueError, KeyError, TypeError) as error:
-            raise HTTPException(status_code=502, detail={"code": "PICK_BAD_REPLY", "message": "Claude 답을 읽지 못했어요."}) from error
-        except Exception as error:  # network / API errors: say so, nothing is saved
-            raise HTTPException(status_code=502, detail={"code": "PICK_CALL_FAILED", "message": f"Claude 호출이 실패했어요 ({type(error).__name__})."}) from error
-        await run_in_threadpool(claude_scene_pick.save_result, output_root, project_id, done, model=model,
-                                target_minutes=minutes)
+            try:
+                ask = _claude_pick_ask(model)
+                pictures = await run_in_threadpool(_scene_pick_pictures_sync, output_root, project_id, rows, sources)
+                done = await run_in_threadpool(claude_scene_pick.pick, header, rows, pictures, minutes * 60, ask)
+            except HTTPException:
+                raise
+            except (ValueError, KeyError, TypeError) as error:
+                raise HTTPException(status_code=502, detail={"code": "PICK_BAD_REPLY", "message": "Claude 답을 읽지 못했어요."}) from error
+            except Exception as error:  # network / API errors: say so, nothing is saved
+                raise HTTPException(status_code=502, detail={"code": "PICK_CALL_FAILED", "message": f"Claude 호출이 실패했어요 ({type(error).__name__})."}) from error
+            await run_in_threadpool(claude_scene_pick.save_result, output_root, project_id, done, model=model,
+                                    target_minutes=minutes)
+        finally:
+            _paid_end("pick", project_id)
     guess = claude_scene_pick.estimate(model, header, rows)
     return ScenePickResponse(model=model, target_minutes=minutes, scenes=guess.scenes, pictures=guess.pictures,
                              chunks=guess.chunks, input_tokens=guess.input_tokens, output_tokens=guess.output_tokens,
